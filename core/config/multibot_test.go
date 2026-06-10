@@ -57,4 +57,14 @@ func TestMultiBotIsolation(t *testing.T) {
 	if a.DataDir == b.DataDir {
 		t.Fatalf("data dirs not isolated between bots")
 	}
+	// sandbox dirs are per-bot too: distinct workspace/memory, global skills shared.
+	if a.CwdBase == b.CwdBase || a.MemoryBase == b.MemoryBase || a.SkillsDir == b.SkillsDir {
+		t.Fatalf("sandbox dirs not isolated: %+v / %+v", a, b)
+	}
+	if a.GlobalSkillsDir != b.GlobalSkillsDir {
+		t.Fatalf("global skills dir should be shared: %q vs %q", a.GlobalSkillsDir, b.GlobalSkillsDir)
+	}
+	if a.CwdBase != filepath.Join(dir, "alpha", "workspace") {
+		t.Fatalf("alpha CwdBase wrong: %q", a.CwdBase)
+	}
 }

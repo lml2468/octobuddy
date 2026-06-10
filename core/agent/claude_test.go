@@ -1,6 +1,9 @@
 package agent
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 // Fixtures: real lines captured from `claude --output-format stream-json`
 // (the system/init + api_retry lines are verbatim from this machine), plus
@@ -157,4 +160,34 @@ func contains(xs []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func TestClaudeArgsMemoryDirToSettings(t *testing.T) {
+	d := NewClaudeDriver("claude")
+	args := d.buildArgs(Request{Prompt: "hi", MemoryDir: "/m/x y"})
+	// Find --settings and its JSON value.
+	idx := -1
+	for i, a := range args {
+		if a == "--settings" {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 || idx+1 >= len(args) {
+		t.Fatalf("missing --settings: %v", args)
+	}
+	var got map[string]string
+	if err := json.Unmarshal([]byte(args[idx+1]), &got); err != nil {
+		t.Fatalf("--settings value is not valid JSON (%v): %q", err, args[idx+1])
+	}
+	if got["autoMemoryDirectory"] != "/m/x y" {
+		t.Fatalf("autoMemoryDirectory = %q, want %q", got["autoMemoryDirectory"], "/m/x y")
+	}
+}
+
+func TestClaudeArgsNoSettingsWithoutMemoryDir(t *testing.T) {
+	d := NewClaudeDriver("claude")
+	if contains(d.buildArgs(Request{Prompt: "hi"}), "--settings") {
+		t.Fatal("--settings should be absent when MemoryDir is empty")
+	}
 }

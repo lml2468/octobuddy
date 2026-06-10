@@ -74,8 +74,12 @@ type Resolved struct {
 	// from SOUL.md + AGENTS.md in the bot dir (not from config).
 	SystemPrompt string
 
-	// DataDir is the bot's derived SQLite/data directory (~/.xclaw/<id>/data).
-	DataDir string
+	// Derived per-bot directories (never from file).
+	DataDir         string // ~/.xclaw/<id>/data       — SQLite + state
+	CwdBase         string // ~/.xclaw/<id>/workspace   — per-session cwd sandboxes
+	MemoryBase      string // ~/.xclaw/<id>/memory      — per-session auto-memory (outside CwdBase)
+	SkillsDir       string // ~/.xclaw/<id>/skills      — per-bot skills (shadow global)
+	GlobalSkillsDir string // ~/.xclaw/skills           — install-wide skills
 }
 
 func defaults() Resolved {
@@ -164,6 +168,10 @@ func resolveBots(global File, baseDir string) ([]Resolved, error) {
 		r := defaults()
 		r.BotID = id
 		r.DataDir = filepath.Join(botRoot, "data")
+		r.CwdBase = filepath.Join(botRoot, "workspace")
+		r.MemoryBase = filepath.Join(botRoot, "memory")
+		r.SkillsDir = filepath.Join(botRoot, "skills")
+		r.GlobalSkillsDir = filepath.Join(baseDir, "skills")
 
 		// precedence: inlineBot ?? global default
 		r.APIURL = firstNonEmpty(bot.APIURL, global.APIURL)

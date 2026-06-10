@@ -54,6 +54,14 @@ func (d *ClaudeDriver) buildArgs(req Request) []string {
 	if req.SystemAppend != "" {
 		args = append(args, "--append-system-prompt", req.SystemAppend)
 	}
+	// Pin auto-memory to the per-session dir. --settings merges into (does not
+	// replace) the defaults, so project-scope skill discovery under <cwd> still
+	// works. JSON-encode so a path with special chars can't break the flag.
+	if req.MemoryDir != "" {
+		if b, err := json.Marshal(map[string]string{"autoMemoryDirectory": req.MemoryDir}); err == nil {
+			args = append(args, "--settings", string(b))
+		}
+	}
 	args = append(args, d.ExtraArgs...)
 	return args
 }

@@ -19,6 +19,7 @@ import (
 	"github.com/lml2468/xclaw/core/groupctx"
 	"github.com/lml2468/xclaw/core/im/octo"
 	"github.com/lml2468/xclaw/core/router"
+	"github.com/lml2468/xclaw/core/sandbox"
 	"github.com/lml2468/xclaw/core/store"
 )
 
@@ -159,6 +160,8 @@ func runBot(ctx context.Context, cfg config.Resolved, reg *botRegistry, srv *con
 	if n, _ := st.CleanupExpired(store.DefaultTTL); n > 0 {
 		fmt.Fprintf(os.Stderr, "[%s] swept %d expired session(s)\n", cfg.BotID, n)
 	}
+	// Reclaim per-session cwd sandboxes idle past the TTL (memory is外置, untouched).
+	sandbox.CleanupExpiredCwds(cfg.CwdBase, sandbox.DefaultCwdTTL)
 
 	// Phase 1 ships the claude driver only; the agent.Driver seam keeps adding
 	// another (Codex, …) additive to the gateway.
@@ -182,7 +185,8 @@ func runBot(ctx context.Context, cfg config.Resolved, reg *botRegistry, srv *con
 	gw := gateway.New(drv, st, rt, sinks).
 		WithGroupContext(groupctx.New(cfg.Context.MaxContextChars)).
 		WithSystemPrompt(cfg.SystemPrompt).
-		WithModel(cfg.Agent.Model)
+		WithModel(cfg.Agent.Model).
+		WithSandbox(cfg.CwdBase, cfg.MemoryBase, cfg.SkillsDir, cfg.GlobalSkillsDir)
 	connector.SetGateway(gw)
 
 	rtBot := &botRuntime{cfg: cfg, gateway: gw, store: st}

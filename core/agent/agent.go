@@ -73,6 +73,7 @@ type Request struct {
 	Prompt       string
 	SessionID    string // "" = new session; non-empty = resume
 	Cwd          string // sandbox working directory
+	MemoryDir    string // per-session auto-memory dir ("" = driver default location)
 	Model        string // optional model override
 	SystemAppend string // SOUL.md / security prefix appended to system prompt
 }

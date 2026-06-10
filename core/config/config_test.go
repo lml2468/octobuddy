@@ -43,6 +43,13 @@ func TestSingleBotDefaults(t *testing.T) {
 	if b.DataDir != filepath.Join(dir, "default", "data") {
 		t.Fatalf("derived data dir wrong: %+v", b)
 	}
+	// derived sandbox dirs
+	if b.CwdBase != filepath.Join(dir, "default", "workspace") ||
+		b.MemoryBase != filepath.Join(dir, "default", "memory") ||
+		b.SkillsDir != filepath.Join(dir, "default", "skills") ||
+		b.GlobalSkillsDir != filepath.Join(dir, "skills") {
+		t.Fatalf("derived sandbox dirs wrong: %+v", b)
+	}
 }
 
 func TestInlineBotOverridesGlobalDefaults(t *testing.T) {

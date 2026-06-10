@@ -11,6 +11,7 @@ package gateway
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	"github.com/lml2468/xclaw/core/groupctx"
 	"github.com/lml2468/xclaw/core/router"
 	"github.com/lml2468/xclaw/core/safety"
+	"github.com/lml2468/xclaw/core/sandbox"
 	"github.com/lml2468/xclaw/core/store"
 )
 
@@ -46,6 +48,10 @@ type Gateway struct {
 	systemPrompt string
 	// Optional model override passed to the driver (empty = driver default).
 	model string
+	// Per-session sandbox roots (set via WithSandbox). When cwdBase is set, each
+	// turn runs in cwdBase/<hash>, with auto-memory under memoryBase/<hash> and
+	// operator skills symlinked in. Empty cwdBase = no isolation (inherit proc).
+	cwdBase, memoryBase, skillsDir, globalSkillsDir string
 }
 
 // New constructs a Gateway.
@@ -69,6 +75,28 @@ func (g *Gateway) WithSystemPrompt(p string) *Gateway {
 func (g *Gateway) WithModel(m string) *Gateway {
 	g.model = m
 	return g
+}
+
+// WithSandbox enables per-session filesystem isolation: each turn runs in a
+// hashed subdir of cwdBase, with auto-memory归拢 under memoryBase and the
+// operator's skills (globalSkillsDir then skillsDir, latter shadows) symlinked
+// into the sandbox. An empty cwdBase disables isolation.
+func (g *Gateway) WithSandbox(cwdBase, memoryBase, skillsDir, globalSkillsDir string) *Gateway {
+	g.cwdBase = cwdBase
+	g.memoryBase = memoryBase
+	g.skillsDir = skillsDir
+	g.globalSkillsDir = globalSkillsDir
+	return g
+}
+
+// kindFor maps a channel type to a sandbox kind. Group → group (shared); DM and
+// any unknown type → dm (the most-isolated, per-key default — never collapse
+// distinct sessions into a shared sandbox).
+func kindFor(ct router.ChannelType) sandbox.Kind {
+	if ct == router.ChannelGroup {
+		return sandbox.KindGroup
+	}
+	return sandbox.KindDM
 }
 
 // Handle routes one inbound message through the full pipeline. The router holds
@@ -132,9 +160,29 @@ func (g *Gateway) runTurn(ctx context.Context, sessionKey string, msg router.Inb
 	// Resume the agent's prior session if we have one.
 	resumeID, _ := g.store.Resume(sessionKey)
 
+	// Resolve the per-session sandbox (cwd + memory + skills) when enabled.
+	var cwd, memDir string
+	if g.cwdBase != "" {
+		sctx := sandbox.SessionCtx{Kind: kindFor(msg.ChannelType), SessionKey: sessionKey}
+		resolved, err := sandbox.ResolveSessionCwd(g.cwdBase, sctx)
+		if err != nil {
+			// Building the sandbox failed — running in the process cwd would leak
+			// across sessions, which is exactly what this guards against. Fail loud.
+			return fmt.Errorf("resolve sandbox cwd: %w", err)
+		}
+		cwd = resolved
+		// Best-effort: a missing skill only degrades capability, never breaks the turn.
+		_ = sandbox.LinkSkillsIntoSandbox(cwd, []string{g.globalSkillsDir, g.skillsDir})
+		if g.memoryBase != "" {
+			memDir = sandbox.ResolveMemoryDir(g.memoryBase, sctx)
+		}
+	}
+
 	events, err := g.driver.Query(ctx, agent.Request{
 		Prompt:       prompt,
 		SessionID:    resumeID,
+		Cwd:          cwd,
+		MemoryDir:    memDir,
 		Model:        g.model,
 		SystemAppend: g.buildSystemPrompt(),
 	})

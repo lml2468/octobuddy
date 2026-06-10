@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -139,5 +140,65 @@ func TestGroupMentionGateAtGateway(t *testing.T) {
 	}
 	if len(drv.requests) != 0 {
 		t.Fatalf("driver should not run for dropped message")
+	}
+}
+
+func TestSandboxInjectsCwdAndMemoryPerSession(t *testing.T) {
+	base := t.TempDir()
+	cwdBase := filepath.Join(base, "workspace")
+	memBase := filepath.Join(base, "memory")
+
+	st := newTestStore(t)
+	drv := &fakeDriver{threadID: "t", reply: "ok"}
+	gw := New(drv, st, router.New(router.Config{MaxPerMinute: 100}), newCaptureSink()).
+		WithSandbox(cwdBase, memBase, "", "")
+
+	// DM turn → request carries a per-session cwd that exists on disk + a memory dir.
+	_, err := gw.Handle(context.Background(),
+		router.InboundMessage{ChannelType: router.ChannelDM, FromUID: "u1", FromName: "alice", Text: "hi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dmReq := drv.requests[0]
+	if dmReq.Cwd == "" {
+		t.Fatal("DM turn missing Cwd")
+	}
+	if st, err := os.Stat(dmReq.Cwd); err != nil || !st.IsDir() {
+		t.Fatalf("Cwd not created on disk: %v", err)
+	}
+	if filepath.Dir(dmReq.Cwd) != cwdBase {
+		t.Fatalf("Cwd not under cwdBase: %q", dmReq.Cwd)
+	}
+	if dmReq.MemoryDir == "" || filepath.Dir(dmReq.MemoryDir) != memBase {
+		t.Fatalf("MemoryDir wrong: %q", dmReq.MemoryDir)
+	}
+	// cwd and memory share the same per-session hash component.
+	if filepath.Base(dmReq.Cwd) != filepath.Base(dmReq.MemoryDir) {
+		t.Fatalf("cwd/memory hash mismatch: %q vs %q", dmReq.Cwd, dmReq.MemoryDir)
+	}
+
+	// Group turn (mentioned) → different sandbox (kind prefix scopes the hash).
+	_, err = gw.Handle(context.Background(),
+		router.InboundMessage{ChannelType: router.ChannelGroup, ChannelID: "c1", FromUID: "u1", FromName: "alice", Text: "hi", Mentioned: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	grpReq := drv.requests[1]
+	if filepath.Base(grpReq.Cwd) == filepath.Base(dmReq.Cwd) {
+		t.Fatal("group and DM must resolve to distinct sandboxes")
+	}
+}
+
+func TestNoSandboxLeavesCwdEmpty(t *testing.T) {
+	st := newTestStore(t)
+	drv := &fakeDriver{threadID: "t", reply: "ok"}
+	gw := New(drv, st, router.New(router.Config{MaxPerMinute: 100}), newCaptureSink())
+	_, err := gw.Handle(context.Background(),
+		router.InboundMessage{ChannelType: router.ChannelDM, FromUID: "u1", FromName: "alice", Text: "hi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if drv.requests[0].Cwd != "" || drv.requests[0].MemoryDir != "" {
+		t.Fatalf("without WithSandbox, Cwd/MemoryDir must stay empty: %+v", drv.requests[0])
 	}
 }
