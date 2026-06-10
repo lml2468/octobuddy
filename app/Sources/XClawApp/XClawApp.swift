@@ -15,17 +15,7 @@ struct XClawApp: App {
     var body: some Scene {
         // Menu bar presence: status + quick actions.
         MenuBarExtra("XClaw", systemImage: model.connected ? "bolt.horizontal.circle.fill" : "bolt.horizontal.circle") {
-            Text("Core: \(model.coreState)")
-            Text(model.connected ? "Bus: connected · \(model.bots.count) bot(s)" : "Bus: disconnected")
-            Divider()
-            Button("Open Console") {
-                NSApp.activate(ignoringOtherApps: true)
-                openConsoleWindow()
-            }
-            SettingsLink { Text("Edit Bots…") }
-            Button("Restart Core") { model.stop(); model.start() }
-            Divider()
-            Button("Quit") { model.stop(); NSApplication.shared.terminate(nil) }
+            MenuBarContent(model: model)
         }
 
         Window("XClaw Console", id: "console") {
@@ -40,18 +30,34 @@ struct XClawApp: App {
                 .onAppear { model.loadConfig() }
         }
     }
+}
 
-    private func openConsoleWindow() {
-        // Bring the console window forward (SwiftUI opens it on launch).
-        if let w = NSApp.windows.first(where: { $0.title == "XClaw Console" }) {
-            w.makeKeyAndOrderFront(nil)
+/// Menu-bar dropdown contents. Split out so it can use `@Environment(\.openWindow)`
+/// (the modern, title-string-free way to surface the console window).
+private struct MenuBarContent: View {
+    @Bindable var model: AppModel
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Text("Core: \(model.coreState)")
+        Text(model.connected ? "Bus: connected · \(model.bots.count) bot(s)" : "Bus: disconnected")
+        Divider()
+        Button("Open Console") {
+            NSApp.activate(ignoringOtherApps: true)
+            openWindow(id: "console")
         }
+        SettingsLink { Text("Edit Bots…") }
+        Button("Restart Core") { model.stop(); model.start() }
+        Divider()
+        Button("Quit") { model.stop(); NSApplication.shared.terminate(nil) }
+            .keyboardShortcut("q")
     }
 }
 
 struct ConsoleView: View {
     @Bindable var model: AppModel
     @State private var draft: String = ""
+    @FocusState private var composerFocused: Bool
 
     var body: some View {
         NavigationSplitView {
@@ -153,18 +159,22 @@ struct ConsoleView: View {
 
     private var sessionList: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
+            LazyVStack(alignment: .leading, spacing: 12) {
                 if let err = model.lastError {
-                    Text(err)
+                    Label(err, systemImage: "exclamationmark.triangle")
                         .font(.caption)
                         .foregroundStyle(.red)
                         .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 if model.sessions.isEmpty {
-                    Text("No sessions yet — send a message below.")
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .center)
-                        .padding(.top, 40)
+                    ContentUnavailableView(
+                        "No Sessions",
+                        systemImage: "bubble.left.and.bubble.right",
+                        description: Text("Send a message below to start a conversation.")
+                    )
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 40)
                 }
                 ForEach(model.sessions, id: \.sessionKey) { s in
                     SessionRow(session: s)
@@ -179,6 +189,7 @@ struct ConsoleView: View {
             TextField("Message the agent…", text: $draft, axis: .vertical)
                 .textFieldStyle(.roundedBorder)
                 .lineLimit(1...4)
+                .focused($composerFocused)
                 .onSubmit(sendDraft)
             Button("Send", action: sendDraft)
                 .keyboardShortcut(.return, modifiers: [])
@@ -191,6 +202,7 @@ struct ConsoleView: View {
         let text = draft
         draft = ""
         model.send(text)
+        composerFocused = true // keep focus for the next message
     }
 }
 

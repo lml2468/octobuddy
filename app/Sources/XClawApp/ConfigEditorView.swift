@@ -2,8 +2,9 @@ import SwiftUI
 import XClawCore
 
 /// Bot configuration editor (opened via Settings / Cmd-,). Lists configured
-/// bots, lets you add/remove and edit id / apiUrl / token, and saves to
-/// ~/.xclaw/config.json. Token is written inline in that file (plaintext for now).
+/// bots, lets you add/remove and edit id / apiUrl / tokens, and saves to
+/// ~/.xclaw/config.json. Tokens are stored in the macOS Keychain (not the file);
+/// see AppModel.saveConfig / Keychain.swift.
 struct ConfigEditorView: View {
     @Bindable var model: AppModel
     @State private var selection: String?
@@ -33,10 +34,13 @@ struct ConfigEditorView: View {
         } detail: {
             if let sel = selection, let i = model.configBots.firstIndex(where: { $0.id == sel }) {
                 BotForm(bot: $model.configBots[i])
+                    .id(sel) // rebuild cleanly when switching bots
             } else {
-                Text("Select or add a bot")
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                ContentUnavailableView(
+                    "No Bot Selected",
+                    systemImage: "bolt.horizontal.circle",
+                    description: Text("Select a bot, or add one with +.")
+                )
             }
         }
         .frame(width: 620, height: 420)

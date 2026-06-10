@@ -60,6 +60,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Status indicators gained VoiceOver labels. The unnecessary
   `disable-library-validation` entitlement was removed (the app exec's the
   daemon as a subprocess, never loading it in-process).
+- macOS app UI modernized to current SwiftUI idioms: `ContentUnavailableView`
+  empty states, `@Environment(\.openWindow)` to surface the console (replacing a
+  title-string window lookup), `LazyVStack` for the session list, `@FocusState`
+  on the composer, and a stable `.id` on the bot form for clean switching.
 
 <!--
 Going forward, summarize notable changes here under Added / Changed / Deprecated
