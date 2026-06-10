@@ -1,0 +1,6 @@
+{
+  "_comment": "Per-bot config. Place at ~/.xclaw/<id>/config.json. Holds this bot's token + overrides. data/, workspace/, memory/, skills/ are derived siblings — do not set them.",
+  "octoToken": "bf_your_bot_token_here",
+  "sdk": { "model": "claude-opus-4-8" },
+  "context": { "maxContextChars": 8000 }
+}

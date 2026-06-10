@@ -52,35 +52,63 @@ func NewConnector(rest *RESTClient) *Connector {
 func (c *Connector) SetGateway(g *gateway.Gateway) { c.gateway = g }
 
 // Run registers the bot and maintains the socket connection with reconnect
-// until ctx is cancelled.
+// until ctx is cancelled. The initial registration is retried with backoff so a
+// transient API outage at startup doesn't kill the bot.
 func (c *Connector) Run(ctx context.Context) error {
-	reg, err := c.rest.Register(ctx, false)
-	if err != nil {
-		return err
-	}
-	c.botUID = reg.RobotID
-
 	// REST heartbeat loop (30s), separate from the WS ping.
 	go c.heartbeatLoop(ctx)
 
 	backoff := c.reconnectBase
+	var reg RegisterResponse
+	registered := false
+
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+
+		if !registered {
+			r, err := c.rest.Register(ctx, false)
+			if err != nil {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				sleep(ctx, backoff)
+				backoff = minDur(backoff*2, c.reconnectMax)
+				continue
+			}
+			reg = r
+			c.botUID = reg.RobotID
+			registered = true
+			backoff = c.reconnectBase
+		}
+
 		err := c.connectOnce(ctx, reg)
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		// On failure, back off then re-register (token may have expired) +
-		// reconnect.
-		time.Sleep(backoff)
+		_ = err
+
+		// Connection dropped: back off, then force a fresh registration (token
+		// may have expired) before reconnecting.
+		sleep(ctx, backoff)
 		backoff = minDur(backoff*2, c.reconnectMax)
 		if fresh, rerr := c.rest.Register(ctx, true); rerr == nil {
 			reg = fresh
 			c.botUID = reg.RobotID
+		} else {
+			registered = false // force the retry path above
 		}
-		_ = err
+	}
+}
+
+// sleep waits for d or until ctx is cancelled.
+func sleep(ctx context.Context, d time.Duration) {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+	case <-t.C:
 	}
 }
 

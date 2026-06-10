@@ -1,0 +1,10 @@
+{
+  "_comment": "XClaw global config. Place at ~/.xclaw/config.json. Shared defaults + the list of bots to run. NEVER put a token here — tokens live in ~/.xclaw/<id>/config.json.",
+  "apiUrl": "https://your-octo-server.example",
+  "context": { "maxContextChars": 6000, "historyLimit": 40 },
+  "rateLimit": { "maxPerMinute": 5 },
+  "sdk": { "driver": "claude", "permissionMode": "bypassPermissions" },
+  "bots": [
+    { "id": "default" }
+  ]
+}

@@ -57,8 +57,9 @@ lockstep — a control-bus change touches all three in a single commit.
   context window; wired into the gateway (group turns inject a sanitized
   [Recent group messages] delta + frozen system prompt).
 - ✅ `core/config` — two-layer bot-first config (~/.xclaw): global + per-bot,
-  derived dirs, SOUL.md, slug + SSRF validation.
-- 🚧 cron (deferred); config not yet loaded by xclawd; packaging.
+  derived dirs, SOUL.md, slug + SSRF validation. Loaded by `xclawd -config`,
+  which runs every configured bot in its own isolated stack (multi-bot).
+- 🚧 cron (deferred); packaging.
 - 🚧 packaging: bundle the signed `xclawd` into the `.app` (Helpers/), Sparkle.
 
 ## Build

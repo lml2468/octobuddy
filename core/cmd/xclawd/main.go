@@ -48,8 +48,17 @@ func main() {
 		noREPL      = flag.Bool("no-repl", false, "disable the stdin REPL (control-bus only)")
 		octoAPI     = flag.String("octo-api", "", "Octo API base URL (enables the Octo IM connector)")
 		octoToken   = flag.String("octo-token", "", "Octo bot token (bf_*); or set XCLAW_OCTO_TOKEN")
+		configPath  = flag.String("config", "", "load ~/.xclaw/config.json (or given path) and run all configured bots")
 	)
 	flag.Parse()
+
+	// Config mode: load the two-layer bot-first config and run every bot in its
+	// own isolated stack. Mutually exclusive with the single-bot flag front ends.
+	// `-config` with no value uses the default ~/.xclaw/config.json.
+	if configFlagSet() {
+		runConfigMode(*configPath)
+		return
+	}
 
 	st, err := store.Open(*dbPath)
 	if err != nil {

@@ -68,11 +68,27 @@ go test ./...                            # drivers, store, router, gateway, cont
 go run ./cmd/xclawd                      # REPL on stdin, claude driver
 go run ./cmd/xclawd -driver codex        # codex app-server driver
 go run ./cmd/xclawd -control /tmp/xclaw.sock           # serve control bus (GUI)
-go run ./cmd/xclawd -octo-api https://octo.example -octo-token bf_xxx   # Octo IM bot
+go run ./cmd/xclawd -octo-api https://octo.example -octo-token bf_xxx   # single Octo IM bot
+go run ./cmd/xclawd -config                # multi-bot from ~/.xclaw/config.json
+go run ./cmd/xclawd -config ./my.json      # multi-bot from a given config
 # in the REPL: type a message; /reset clears the session; Ctrl-D exits
 
 # cross-compile the daemon (zero cgo)
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /tmp/xclawd ./cmd/xclawd
+```
+
+## Config mode
+
+`-config` loads the two-layer bot-first config (`config.example.json` /
+`config.bot.example.json`) and runs every configured bot in its own isolated
+stack — separate SQLite store, gateway, driver, group-context, and Octo
+connector, each under `~/.xclaw/<id>/`. Layout:
+
+```
+~/.xclaw/
+  config.json          # global: apiUrl + shared defaults + bots[] (NO token)
+  <id>/config.json     # per-bot: octoToken + overrides
+  <id>/{data,workspace,memory,skills}/   # derived, per-bot isolated
 ```
 
 ## Notes / next
