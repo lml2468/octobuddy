@@ -152,6 +152,17 @@ func (s *socketConn) readConnack() error {
 
 // run reads frames until the connection ends. Sends pings on an interval.
 func (s *socketConn) run(ctx context.Context) error {
+	// gorilla's ReadMessage below does not observe ctx, so on cancellation we
+	// close the conn to unblock it and return promptly. The derived cancel +
+	// defer also tears the watcher down when run returns for any other reason
+	// (read error), so the goroutine never leaks.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() {
+		<-ctx.Done()
+		s.close()
+	}()
+
 	pingDone := make(chan struct{})
 	go s.pingLoop(pingDone)
 	defer close(pingDone)
