@@ -7,9 +7,9 @@ import (
 
 func TestVarintEncode(t *testing.T) {
 	cases := map[int][]byte{
-		0:    {0x00},
-		127:  {0x7f},
-		128:  {0x80, 0x01},
+		0:     {0x00},
+		127:   {0x7f},
+		128:   {0x80, 0x01},
 		16384: {0x80, 0x80, 0x01},
 	}
 	for n, want := range cases {

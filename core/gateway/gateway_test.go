@@ -21,7 +21,7 @@ type fakeDriver struct {
 	reply    string
 }
 
-func (f *fakeDriver) Name() string                   { return "fake" }
+func (f *fakeDriver) Name() string                     { return "fake" }
 func (f *fakeDriver) Capabilities() agent.Capabilities { return agent.Capabilities{Resume: true} }
 
 func (f *fakeDriver) Query(ctx context.Context, req agent.Request) (<-chan agent.AgentEvent, error) {

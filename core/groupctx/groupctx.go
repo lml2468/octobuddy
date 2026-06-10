@@ -34,10 +34,10 @@ type message struct {
 type GroupContext struct {
 	maxContextChars int
 
-	mu      sync.Mutex
-	windows map[string][]message     // channelID -> chronological window
-	cursors map[string]int64         // channelID -> last injected id
-	nextID  map[string]int64         // channelID -> id counter
+	mu        sync.Mutex
+	windows   map[string][]message         // channelID -> chronological window
+	cursors   map[string]int64             // channelID -> last injected id
+	nextID    map[string]int64             // channelID -> id counter
 	nameToUID map[string]map[string]string // channelID -> name -> uid
 	uidToName map[string]map[string]string // channelID -> uid -> name
 }

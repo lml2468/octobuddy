@@ -160,7 +160,7 @@ func runBot(ctx context.Context, cfg config.Resolved, reg *botRegistry, srv *con
 	if n, _ := st.CleanupExpired(store.DefaultTTL); n > 0 {
 		fmt.Fprintf(os.Stderr, "[%s] swept %d expired session(s)\n", cfg.BotID, n)
 	}
-	// Reclaim per-session cwd sandboxes idle past the TTL (memory is外置, untouched).
+	// Reclaim per-session cwd sandboxes idle past the TTL (memory lives outside, untouched).
 	sandbox.CleanupExpiredCwds(cfg.CwdBase, sandbox.DefaultCwdTTL)
 
 	// Phase 1 ships the claude driver only; the agent.Driver seam keeps adding

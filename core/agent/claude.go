@@ -155,8 +155,8 @@ type claudeLine struct {
 }
 
 type claudeMessage struct {
-	Role    string         `json:"role"`
-	Content []claudeBlock  `json:"content"`
+	Role    string          `json:"role"`
+	Content []claudeBlock   `json:"content"`
 	Usage   *claudeRawUsage `json:"usage"`
 }
 

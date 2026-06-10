@@ -94,10 +94,10 @@ type Router struct {
 	locksMu sync.Mutex
 	locks   map[string]*sync.Mutex // one mutex per session key
 
-	rlMu     sync.Mutex
-	global   *bucket
-	perUser  map[string]*bucket
-	perSess  map[string]*bucket
+	rlMu    sync.Mutex
+	global  *bucket
+	perUser map[string]*bucket
+	perSess map[string]*bucket
 }
 
 // New constructs a Router.
@@ -118,10 +118,10 @@ func (r *Router) SetClock(now func() time.Time) { r.now = now }
 type Decision int
 
 const (
-	Accepted     Decision = iota
-	DroppedUnroutable        // no session key
-	DroppedNotMentioned      // group message without a mention
-	DroppedTooLong           // exceeds MaxContentByte
+	Accepted            Decision = iota
+	DroppedUnroutable            // no session key
+	DroppedNotMentioned          // group message without a mention
+	DroppedTooLong               // exceeds MaxContentByte
 	RateLimited
 )
 

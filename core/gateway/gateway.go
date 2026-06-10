@@ -78,7 +78,7 @@ func (g *Gateway) WithModel(m string) *Gateway {
 }
 
 // WithSandbox enables per-session filesystem isolation: each turn runs in a
-// hashed subdir of cwdBase, with auto-memory归拢 under memoryBase and the
+// hashed subdir of cwdBase, with auto-memory consolidated under memoryBase and the
 // operator's skills (globalSkillsDir then skillsDir, latter shadows) symlinked
 // into the sandbox. An empty cwdBase disables isolation.
 func (g *Gateway) WithSandbox(cwdBase, memoryBase, skillsDir, globalSkillsDir string) *Gateway {

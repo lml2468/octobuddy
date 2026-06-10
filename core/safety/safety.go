@@ -13,7 +13,7 @@
 //   - Bodies inside a label   -> EscapeRoleLabels (neutralize line-leading role labels)
 //   - Assembled blocks        -> EscapeSectionMarkers (neutralize line-leading section headers)
 //   - SafeText                -> a type only this package can mint, so "raw user
-//                                text reached the prompt" is a compile error.
+//     text reached the prompt" is a compile error.
 package safety
 
 import (

@@ -22,7 +22,7 @@ if $seed; then
     cat > "$cfg_dir/config.json" <<'JSON'
 {
   "apiUrl": "https://your-octo-server.example",
-  "sdk": { "driver": "claude" },
+  "agent": { "model": "claude-opus-4-8" },
   "bots": [ { "id": "default" } ]
 }
 JSON

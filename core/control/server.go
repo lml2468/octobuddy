@@ -24,8 +24,8 @@ type Server struct {
 }
 
 type client struct {
-	conn   net.Conn
-	sendCh chan []byte
+	conn      net.Conn
+	sendCh    chan []byte
 	closeOnce sync.Once
 }
 

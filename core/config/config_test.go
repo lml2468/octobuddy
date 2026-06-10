@@ -143,15 +143,15 @@ func TestSlugRejection(t *testing.T) {
 
 func TestSSRFRejection(t *testing.T) {
 	cases := map[string]bool{
-		"https://octo.example":   true,
-		"https://1.2.3.4":        true,
-		"http://localhost:8080":  true,
-		"http://127.0.0.1":       true,
-		"https://127.0.0.1":      false, // private IP literal over https rejected
-		"https://10.0.0.1":       false,
+		"https://octo.example":    true,
+		"https://1.2.3.4":         true,
+		"http://localhost:8080":   true,
+		"http://127.0.0.1":        true,
+		"https://127.0.0.1":       false, // private IP literal over https rejected
+		"https://10.0.0.1":        false,
 		"https://169.254.169.254": false, // cloud metadata
-		"http://evil.example":    false, // http to non-localhost
-		"ftp://x":                false,
+		"http://evil.example":     false, // http to non-localhost
+		"ftp://x":                 false,
 	}
 	for u, want := range cases {
 		if got := isAllowedURL(u); got != want {

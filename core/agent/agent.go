@@ -25,13 +25,13 @@ type EventKind string
 
 const (
 	KindSessionStarted EventKind = "session_started" // carries a SessionID for resume
-	KindTextDelta      EventKind = "text_delta"       // a chunk of assistant text
-	KindThinking       EventKind = "thinking"         // extended-thinking text (optional)
-	KindToolUse        EventKind = "tool_use"         // the agent invoked a tool
-	KindToolResult     EventKind = "tool_result"      // a tool returned
-	KindTurnDone       EventKind = "turn_done"        // the turn completed (carries usage)
-	KindError          EventKind = "error"            // recoverable or terminal error
-	KindSystem         EventKind = "system"           // init / retry / hook — informational
+	KindTextDelta      EventKind = "text_delta"      // a chunk of assistant text
+	KindThinking       EventKind = "thinking"        // extended-thinking text (optional)
+	KindToolUse        EventKind = "tool_use"        // the agent invoked a tool
+	KindToolResult     EventKind = "tool_result"     // a tool returned
+	KindTurnDone       EventKind = "turn_done"       // the turn completed (carries usage)
+	KindError          EventKind = "error"           // recoverable or terminal error
+	KindSystem         EventKind = "system"          // init / retry / hook — informational
 )
 
 // AgentEvent is the single normalized currency between any driver and the

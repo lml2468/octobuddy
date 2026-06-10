@@ -17,7 +17,7 @@ const (
 type MessageType int
 
 const (
-	MsgText MessageType = 1
+	MsgText  MessageType = 1
 	MsgImage MessageType = 2
 )
 
@@ -26,8 +26,8 @@ const (
 type Mention struct {
 	UIDs   []string `json:"uids,omitempty"`
 	All    any      `json:"all,omitempty"`    // legacy @all (bool|number)
-	Humans any      `json:"humans,omitempty"` // @所有人 (bool|number)
-	AIs    any      `json:"ais,omitempty"`    // @所有AI (bool|number)
+	Humans any      `json:"humans,omitempty"` // @all-humans (bool|number)
+	AIs    any      `json:"ais,omitempty"`    // @all-AIs (bool|number)
 }
 
 // MessagePayload is the decrypted RECV payload JSON (types.ts MessagePayload).

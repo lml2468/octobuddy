@@ -1,0 +1,46 @@
+name: Bug report
+description: Report a defect in xclawd (core), the macOS app, or the control bus.
+labels: [bug]
+body:
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which piece?
+      options:
+        - core (Go daemon xclawd)
+        - app (Swift macOS app)
+        - proto (control-bus contract)
+        - build / packaging / CI
+        - not sure
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug, plus what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Run `go run ./cmd/xclawd -config ...`
+        2. Send a message in a group channel
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      description: OS + version, Go version (`go version`), and how you ran XClaw (REPL / -config / app).
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant stderr output. Redact tokens and any secrets first.
+      render: text

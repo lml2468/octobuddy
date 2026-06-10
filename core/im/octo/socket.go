@@ -27,11 +27,11 @@ type socketConn struct {
 	onMessage func(BotMessage)
 	onError   func(error)
 
-	conn    *websocket.Conn
-	dh      dhKeyPair
-	aesKey  []byte
-	aesIV   []byte
-	srvVer  int
+	conn   *websocket.Conn
+	dh     dhKeyPair
+	aesKey []byte
+	aesIV  []byte
+	srvVer int
 
 	mu     sync.Mutex
 	closed bool

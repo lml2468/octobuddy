@@ -139,7 +139,6 @@ func main() {
 	runREPL(context.Background(), gw, st, *fromUID)
 }
 
-
 // runREPL reads stdin lines and feeds each as an inbound DM through the gateway.
 func runREPL(ctx context.Context, gw *gateway.Gateway, st *store.Store, fromUID string) {
 	sc := bufio.NewScanner(os.Stdin)
