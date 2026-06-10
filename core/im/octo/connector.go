@@ -2,6 +2,8 @@ package octo
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -20,6 +22,11 @@ type Connector struct {
 	gateway *gateway.Gateway
 
 	botUID string
+
+	// runCtx is the context passed to Run; the sink/inbound callbacks (which the
+	// gateway.Sink interface does not thread a context through) tie their work to
+	// it, so a cancelled Run aborts in-flight turns and outbound REST calls.
+	runCtx context.Context
 
 	mu      sync.Mutex
 	targets map[string]replyTarget // sessionKey → where to send the reply
@@ -69,6 +76,7 @@ func (c *Connector) SetGateway(g *gateway.Gateway) { c.gateway = g }
 // until ctx is cancelled. The initial registration is retried with backoff so a
 // transient API outage at startup doesn't kill the bot.
 func (c *Connector) Run(ctx context.Context) error {
+	c.runCtx = ctx
 	// REST heartbeat loop (30s), separate from the WS ping.
 	go c.heartbeatLoop(ctx)
 
@@ -137,11 +145,28 @@ func (c *Connector) connectOnce(ctx context.Context, reg RegisterResponse) error
 	c.mu.Lock()
 	c.sock = sock
 	c.mu.Unlock()
+	// Always release the socket (fd + ping/watch goroutines) when this attempt
+	// ends, so reconnects don't accumulate connections.
+	defer sock.close()
 
 	if err := sock.connect(ctx); err != nil {
 		return err
 	}
 	return sock.run(ctx)
+}
+
+// ctx returns the Run context, falling back to Background if a callback somehow
+// fires before Run set it (defensive — a nil context would panic downstream).
+func (c *Connector) ctx() context.Context {
+	if c.runCtx != nil {
+		return c.runCtx
+	}
+	return context.Background()
+}
+
+// logf reports a recovered/handled error to stderr, tagged with the bot uid.
+func (c *Connector) logf(format string, args ...any) {
+	fmt.Fprintf(os.Stderr, "[octo %s] "+format+"\n", append([]any{c.botUID}, args...)...)
 }
 
 func (c *Connector) heartbeatLoop(ctx context.Context) {
@@ -199,7 +224,9 @@ func (c *Connector) onInbound(m BotMessage) {
 		c.gateway.Observe(inbound)
 		return
 	}
-	_, _ = c.gateway.Handle(context.Background(), inbound)
+	if _, err := c.gateway.Handle(c.ctx(), inbound); err != nil {
+		c.logf("handle turn for %s: %v", key, err)
+	}
 }
 
 // --- gateway.Sink ---
@@ -209,7 +236,9 @@ func (c *Connector) onInbound(m BotMessage) {
 func (c *Connector) OnEvent(sessionKey string, ev agent.AgentEvent) {
 	if ev.Kind == agent.KindSessionStarted {
 		if tgt, ok := c.target(sessionKey); ok {
-			_ = c.rest.SendTyping(context.Background(), tgt.channelID, tgt.channelType)
+			if err := c.rest.SendTyping(c.ctx(), tgt.channelID, tgt.channelType); err != nil {
+				c.logf("send typing for %s: %v", sessionKey, err)
+			}
 		}
 	}
 }
@@ -226,7 +255,9 @@ func (c *Connector) OnReply(sessionKey string, text string) {
 		return
 	}
 	for _, seg := range splitMessage(text, 3500) {
-		_, _ = c.rest.SendText(context.Background(), tgt.channelID, tgt.channelType, seg, nil, false)
+		if _, err := c.rest.SendText(c.ctx(), tgt.channelID, tgt.channelType, seg, nil, false); err != nil {
+			c.logf("send reply to %s: %v", sessionKey, err)
+		}
 	}
 }
 

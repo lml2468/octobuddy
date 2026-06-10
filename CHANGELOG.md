@@ -25,6 +25,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   runs a periodic reaper that also enforces the session/sandbox TTLs over the
   daemon's lifetime, instead of sweeping only once at startup. The reaper stops
   on context cancellation.
+- Octo connector shutdown & cancellation: `socketConn.run` now closes the
+  connection on context cancellation so the blocking WebSocket read unblocks and
+  the daemon shuts down promptly (gorilla's `ReadMessage` does not observe
+  context); `connectOnce` always releases the socket on return, so reconnects no
+  longer accumulate connections/goroutines. Inbound turns and outbound REST
+  calls now use the connector's run context instead of `context.Background()`,
+  and previously-swallowed errors (gateway turn, send-typing, send-reply) are
+  now logged.
 
 <!--
 Going forward, summarize notable changes here under Added / Changed / Deprecated
