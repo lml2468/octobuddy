@@ -23,6 +23,18 @@ public enum CorePaths {
         supportDir.appendingPathComponent("xclaw.db").path
     }
 
+    /// The daemon's bot-first config: ~/.xclaw/config.json (matches the Go
+    /// core's config.DefaultConfigPath — NOT the app support dir).
+    public static var configPath: String {
+        URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent(".xclaw/config.json").path
+    }
+
+    /// Whether a daemon config file exists (selects multi-bot config mode).
+    public static var configExists: Bool {
+        FileManager.default.fileExists(atPath: configPath)
+    }
+
     /// Locates the xclawd binary, trying, in order:
     ///  1. $XCLAWD_BIN (explicit override, used by dev scripts)
     ///  2. the app bundle's Contents/Helpers/xclawd (production)

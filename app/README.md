@@ -16,25 +16,28 @@ multi-target layout.
 The app boots the core and renders the live event stream, with multi-bot
 management:
 
-- **CoreSupervisor** (`XClawCore`) spawns `xclawd` with a control socket,
-  watches it, and restarts with exponential backoff.
-- **AppModel** (`XClawApp`) owns the supervisor + `ControlClient`, folds the
-  per-bot event stream into `AppState` (bucketed by botId), polls `bots.list`,
-  and exposes bots / sessions / `send(botId)` / `reset` to the UI.
+- **CoreSupervisor** (`XClawCore`) spawns `xclawd` and restarts with backoff.
+  Defaults to **multi-bot config mode** (`-config ~/.xclaw/config.json
+  -control <sock>`); a single-bot flag mode remains for tests.
+- **AppModel** (`XClawApp`) starts the core in config mode when
+  `~/.xclaw/config.json` exists (else shows a `needs-config` state), owns the
+  `ControlClient`, folds per-bot events into `AppState` (bucketed by botId),
+  polls `bots.list`, and routes `send(botId)` / `reset` to the selected bot.
 - **Console window** — a bot sidebar (per-bot connection status + session count)
   + the selected bot's session view + composer; **MenuBarExtra** shows the bot
   count and bus status.
 
-Verified headlessly: an integration test spawns the REAL `xclawd -config` with a
-control socket and a 2-bot config, connects over the bus, and asserts
-`bots.list` returns both bots.
+Verified headlessly: integration tests spawn the REAL `xclawd -config` (both
+directly and via CoreSupervisor in config mode), connect over the bus, and
+assert `bots.list` returns the configured bots.
 
 ## Run (dev)
 
 ```bash
 # from the repo root — builds the Go core, then launches the app which spawns it
-zsh scripts/run-dev.sh            # claude driver
-zsh scripts/run-dev.sh codex      # codex driver
+# in multi-bot config mode (needs ~/.xclaw/config.json).
+zsh scripts/run-dev.sh                 # launch (needs an existing ~/.xclaw config)
+zsh scripts/run-dev.sh --seed-config   # write a starter ~/.xclaw config, then launch
 
 # or directly (point the app at a prebuilt daemon)
 cd core && go build -o .xclawd-dev ./cmd/xclawd

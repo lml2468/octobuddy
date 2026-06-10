@@ -149,6 +149,60 @@ func configModeExposesBotsOverBus() async throws {
     #expect(gotBots.get() == ["alpha", "beta"], "bots.list should expose both bots; got \(gotBots.get())")
 }
 
+/// End-to-end through CoreSupervisor in config mode: the supervisor spawns
+/// `xclawd -config <path> -control <sock>`, and the bus exposes the configured
+/// bots. Proves the supervisor's config-mode arg construction works.
+@Test
+func supervisorConfigModeRunsBots() async throws {
+    guard let bin = devXclawdPath() else { return }
+    let fm = FileManager.default
+
+    let tmp = (NSTemporaryDirectory() as NSString)
+        .appendingPathComponent("xclaw-sc-\(getpid())")
+    try fm.createDirectory(atPath: (tmp as NSString).appendingPathComponent("alpha"), withIntermediateDirectories: true)
+    defer { try? fm.removeItem(atPath: tmp) }
+
+    let cfgPath = (tmp as NSString).appendingPathComponent("config.json")
+    try #"{"apiUrl":"http://127.0.0.1:9","bots":[{"id":"alpha"}]}"#
+        .write(toFile: cfgPath, atomically: true, encoding: .utf8)
+    try #"{"octoToken":"bf_a"}"#
+        .write(toFile: (tmp as NSString).appendingPathComponent("alpha/config.json"), atomically: true, encoding: .utf8)
+
+    let sock = (tmp as NSString).appendingPathComponent("ctl.sock")
+    let sup = CoreSupervisor(config: .init(
+        binaryPath: bin, socketPath: sock, configMode: true, configPath: cfgPath))
+    sup.start()
+    defer { sup.stop() }
+
+    var ready = false
+    for _ in 0..<50 {
+        if fm.fileExists(atPath: sock) { ready = true; break }
+        try await Task.sleep(for: .milliseconds(100))
+    }
+    #expect(ready, "supervisor did not bring up the control socket in config mode")
+    guard ready else { return }
+
+    let client = ControlClient(path: sock)
+    try client.connect()
+    defer { client.disconnect() }
+
+    let gotBots = Box<[String]>([])
+    let consumer = Task.detached {
+        var state = AppState()
+        for await env in client.events where env.kind == .response && env.type == "bots.list" {
+            if let infos = env.decodeBody([BotInfo].self) {
+                state.setBots(infos)
+                gotBots.set(state.sortedBots.map { $0.id })
+            }
+        }
+    }
+    defer { consumer.cancel() }
+
+    _ = try client.send(type: "bots.list", body: [String: String]())
+    try await Task.sleep(for: .seconds(2))
+    #expect(gotBots.get() == ["alpha"], "supervisor config mode should expose the configured bot; got \(gotBots.get())")
+}
+
 final class Box<T>: @unchecked Sendable {
     private let lock = NSLock()
     private var v: T

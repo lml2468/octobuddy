@@ -34,7 +34,9 @@ final class AppModel {
     /// The DM uid used for messages sent from this GUI.
     @ObservationIgnored let localUID = "gui-user"
 
-    /// Boots the core and connects the control bus.
+    /// Boots the core and connects the control bus. Defaults to multi-bot config
+    /// mode when ~/.xclaw/config.json exists; otherwise surfaces a needs-config
+    /// state (the app shouldn't silently run an empty single-bot daemon).
     func start(driver: String = "claude") {
         self.driver = driver
         CorePaths.ensureSupportDir()
@@ -45,11 +47,18 @@ final class AppModel {
             return
         }
 
+        let useConfig = CorePaths.configExists
+        if !useConfig {
+            coreState = "needs-config"
+            lastError = "No config at \(CorePaths.configPath). Create it (see config.example.json) to run bots."
+            return
+        }
+
         let cfg = CoreSupervisor.Config(
             binaryPath: bin,
             socketPath: socketPath,
-            dbPath: CorePaths.dbPath,
-            driver: driver
+            configMode: true,
+            configPath: CorePaths.configPath
         )
         let sup = CoreSupervisor(config: cfg) { [weak self] st in
             // Called off the main actor; hop back to update @Observable state.

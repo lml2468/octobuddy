@@ -21,19 +21,28 @@ public final class CoreSupervisor: @unchecked Sendable {
         public var binaryPath: String
         /// Unix socket the daemon will listen on (passed as -control).
         public var socketPath: String
-        /// SQLite path (-db). Defaults to a temp file if empty.
+        /// SQLite path (-db). Single-bot mode only; defaults to a temp file.
         public var dbPath: String
-        /// Agent driver (-driver): "claude" | "codex".
+        /// Agent driver (-driver). Single-bot mode only.
         public var driver: String
+        /// When non-empty, run in multi-bot config mode: `-config <configPath>
+        /// -control <socketPath>`. Empty path with configMode=true uses the
+        /// daemon's default ~/.xclaw/config.json. Takes precedence over the
+        /// single-bot flags above.
+        public var configMode: Bool
+        public var configPath: String
         /// Extra args appended verbatim.
         public var extraArgs: [String]
 
         public init(binaryPath: String, socketPath: String, dbPath: String = "",
-                    driver: String = "claude", extraArgs: [String] = []) {
+                    driver: String = "claude", configMode: Bool = false,
+                    configPath: String = "", extraArgs: [String] = []) {
             self.binaryPath = binaryPath
             self.socketPath = socketPath
             self.dbPath = dbPath
             self.driver = driver
+            self.configMode = configMode
+            self.configPath = configPath
             self.extraArgs = extraArgs
         }
     }
@@ -87,9 +96,16 @@ public final class CoreSupervisor: @unchecked Sendable {
 
         let p = Process()
         p.executableURL = URL(fileURLWithPath: config.binaryPath)
-        var args = ["-control", config.socketPath, "-no-repl", "-driver", config.driver]
-        if !config.dbPath.isEmpty {
-            args += ["-db", config.dbPath]
+        var args: [String]
+        if config.configMode {
+            // Multi-bot: -config [path] -control <sock>. An empty configPath
+            // lets the daemon use its default ~/.xclaw/config.json.
+            args = ["-config", config.configPath, "-control", config.socketPath]
+        } else {
+            args = ["-control", config.socketPath, "-no-repl", "-driver", config.driver]
+            if !config.dbPath.isEmpty {
+                args += ["-db", config.dbPath]
+            }
         }
         args += config.extraArgs
         p.arguments = args
