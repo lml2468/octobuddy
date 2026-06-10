@@ -103,3 +103,41 @@ func appStateSetBotsPreservesSessions() throws {
     #expect(a?.connected == true)
     #expect(a?.sessions["u1"]?.streamingText == "hi") // session not clobbered
 }
+
+@Test
+func appStateBotStatusEventUpdatesConnection() throws {
+    var state = AppState()
+    func event(_ type: String, _ json: String) -> Envelope {
+        try! ControlCodec.decode(Data(#"{"kind":"event","type":""#.utf8) + Data(type.utf8)
+            + Data(#"","body":"#.utf8) + Data(json.utf8) + Data("}".utf8))
+    }
+    state.apply(event("bot.status", #"{"id":"alpha","connected":true}"#))
+    #expect(state.bots["alpha"]?.connected == true)
+    state.apply(event("bot.status", #"{"id":"alpha","connected":false,"lastError":"dropped"}"#))
+    #expect(state.bots["alpha"]?.connected == false)
+    #expect(state.bots["alpha"]?.lastError == "dropped")
+}
+
+@Test
+func appStateErrorEventBucketsToDefaultBot() throws {
+    var state = AppState()
+    func event(_ type: String, _ json: String) -> Envelope {
+        try! ControlCodec.decode(Data(#"{"kind":"event","type":""#.utf8) + Data(type.utf8)
+            + Data(#"","body":"#.utf8) + Data(json.utf8) + Data("}".utf8))
+    }
+    // No botId → the "default" bucket carries the error.
+    state.apply(event("error", #"{"scope":"gateway","message":"boom","recoverable":false}"#))
+    #expect(state.bots["default"]?.lastError == "boom")
+    // With a botId, it lands on that bot.
+    state.apply(event("error", #"{"botId":"beta","scope":"driver","message":"beta boom"}"#))
+    #expect(state.bots["beta"]?.lastError == "beta boom")
+}
+
+@Test
+func appStateIgnoresNonEventEnvelopes() throws {
+    var state = AppState()
+    // A response envelope must not mutate session state.
+    let resp = try ControlCodec.decode(Data(#"{"kind":"response","type":"session.text","body":{"sessionKey":"u1","delta":"x"}}"#.utf8))
+    state.apply(resp)
+    #expect(state.bots.isEmpty)
+}

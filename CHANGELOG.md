@@ -64,6 +64,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   empty states, `@Environment(\.openWindow)` to surface the console (replacing a
   title-string window lookup), `LazyVStack` for the session list, `@FocusState`
   on the composer, and a stable `.id` on the bot form for clean switching.
+  VoiceOver reads bot rows and session cards as combined elements; the `AppState`
+  reducer's `bot.status` / `error` / non-event paths are now directly tested.
 
 <!--
 Going forward, summarize notable changes here under Added / Changed / Deprecated

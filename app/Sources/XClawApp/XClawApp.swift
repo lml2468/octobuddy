@@ -131,6 +131,8 @@ struct ConsoleView: View {
                         }
                     }
                     .tag(bot.id)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel("\(bot.id), \(bot.connected ? "connected" : "offline"), \(bot.sessions.count) sessions")
                 }
             }
         }
@@ -235,5 +237,6 @@ struct SessionRow: View {
         }
         .padding(10)
         .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+        .accessibilityElement(children: .combine)
     }
 }
