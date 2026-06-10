@@ -1,0 +1,17 @@
+# Build output
+/MLClaw
+/ccd
+*.exe
+/dist/
+
+# Local databases / runtime state
+*.db
+*.db-wal
+*.db-shm
+
+# OS / editor
+.DS_Store
+*.swp
+
+# Go
+/vendor/
