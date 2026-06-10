@@ -74,12 +74,14 @@ jobs:
 
   app:
     name: Swift app
-    runs-on: macos-14
+    runs-on: macos-15
     defaults:
       run:
         working-directory: app
     steps:
       - uses: actions/checkout@v4
+      - name: Toolchain
+        run: swift --version
       - name: swift build
         run: swift build
       - name: swift test
