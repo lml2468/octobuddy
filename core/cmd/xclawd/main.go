@@ -1,14 +1,18 @@
-// Command ccd-spike validates that the Go AgentDriver abstraction can drive
-// Claude Code via its CLI (replacing claude-agent-sdk) and normalize its
-// stream-json into a unified AgentEvent stream.
+// Command xclawd is the XClaw gateway daemon.
 //
-// Two modes:
+// It wires the full pipeline — store + router + gateway + agent driver — and
+// drives it from an inbound source. This headless MVP ships a REPL inbound
+// source (stdin) so you can talk to an agent end-to-end:
 //
-//	ccd-spike -prompt "hello"            # live: spawns `claude -p ...`
-//	ccd-spike -replay fixtures/turn.jsonl # offline: replays recorded stream-json
+//	xclawd                       # claude driver, interactive REPL on stdin
+//	xclawd -driver codex         # codex app-server driver
+//	echo "hello" | xclawd        # one-shot piped input
 //
-// In both modes it prints the normalized events and persists the session id to
-// a pure-Go SQLite store (the resume map the real gateway needs).
+// Each line of stdin becomes an inbound DM; the gateway routes it (per-session
+// lock, rate limit), drives the agent, streams events to stdout, and persists
+// the assistant reply + resume id for multi-turn continuity.
+//
+// A `/reset` line clears the current session's resume mapping.
 package main
 
 import (
@@ -19,156 +23,140 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/lml2468/xclaw/core/agent"
+	"github.com/lml2468/xclaw/core/gateway"
+	"github.com/lml2468/xclaw/core/router"
 	"github.com/lml2468/xclaw/core/store"
 )
 
 func main() {
 	var (
-		prompt     = flag.String("prompt", "", "prompt to send to the agent (live mode)")
-		replay     = flag.String("replay", "", "path to a recorded stream-json file (offline mode, claude only)")
 		driverName = flag.String("driver", "claude", "agent driver: claude | codex")
 		bin        = flag.String("bin", "", "agent executable (default: driver name)")
-		sessionKey = flag.String("session-key", "spike:default", "logical session key for resume persistence")
-		dbPath     = flag.String("db", filepath.Join(os.TempDir(), "ccd-spike.db"), "sqlite path")
-		model      = flag.String("model", "", "optional model override")
+		fromUID    = flag.String("uid", "repl-user", "synthetic from_uid for REPL inbound (DM session key)")
+		dbPath     = flag.String("db", filepath.Join(os.TempDir(), "xclawd.db"), "sqlite path")
+		maxPerMin  = flag.Int("rate", 30, "max messages per minute per session")
 	)
 	flag.Parse()
 
 	st, err := store.Open(*dbPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "store open: %v\n", err)
-		os.Exit(1)
+		fatal("store open: %v", err)
 	}
 	defer st.Close()
-
-	resume, _ := st.Resume(*sessionKey)
-	if resume != "" {
-		fmt.Printf("↻ resuming session %s (key=%s)\n", resume, *sessionKey)
-	} else {
-		fmt.Printf("✦ new session (key=%s)\n", *sessionKey)
+	if n, err := st.CleanupExpired(store.DefaultTTL); err == nil && n > 0 {
+		fmt.Fprintf(os.Stderr, "swept %d expired session(s)\n", n)
 	}
 
-	var events <-chan agent.AgentEvent
-	if *replay != "" {
-		events = replayFile(*replay)
-	} else {
-		if *prompt == "" {
-			fmt.Fprintln(os.Stderr, "provide -prompt (live) or -replay <file> (offline)")
-			os.Exit(2)
+	drv, err := makeDriver(*driverName, *bin)
+	if err != nil {
+		fatal("%v", err)
+	}
+
+	sink := &stdoutSink{}
+	gw := gateway.New(drv, st, router.New(router.Config{MaxPerMinute: *maxPerMin}), sink)
+
+	fmt.Printf("xclawd — driver=%s caps=%+v\n", drv.Name(), drv.Capabilities())
+	fmt.Printf("db=%s  session=dm:%s\n", *dbPath, *fromUID)
+	fmt.Println("type a message and press enter; /reset clears the session; Ctrl-D to exit")
+
+	runREPL(context.Background(), gw, st, *fromUID)
+}
+
+func makeDriver(name, bin string) (agent.Driver, error) {
+	switch name {
+	case "claude":
+		return agent.NewClaudeDriver(bin), nil
+	case "codex":
+		return agent.NewCodexDriver(bin), nil
+	default:
+		return nil, fmt.Errorf("unknown driver %q (claude|codex)", name)
+	}
+}
+
+// runREPL reads stdin lines and feeds each as an inbound DM through the gateway.
+func runREPL(ctx context.Context, gw *gateway.Gateway, st *store.Store, fromUID string) {
+	sc := bufio.NewScanner(os.Stdin)
+	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	for {
+		fmt.Print("\n> ")
+		if !sc.Scan() {
+			break
 		}
-		var d agent.Driver
-		switch *driverName {
-		case "claude":
-			d = agent.NewClaudeDriver(*bin)
-		case "codex":
-			d = agent.NewCodexDriver(*bin)
-		default:
-			fmt.Fprintf(os.Stderr, "unknown driver %q (claude|codex)\n", *driverName)
-			os.Exit(2)
+		text := strings.TrimSpace(sc.Text())
+		if text == "" {
+			continue
 		}
-		fmt.Printf("driver=%s caps=%+v\n", d.Name(), d.Capabilities())
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-		defer cancel()
-		ch, err := d.Query(ctx, agent.Request{
-			Prompt:    *prompt,
-			SessionID: resume,
-			Model:     *model,
+		if text == "/reset" {
+			_ = st.ClearResume(fromUID)
+			fmt.Println("(session reset)")
+			continue
+		}
+
+		d, err := gw.Handle(ctx, router.InboundMessage{
+			ChannelType: router.ChannelDM,
+			FromUID:     fromUID,
+			FromName:    fromUID,
+			Text:        text,
 		})
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "query: %v\n", err)
-			os.Exit(1)
+			fmt.Fprintf(os.Stderr, "handle error: %v\n", err)
+			continue
 		}
-		events = ch
+		if d != router.Accepted {
+			fmt.Printf("(dropped: %s)\n", d)
+		}
 	}
-
-	consume(events, st, *sessionKey)
 }
 
-// consume renders the normalized event stream and persists the session id —
-// exactly what the real gateway's stream-relay + session-store would do.
-func consume(events <-chan agent.AgentEvent, st *store.Store, sessionKey string) {
-	var (
-		fullText strings.Builder
-		toolN    int
-		newSess  string
-	)
-	for ev := range events {
-		switch ev.Kind {
-		case agent.KindSessionStarted:
-			newSess = ev.SessionID
-			fmt.Printf("  [session] %s\n", ev.SessionID)
-		case agent.KindTextDelta:
-			fullText.WriteString(ev.Text)
-			fmt.Printf("  [text]    %s\n", oneLine(ev.Text))
-		case agent.KindThinking:
-			fmt.Printf("  [think]   %s\n", oneLine(ev.Text))
-		case agent.KindToolUse:
-			toolN++
-			fmt.Printf("  [tool]    🔧 %s(%s)\n", ev.ToolName, ev.ToolParams)
-		case agent.KindToolResult:
-			fmt.Printf("  [result]  (tool returned)\n")
-		case agent.KindTurnDone:
-			if ev.Usage != nil {
-				fmt.Printf("  [done]    in=%d out=%d tokens\n", ev.Usage.InputTokens, ev.Usage.OutputTokens)
-			} else {
-				fmt.Printf("  [done]\n")
-			}
-		case agent.KindError:
-			tag := "ERR"
-			if ev.Recoverable {
-				tag = "retry"
-			}
-			fmt.Printf("  [%s]   %s\n", tag, oneLine(ev.Err))
-		case agent.KindSystem:
-			fmt.Printf("  [sys]     %s\n", oneLine(ev.Text))
-		}
-	}
+// stdoutSink renders the live event stream and the final reply to the terminal.
+type stdoutSink struct{}
 
-	if newSess != "" {
-		if err := st.SaveResume(sessionKey, "claude", newSess); err != nil {
-			fmt.Fprintf(os.Stderr, "save resume: %v\n", err)
+func (s *stdoutSink) OnEvent(sessionKey string, ev agent.AgentEvent) {
+	switch ev.Kind {
+	case agent.KindSessionStarted:
+		fmt.Printf("  [session] %s\n", ev.SessionID)
+	case agent.KindTextDelta:
+		fmt.Printf("  [text]    %s\n", oneLine(ev.Text))
+	case agent.KindThinking:
+		fmt.Printf("  [think]   %s\n", oneLine(ev.Text))
+	case agent.KindToolUse:
+		fmt.Printf("  [tool]    🔧 %s(%s)\n", ev.ToolName, ev.ToolParams)
+	case agent.KindToolResult:
+		fmt.Printf("  [result]  (tool returned)\n")
+	case agent.KindTurnDone:
+		if ev.Usage != nil {
+			fmt.Printf("  [done]    in=%d out=%d tokens\n", ev.Usage.InputTokens, ev.Usage.OutputTokens)
 		} else {
-			fmt.Printf("✓ persisted resume id %s for key %s\n", newSess, sessionKey)
+			fmt.Printf("  [done]\n")
 		}
+	case agent.KindError:
+		tag := "ERR"
+		if ev.Recoverable {
+			tag = "retry"
+		}
+		fmt.Printf("  [%s]   %s\n", tag, oneLine(ev.Err))
+	case agent.KindSystem:
+		fmt.Printf("  [sys]     %s\n", oneLine(ev.Text))
 	}
-
-	fmt.Printf("\n── summary ──\n")
-	fmt.Printf("assistant text: %q\n", oneLine(fullText.String()))
-	fmt.Printf("tool calls:     %d\n", toolN)
 }
 
-func replayFile(path string) <-chan agent.AgentEvent {
-	out := make(chan agent.AgentEvent, 64)
-	go func() {
-		defer close(out)
-		f, err := os.Open(path)
-		if err != nil {
-			out <- agent.AgentEvent{Kind: agent.KindError, Err: err.Error()}
-			return
-		}
-		defer f.Close()
-		sc := bufio.NewScanner(f)
-		sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
-		for sc.Scan() {
-			line := strings.TrimSpace(sc.Text())
-			if line == "" {
-				continue
-			}
-			for _, ev := range agent.ParseLineForReplay(line) {
-				out <- ev
-			}
-		}
-	}()
-	return out
+func (s *stdoutSink) OnReply(sessionKey string, text string) {
+	if text != "" {
+		fmt.Printf("\n💬 %s\n", text)
+	}
 }
 
 func oneLine(s string) string {
 	s = strings.Join(strings.Fields(s), " ")
-	if len(s) > 100 {
-		s = s[:100] + "…"
+	if len(s) > 120 {
+		s = s[:120] + "…"
 	}
 	return s
+}
+
+func fatal(format string, a ...any) {
+	fmt.Fprintf(os.Stderr, format+"\n", a...)
+	os.Exit(1)
 }
