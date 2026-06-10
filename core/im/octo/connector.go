@@ -141,9 +141,17 @@ func (c *Connector) onInbound(m BotMessage) {
 	c.targets[key] = replyTarget{channelID: m.ChannelID, channelType: m.ChannelType}
 	c.mu.Unlock()
 
-	if c.gateway != nil {
-		_, _ = c.gateway.Handle(context.Background(), inbound)
+	if c.gateway == nil {
+		return
 	}
+	// A group message that doesn't mention the bot is background context, not a
+	// turn: observe it so it becomes a later @-mention's delta. (The router
+	// would drop it anyway; observing first preserves group context.)
+	if inbound.ChannelType == router.ChannelGroup && !inbound.Mentioned {
+		c.gateway.Observe(inbound)
+		return
+	}
+	_, _ = c.gateway.Handle(context.Background(), inbound)
 }
 
 // --- gateway.Sink ---

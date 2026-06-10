@@ -15,7 +15,9 @@ import (
 	"time"
 
 	"github.com/lml2468/xclaw/core/agent"
+	"github.com/lml2468/xclaw/core/groupctx"
 	"github.com/lml2468/xclaw/core/router"
+	"github.com/lml2468/xclaw/core/safety"
 	"github.com/lml2468/xclaw/core/store"
 )
 
@@ -35,11 +37,30 @@ type Gateway struct {
 	router *router.Router
 	sink   Sink
 	now    func() time.Time
+
+	// Optional group-context (set via WithGroupContext). When set, group
+	// messages get a [Recent group messages] delta injected into the prompt.
+	groups *groupctx.GroupContext
+	// Operator-trusted system prompt (SOUL.md / config). Appended after the
+	// non-overridable security prefix.
+	systemPrompt string
 }
 
 // New constructs a Gateway.
 func New(d agent.Driver, st *store.Store, rt *router.Router, sink Sink) *Gateway {
 	return &Gateway{driver: d, store: st, router: rt, sink: sink, now: time.Now}
+}
+
+// WithGroupContext enables group-context injection.
+func (g *Gateway) WithGroupContext(gc *groupctx.GroupContext) *Gateway {
+	g.groups = gc
+	return g
+}
+
+// WithSystemPrompt sets the operator-trusted system prompt (SOUL.md / config).
+func (g *Gateway) WithSystemPrompt(p string) *Gateway {
+	g.systemPrompt = p
+	return g
 }
 
 // Handle routes one inbound message through the full pipeline. The router holds
@@ -49,13 +70,53 @@ func (g *Gateway) Handle(ctx context.Context, msg router.InboundMessage) (router
 	return g.router.RouteAndHandle(ctx, msg, g.runTurn)
 }
 
+// Observe caches a non-triggering group message into the group context so it
+// becomes background for a later @-mention turn. Call this for group messages
+// that did NOT mention the bot (which Handle would drop). No-op outside groups
+// or when group-context is disabled.
+func (g *Gateway) Observe(msg router.InboundMessage) {
+	if g.groups == nil || msg.ChannelType != router.ChannelGroup || msg.ChannelID == "" {
+		return
+	}
+	if strings.TrimSpace(msg.Text) == "" {
+		return
+	}
+	g.groups.Push(msg.ChannelID, msg.FromUID, msg.FromName, msg.Text)
+}
+
 // runTurn executes one accepted turn under the session lock.
 func (g *Gateway) runTurn(ctx context.Context, sessionKey string, msg router.InboundMessage) error {
 	// Ensure the session row exists (refreshes TTL).
 	if _, err := g.store.GetOrCreate(sessionKey, msg.ChannelID, int(msg.ChannelType)); err != nil {
 		return err
 	}
-	// Persist the user message.
+
+	// Build the prompt. For group messages, inject the [Recent group messages]
+	// delta as UNTRUSTED background and demarcate the real request with the
+	// current-message anchor. CRITICAL ordering (group-context.ts): build the
+	// delta BEFORE caching the current message, so it isn't echoed into itself.
+	prompt := msg.Text
+	if g.groups != nil && msg.ChannelType == router.ChannelGroup && msg.ChannelID != "" {
+		cursor := g.groups.Cursor(msg.ChannelID)
+		deltaText, _ := g.groups.BuildContextSince(msg.ChannelID, cursor)
+		// Cache the current message AFTER reading the delta.
+		g.groups.Push(msg.ChannelID, msg.FromUID, msg.FromName, msg.Text)
+		// Advance the cursor past everything now in the channel.
+		g.groups.SetCursor(msg.ChannelID, g.groups.MaxID(msg.ChannelID))
+
+		var b strings.Builder
+		if deltaText != "" {
+			// The whole block (header + raw bodies) is escaped once here.
+			b.WriteString(safety.SanitizePromptBody(deltaText))
+			b.WriteString("\n")
+		}
+		b.WriteString(safety.CurrentMessageAnchor)
+		b.WriteString("\n")
+		b.WriteString(msg.Text)
+		prompt = b.String()
+	}
+
+	// Persist the (original) user message.
 	if err := g.store.AppendUser(sessionKey, msg.Text, msg.FromName); err != nil {
 		return err
 	}
@@ -64,8 +125,9 @@ func (g *Gateway) runTurn(ctx context.Context, sessionKey string, msg router.Inb
 	resumeID, _ := g.store.Resume(sessionKey)
 
 	events, err := g.driver.Query(ctx, agent.Request{
-		Prompt:    msg.Text,
-		SessionID: resumeID,
+		Prompt:       prompt,
+		SessionID:    resumeID,
+		SystemAppend: g.buildSystemPrompt(),
 	})
 	if err != nil {
 		return err
@@ -96,4 +158,22 @@ func (g *Gateway) runTurn(ctx context.Context, sessionKey string, msg router.Inb
 	}
 	g.sink.OnReply(sessionKey, text)
 	return nil
+}
+
+// buildSystemPrompt assembles the frozen system-prompt append: the
+// non-overridable security prefix followed by the operator-trusted SOUL/config
+// prompt. (The driver's preset base prompt is prepended by the agent CLI.)
+func (g *Gateway) buildSystemPrompt() string {
+	parts := []safety.SafeText{safety.TrustedText(safety.SecurityPrefix)}
+	if g.systemPrompt != "" {
+		parts = append(parts, safety.TrustedText(g.systemPrompt))
+	}
+	var b strings.Builder
+	for i, p := range parts {
+		if i > 0 {
+			b.WriteString("\n\n")
+		}
+		b.WriteString(p.String())
+	}
+	return b.String()
 }

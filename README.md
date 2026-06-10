@@ -52,7 +52,13 @@ lockstep — a control-bus change touches all three in a single commit.
 - ✅ `core/im/octo` — Octo IM connector: WuKongIM binary protocol (curve25519 DH
   + MD5→AES-128-CBC, key derivation verified byte-identical to cc-channel) + REST;
   wired into `xclawd` via `-octo-api`/`-octo-token`.
-- 🚧 cron, group-context, prompt-safety, config (next ports).
+- ✅ `core/safety` + `core/groupctx` — prompt-injection defense (SafeText
+  choke-point, security prefix, current-message anchor) and per-channel group
+  context window; wired into the gateway (group turns inject a sanitized
+  [Recent group messages] delta + frozen system prompt).
+- ✅ `core/config` — two-layer bot-first config (~/.xclaw): global + per-bot,
+  derived dirs, SOUL.md, slug + SSRF validation.
+- 🚧 cron (deferred); config not yet loaded by xclawd; packaging.
 - 🚧 packaging: bundle the signed `xclawd` into the `.app` (Helpers/), Sparkle.
 
 ## Build

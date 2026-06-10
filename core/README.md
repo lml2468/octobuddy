@@ -52,6 +52,12 @@ control/      control bus: NDJSON-over-UDS server + gateway EventSink (GUI clien
 im/octo/      Octo IM connector: WuKongIM binary protocol (curve25519 DH + MD5→
               AES-128-CBC) + REST; inbound → router, replies via REST. Ported
               wire-compatibly from cc-channel-octo.
+safety/       prompt-injection defense: SanitizeDisplayName / Escape{Role,Section}
+              + SafeText choke-point + SecurityPrefix. Ported from prompt-safety.ts.
+groupctx/     per-channel group context window + cursor + @mention resolution;
+              renders the [Recent group messages] delta for injection.
+config/       two-layer bot-first config (~/.xclaw): global + per-bot, derived
+              dirs, SOUL.md, slug + SSRF validation.
 fixtures/     recorded stream-json turn (text + tool_use + result)
 ```
 

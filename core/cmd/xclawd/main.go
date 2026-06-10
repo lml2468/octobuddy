@@ -31,6 +31,7 @@ import (
 	"github.com/lml2468/xclaw/core/agent"
 	"github.com/lml2468/xclaw/core/control"
 	"github.com/lml2468/xclaw/core/gateway"
+	"github.com/lml2468/xclaw/core/groupctx"
 	"github.com/lml2468/xclaw/core/im/octo"
 	"github.com/lml2468/xclaw/core/router"
 	"github.com/lml2468/xclaw/core/store"
@@ -92,6 +93,10 @@ func main() {
 	}
 
 	gw := gateway.New(drv, st, rt, sinks)
+	// Group-context injection is useful whenever an IM front end is active.
+	if connector != nil {
+		gw = gw.WithGroupContext(groupctx.New(6000))
+	}
 
 	if srv != nil {
 		srv.SetHandler(makeCommandHandler(gw, st, drv, started))
