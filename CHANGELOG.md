@@ -53,6 +53,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - App icon: a generated graphite/chat-bubbles `AppIcon.icns` (reproducible via
   `app/Packaging/make-appicon.sh`), embedded by the packager and referenced from
   the bundle's `Info.plist`.
+- Conversation history survives restarts: on connect the GUI hydrates each bot's
+  transcript from the gateway's persisted store via the existing `session.history`
+  control command (matched back by command id), instead of keeping its own
+  store. No duplicate persistence; agent-agnostic (no coupling to a driver's
+  on-disk session files).
 
 ### Fixed
 - The router's per-session lock map and per-user/per-session rate-limit buckets

@@ -201,6 +201,20 @@ public struct AppState: Sendable, Equatable {
         }
     }
 
+    /// Hydrates a session's transcript from persisted history (session.history).
+    /// No-op if the session already has live messages, so it never clobbers an
+    /// in-progress conversation.
+    public mutating func loadHistory(botId: String?, sessionKey: String, messages: [ChatMessage]) {
+        guard !messages.isEmpty else { return }
+        let id = botKey(botId)
+        var b = bots[id] ?? BotView(id: id)
+        var s = b.sessions[sessionKey] ?? SessionView(sessionKey: sessionKey)
+        guard s.messages.isEmpty else { return }
+        s.messages = messages
+        b.sessions[sessionKey] = s
+        bots[id] = b
+    }
+
     private mutating func mutateSession(_ botId: String?, _ sessionKey: String, _ f: (inout SessionView) -> Void) {
         let id = botKey(botId)
         var b = bots[id] ?? BotView(id: id)
