@@ -153,15 +153,20 @@ private func ev(_ type: String, _ json: String) -> Envelope {
 func transcriptUserEchoThenStreamedAssistantBubble() {
     var s = AppState()
     s.appendUserMessage(botId: "b", sessionKey: "u1", text: "hi there")
+    // Sending sets the awaiting-reply (typing) flag…
+    #expect(s.bots["b"]?.sessions["u1"]?.awaitingReply == true)
     s.apply(ev("session.activity", #"{"botId":"b","sessionKey":"u1","kind":"turnStart"}"#))
     s.apply(ev("session.text", #"{"botId":"b","sessionKey":"u1","delta":"Hel"}"#))
     s.apply(ev("session.text", #"{"botId":"b","sessionKey":"u1","delta":"lo!"}"#))
 
-    let msgs = s.bots["b"]?.sessions["u1"]?.messages ?? []
+    let sv = s.bots["b"]?.sessions["u1"]
+    let msgs = sv?.messages ?? []
     #expect(msgs.count == 2)
     #expect(msgs[0].role == .user && msgs[0].text == "hi there")
     // The two deltas accumulate into ONE assistant bubble.
     #expect(msgs[1].role == .assistant && msgs[1].text == "Hello!")
+    // …and the first assistant output clears it.
+    #expect(sv?.awaitingReply == false)
 }
 
 @Test

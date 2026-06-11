@@ -43,6 +43,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `AppState` gained a per-session message history; the GUI echoes its own sent
   messages locally (the bus doesn't return them). A `#if DEBUG`/env preview seam
   (`XCLAW_UI_PREVIEW`) renders mock data for screenshots without a daemon.
+- Chat polish: assistant bubbles hug their content (short replies are small
+  bubbles, not full-width boxes), and an animated "typing…" indicator shows
+  between sending a message and the agent's first output. Verified in light and
+  dark mode via on-device screenshots.
 
 ### Fixed
 - The router's per-session lock map and per-user/per-session rate-limit buckets

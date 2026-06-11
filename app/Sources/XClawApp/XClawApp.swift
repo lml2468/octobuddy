@@ -278,6 +278,9 @@ struct ConsoleView: View {
                             ForEach(session.messages) { msg in
                                 ChatBubble(message: msg)
                             }
+                            if session.awaitingReply {
+                                TypingBubble()
+                            }
                             if session.outputTokens > 0 {
                                 Text("\(session.inputTokens) in · \(session.outputTokens) out")
                                     .font(.caption2)
@@ -386,7 +389,6 @@ struct ChatBubble: View {
                 Text(message.text)
                     .textSelection(.enabled)
                     .foregroundStyle(.primary)
-                    .frame(maxWidth: 560, alignment: .leading)
                     .padding(.vertical, 8)
                     .padding(.horizontal, 12)
                     .background(Color(nsColor: .controlBackgroundColor),
@@ -409,5 +411,35 @@ struct ChatBubble: View {
                 Spacer()
             }
         }
+    }
+}
+
+/// Animated "agent is typing" indicator shown while awaiting the first output.
+struct TypingBubble: View {
+    @State private var phase = 0
+    private let timer = Timer.publish(every: 0.35, on: .main, in: .common).autoconnect()
+
+    var body: some View {
+        HStack {
+            HStack(spacing: 4) {
+                ForEach(0..<3, id: \.self) { i in
+                    Circle()
+                        .fill(.secondary)
+                        .frame(width: 6, height: 6)
+                        .opacity(phase == i ? 1 : 0.3)
+                }
+            }
+            .padding(.vertical, 10)
+            .padding(.horizontal, 14)
+            .background(Color(nsColor: .controlBackgroundColor),
+                        in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(.quaternary, lineWidth: 1)
+            )
+            Spacer(minLength: 48)
+        }
+        .onReceive(timer) { _ in phase = (phase + 1) % 3 }
+        .accessibilityLabel("Agent is replying")
     }
 }

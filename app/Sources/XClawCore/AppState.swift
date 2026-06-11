@@ -27,6 +27,9 @@ public struct AppState: Sendable, Equatable {
         public var messages: [ChatMessage] = []
         /// Id of the assistant bubble currently being streamed (nil between turns).
         public var streamingAssistant: UUID?
+        /// True between sending a message and the agent's first output (drives a
+        /// "typing…" indicator).
+        public var awaitingReply: Bool = false
         public var id: String { sessionKey }
     }
 
@@ -63,10 +66,12 @@ public struct AppState: Sendable, Equatable {
                 ChatMessage(role: .assistant, text: "I'll check the directory layout first."),
                 ChatMessage(role: .tool, text: "Bash · ls -la"),
                 ChatMessage(role: .assistant, text: "It's a Go + Swift monorepo: core/ is the xclawd gateway daemon, app/ is this macOS client, and proto/ holds the control-bus contract. Want me to open the README?"),
+                ChatMessage(role: .user, text: "yes, and the proto contract too"),
             ]
             v.inputTokens = 1450
             v.outputTokens = 92
-            v.lastActivity = "reply"
+            v.lastActivity = "sent"
+            v.awaitingReply = true
         }
         return s
     }
@@ -101,6 +106,7 @@ public struct AppState: Sendable, Equatable {
                 mutateSession(x.botId, x.sessionKey) { s in
                     s.streamingText += x.delta
                     s.lastActivity = "text"
+                    s.awaitingReply = false
                     // Extend the current streaming assistant bubble, or start one.
                     if let sid = s.streamingAssistant,
                        let i = s.messages.firstIndex(where: { $0.id == sid }) {
@@ -117,6 +123,7 @@ public struct AppState: Sendable, Equatable {
                 mutateSession(x.botId, x.sessionKey) { s in
                     s.lastTool = x.name
                     s.lastActivity = "tool:\(x.name)"
+                    s.awaitingReply = false
                     let label = x.params.isEmpty ? x.name : "\(x.name) \(x.params)"
                     s.messages.append(ChatMessage(role: .tool, text: label))
                     // A tool call ends the current text bubble; later text starts a new one.
@@ -137,6 +144,9 @@ public struct AppState: Sendable, Equatable {
                     if x.kind == "turnStart" {
                         s.streamingText = ""
                         s.streamingAssistant = nil
+                        s.awaitingReply = true
+                    } else if x.kind == "turnDone" {
+                        s.awaitingReply = false
                     }
                 }
             }
@@ -145,6 +155,7 @@ public struct AppState: Sendable, Equatable {
                 mutateSession(x.botId, x.sessionKey) { s in
                     s.lastReply = x.text
                     s.lastActivity = "reply"
+                    s.awaitingReply = false
                     // Fallback for drivers that only emit a final reply (no text
                     // deltas): if no assistant output landed this turn, add it.
                     if s.messages.last?.role == .user, !x.text.isEmpty {
@@ -178,6 +189,7 @@ public struct AppState: Sendable, Equatable {
             s.messages.append(ChatMessage(role: .user, text: text))
             s.lastActivity = "sent"
             s.streamingAssistant = nil
+            s.awaitingReply = true
         }
     }
 
