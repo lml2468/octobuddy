@@ -50,7 +50,7 @@ func configGatewayAndEnvRoundTrip() throws {
 }
 
 @Test
-func configRemoveBotPrunesSubtree() throws {
+func configRemoveBotPrunesExplicitly() throws {
     try withTempBase { base in
         let fm = FileManager.default
         try ConfigStore.save([
@@ -63,11 +63,33 @@ func configRemoveBotPrunesSubtree() throws {
                                    withIntermediateDirectories: true)
         }
 
-        // Save without "drop" → its subtree (data/ etc.) is pruned.
+        // Saving without "drop" but WITHOUT naming it in `removing` must NOT
+        // delete its data — pruning is explicit-only, so a partial/failed load
+        // can never wipe a bot's history.
         try ConfigStore.save([BotConfig(id: "keep", apiURL: "https://o", octoToken: "t1")], base: base)
+        #expect(fm.fileExists(atPath: base.appendingPathComponent("drop/data").path))
+
+        // Explicitly removing "drop" prunes its subtree; "keep" is untouched.
+        try ConfigStore.save([BotConfig(id: "keep", apiURL: "https://o", octoToken: "t1")],
+                             base: base, removing: ["drop"])
         #expect(!fm.fileExists(atPath: base.appendingPathComponent("drop").path))
         #expect(fm.fileExists(atPath: base.appendingPathComponent("keep/data").path))
         #expect(try ConfigStore.load(base: base).count == 1)
+    }
+}
+
+@Test
+func configSaveNeverPrunesLiveBot() throws {
+    try withTempBase { base in
+        let fm = FileManager.default
+        try ConfigStore.save([BotConfig(id: "keep", apiURL: "https://o")], base: base)
+        try fm.createDirectory(at: base.appendingPathComponent("keep/data"),
+                               withIntermediateDirectories: true)
+        // Even if "keep" is in `removing`, a still-present (re-added) bot is never
+        // pruned.
+        try ConfigStore.save([BotConfig(id: "keep", apiURL: "https://o")],
+                             base: base, removing: ["keep"])
+        #expect(fm.fileExists(atPath: base.appendingPathComponent("keep/data").path))
     }
 }
 

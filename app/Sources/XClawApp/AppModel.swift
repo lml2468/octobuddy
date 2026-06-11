@@ -118,6 +118,11 @@ final class AppModel {
         client?.disconnect()
         client = nil
         connected = false
+        // Allow history to be re-requested on the next connect (a fresh client
+        // restarts its command-id counter, so stale correlations must not carry
+        // over).
+        historyLoaded.removeAll()
+        pendingHistory.removeAll()
     }
 
     /// Restarts the core, fully stopping the current daemon (and waiting for it
@@ -282,33 +287,6 @@ final class AppModel {
         publishBots()
     }
 
-    /// Moves any plaintext tokens left in config.json into the Keychain, then
-    /// rewrites the file without them. No-op once the file is clean.
-    private func migrateLegacyTokensIfNeeded() {
-        guard let bots = try? ConfigStore.load() else { return }
-        var migrated = false
-        do {
-            for b in bots {
-                if !b.octoToken.isEmpty {
-                    try Keychain.set(account: Keychain.account(bot: b.id, kind: Keychain.kindOcto), value: b.octoToken)
-                    migrated = true
-                }
-                if !b.gatewayToken.isEmpty {
-                    try Keychain.set(account: Keychain.account(bot: b.id, kind: Keychain.kindGateway), value: b.gatewayToken)
-                    migrated = true
-                }
-            }
-            if migrated {
-                try ConfigStore.save(bots) // save() strips tokens from the file
-                Log.keychain.notice("migrated plaintext token(s) from config.json into the Keychain")
-            }
-        } catch {
-            // Leave the file as-is if migration fails; tokens still work as a
-            // plaintext fallback. Surface why so it's diagnosable.
-            Log.keychain.error("token migration failed: \(error.localizedDescription, privacy: .public)")
-        }
-    }
-
     private func startBotPolling(on c: ControlClient) {
         pollTask?.cancel()
         pollTask = Task { @MainActor [weak self] in
@@ -332,6 +310,14 @@ final class AppModel {
                 case .response where env.type == "bots.list":
                     if let infos = env.decodeBody([BotInfo].self) {
                         self.state.setBots(infos)
+                        // Drop a selection that points at a bot no longer in the
+                        // roster (e.g. removed via Save & Restart).
+                        let ids = Set(infos.map(\.id))
+                        if let sel = self.selectedBotID, !ids.contains(sel) {
+                            self.selectedBotID = infos.first?.id
+                        } else if self.selectedBotID == nil {
+                            self.selectedBotID = infos.first?.id
+                        }
                         self.publishBots()
                         self.requestHistories(on: c, for: infos.map(\.id))
                     }

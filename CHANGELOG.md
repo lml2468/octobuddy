@@ -74,6 +74,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   collapsed to a floating inset card with a dead top gap.
 
 ### Fixed
+- macOS app config editor: editing a bot's **Bot ID** no longer collapses the
+  detail form. List selection / `ForEach` now key on a stable per-row `rowID`
+  (a UUID), not the user-editable slug, so changing the id mid-keystroke keeps
+  the row selected. Reopening the editor window no longer **clobbers unsaved
+  edits** — the config loads once (`loadIfNeeded`) instead of on every appear.
+- macOS app config save can no longer **destroy another bot's data**. Pruning a
+  bot's `~/.xclaw/<id>/` directory is now driven by *explicit* removals
+  (`ConfigStore.save(_, removing:)`), never inferred from a set-difference
+  against on-disk dirs — a failed/partial load (e.g. empty list after a transient
+  read error) previously looked like "every other bot was removed" and could wipe
+  their sessions/resume/sandbox on the next save.
+- macOS app roster reconciles: a bot removed via Save & Restart is now dropped
+  from the sidebar (and a dangling `selectedBotID` is reset) instead of lingering
+  as a ghost — `AppState.setBots` replaces membership from the authoritative
+  `bots.list` (surviving bots keep their transcript; `bot.status` still updates a
+  single bot in place).
+- `ControlClient` read loop can no longer read from a reused file descriptor:
+  each connection carries an epoch, and the loop stops as soon as
+  `disconnect()`/reconnect supersedes it — closing the safe-teardown gap that a
+  frequent restart could hit.
+- Removed dead duplicate `AppModel.migrateLegacyTokensIfNeeded` (the live path is
+  `ConfigEditorModel.migrateLegacyTokens`). History-hydration state
+  (`historyLoaded`/`pendingHistory`) is reset on bus teardown so a reconnect
+  re-requests transcripts and stale command-id correlations can't mis-route.
+- Documented the `CoreSupervisor` circuit-breaker's known limitation (a daemon
+  flapping just past the healthy-uptime threshold won't trip it — a deliberate
+  tradeoff vs. over-tripping on a legitimate long-run restart).
 - Control-bus server no longer crashes the daemon when a client disconnects
   during a broadcast. `client.enqueue` used `select { case sendCh <- … : default }`,
   but a *closed* channel send is never caught by `default` and panics; a GUI

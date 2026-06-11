@@ -10,13 +10,13 @@ struct ConfigEditorView: View {
     @Bindable var config: ConfigEditorModel
     /// Invoked when the user chooses "Save & Restart" after a successful save.
     var onSaveAndRestart: () -> Void
-    @State private var selection: String?
+    @State private var selection: UUID?
 
     var body: some View {
         NavigationSplitView {
             List(selection: $selection) {
                 Section("Bots") {
-                    ForEach($config.bots) { $bot in
+                    ForEach($config.bots, id: \.rowID) { $bot in
                         Label {
                             VStack(alignment: .leading, spacing: 1) {
                                 Text(bot.id.isEmpty ? "(unnamed)" : bot.id)
@@ -32,11 +32,11 @@ struct ConfigEditorView: View {
                             Image(systemName: "person.crop.square")
                                 .foregroundStyle(.tint)
                         }
-                        .tag(bot.id)
+                        .tag(bot.rowID)
                     }
                     .onDelete { idx in
-                        let ids = idx.map { config.bots[$0].id }
-                        ids.forEach { config.remove($0) }
+                        let ids = idx.map { config.bots[$0].rowID }
+                        ids.forEach { config.remove(rowID: $0) }
                     }
                 }
             }
@@ -45,16 +45,19 @@ struct ConfigEditorView: View {
                 ToolbarItem {
                     Button {
                         config.add()
-                        selection = config.bots.last?.id
+                        selection = config.bots.last?.rowID
                     } label: { Image(systemName: "plus") }
                     .help("Add a bot")
                 }
             }
         } detail: {
-            if let sel = selection, let i = config.bots.firstIndex(where: { $0.id == sel }) {
+            // Identify the selected bot by its stable rowID, not the editable
+            // slug — so editing the Bot ID field doesn't desync selection and
+            // collapse the form mid-keystroke.
+            if let sel = selection, let i = config.bots.firstIndex(where: { $0.rowID == sel }) {
                 BotForm(bot: $config.bots[i], onRemove: {
-                    config.remove(sel)
-                    selection = config.bots.first?.id
+                    config.remove(rowID: sel)
+                    selection = config.bots.first?.rowID
                 })
                 .id(sel) // rebuild cleanly when switching bots
             } else {

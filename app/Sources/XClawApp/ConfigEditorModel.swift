@@ -15,15 +15,32 @@ final class ConfigEditorModel {
     var error: String?
     /// Set after a successful save so the UI can prompt for a core restart.
     var needsRestart = false
+    /// True once the editor has successfully loaded the on-disk config. Guards
+    /// loadIfNeeded so re-opening the window doesn't clobber unsaved edits.
+    private var hasLoaded = false
+
+    /// Loads the config once (on first window appear). Subsequent appears are a
+    /// no-op so a user's unsaved edits survive closing/reopening the window. A
+    /// failed load is retried on the next appear.
+    func loadIfNeeded() {
+        guard !hasLoaded else { return }
+        load()
+        if error == nil { hasLoaded = true }
+    }
 
     /// Loads the on-disk bot configs, overlaying each bot's tokens from the
-    /// Keychain (falling back to any legacy value still in the file).
+    /// Keychain (falling back to any legacy value still in the file). Replaces
+    /// the in-memory list — call loadIfNeeded() from the UI to avoid clobbering
+    /// unsaved edits.
     func load() {
         error = nil
 #if DEBUG
         // UI-preview mode renders seeded sample bots (see AppModel); skip the
         // real config/Keychain read so screenshots need no daemon or Keychain.
-        if ProcessInfo.processInfo.environment["XCLAW_UI_PREVIEW"] != nil { return }
+        if ProcessInfo.processInfo.environment["XCLAW_UI_PREVIEW"] != nil {
+            hasLoaded = true
+            return
+        }
 #endif
         do {
             var loaded = try ConfigStore.load()
@@ -52,10 +69,18 @@ final class ConfigEditorModel {
         bots.append(BotConfig(id: id, apiURL: bots.first?.apiURL ?? ""))
     }
 
-    /// Removes a bot from the editable list (not yet saved).
-    func remove(_ id: String) {
-        bots.removeAll { $0.id == id }
+    /// Removes a bot from the editable list (not yet saved), by stable rowID.
+    /// Records its slug so the next successful save prunes that bot's on-disk
+    /// dir — pruning is driven by explicit removals, never inferred.
+    func remove(rowID: UUID) {
+        if let b = bots.first(where: { $0.rowID == rowID }) {
+            removedSlugs.insert(b.id)
+        }
+        bots.removeAll { $0.rowID == rowID }
     }
+
+    /// Slugs the user explicitly removed since the last successful save.
+    private var removedSlugs: Set<String> = []
 
     /// Validates and writes the editable config: non-secret fields to the file,
     /// tokens to the Keychain (empty value deletes the item). Sets needsRestart
@@ -64,7 +89,11 @@ final class ConfigEditorModel {
     func save() -> Bool {
         error = nil
         do {
-            try ConfigStore.save(bots) // strips tokens from the file
+            // Prune only bots the user removed that aren't present again.
+            let live = Set(bots.map { $0.id })
+            let prune = removedSlugs.subtracting(live)
+            try ConfigStore.save(bots, removing: Array(prune)) // strips tokens from the file
+            removedSlugs.removeAll()
             for b in bots {
                 try Keychain.set(account: Keychain.account(bot: b.id, kind: Keychain.kindOcto), value: b.octoToken)
                 try Keychain.set(account: Keychain.account(bot: b.id, kind: Keychain.kindGateway), value: b.gatewayToken)

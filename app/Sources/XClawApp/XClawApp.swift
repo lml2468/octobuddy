@@ -44,7 +44,7 @@ struct XClawApp: App {
         Window("Edit Bots", id: "bot-editor") {
             ConfigEditorView(config: model.config,
                              onSaveAndRestart: { model.applyConfigAndRestart() })
-                .onAppear { model.config.load() }
+                .onAppear { model.config.loadIfNeeded() }
                 .preferredColorScheme(Self.previewScheme)
         }
         .defaultSize(width: 820, height: 620)

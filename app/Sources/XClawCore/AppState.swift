@@ -89,13 +89,20 @@ public struct AppState: Sendable, Equatable {
 
     /// Replaces the bot roster from a bots.list response, preserving any
     /// already-accumulated session views.
+    /// Replaces the roster from an authoritative bots.list response: updates
+    /// surviving bots in place (preserving their sessions/transcript) and DROPS
+    /// any bot no longer present, so a bot removed via Save & Restart doesn't
+    /// linger as a ghost. (bot.status updates a single bot in place; only the
+    /// full bots.list reconciles membership.)
     public mutating func setBots(_ infos: [BotInfo]) {
+        var next: [String: BotView] = [:]
         for info in infos {
             var b = bots[info.id] ?? BotView(id: info.id)
             b.connected = info.connected
             b.lastError = info.lastError
-            bots[info.id] = b
+            next[info.id] = b
         }
+        bots = next
     }
 
     /// Applies one decoded control-bus event envelope.

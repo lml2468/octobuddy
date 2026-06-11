@@ -12,6 +12,10 @@ import Foundation
 /// the editor doesn't manage (rateLimit, context, top-level agent defaults) are
 /// preserved rather than dropped.
 public struct BotConfig: Sendable, Equatable, Identifiable {
+    /// Stable per-instance identity for SwiftUI selection/ForEach. Distinct from
+    /// `id` (the bot slug, which the user can edit) and not persisted, so editing
+    /// the slug never changes a row's identity.
+    public let rowID = UUID()
     public var id: String
     public var apiURL: String
     public var octoToken: String
@@ -107,9 +111,15 @@ public enum ConfigStore {
     /// Persists the bot list. MERGES into the existing config.json so unmanaged
     /// keys (rateLimit, context, top-level agent defaults, unknown per-bot keys)
     /// are preserved. Secrets are stripped (octoToken / agent.gatewayToken →
-    /// Keychain). Also writes each bot's SOUL.md / AGENTS.md. Validates slugs +
-    /// uniqueness and prunes per-bot directories whose bot was removed.
-    public static func save(_ bots: [BotConfig], base: URL? = nil) throws {
+    /// Keychain). Also writes each bot's SOUL.md / AGENTS.md.
+    ///
+    /// `removing` lists bot ids the caller EXPLICITLY removed; only those
+    /// per-bot directories are deleted. Pruning is never inferred from a
+    /// set-difference against the on-disk dirs: a failed/partial load would then
+    /// look like "every other bot was removed" and wipe their data. Explicit-only
+    /// pruning means a save can never destroy data for a bot the caller didn't
+    /// knowingly remove.
+    public static func save(_ bots: [BotConfig], base: URL? = nil, removing: [String] = []) throws {
         let base = base ?? baseDir
         var seen = Set<String>()
         for b in bots {
@@ -163,18 +173,16 @@ public enum ConfigStore {
         // Persona files per bot.
         for b in bots { try savePrompts(base: base, id: b.id, soul: b.soul, agents: b.agents) }
 
-        // Prune per-bot dirs for removed bots (only dirs that look like ours).
+        // Prune ONLY the per-bot dirs the caller explicitly asked to remove, and
+        // never one that's still live (re-added under the same id). Touch only
+        // dirs that look like ours (valid slug + a data/ child).
         let live = Set(bots.map { $0.id })
         let fm = FileManager.default
-        if let children = try? fm.contentsOfDirectory(at: base, includingPropertiesForKeys: [.isDirectoryKey]) {
-            for child in children {
-                let name = child.lastPathComponent
-                var isDir: ObjCBool = false
-                guard fm.fileExists(atPath: child.path, isDirectory: &isDir), isDir.boolValue else { continue }
-                guard validSlug(name), !live.contains(name) else { continue }
-                if fm.fileExists(atPath: child.appendingPathComponent("data").path) {
-                    try? fm.removeItem(at: child)
-                }
+        for id in removing {
+            guard validSlug(id), !live.contains(id) else { continue }
+            let dir = base.appendingPathComponent(id, isDirectory: true)
+            if fm.fileExists(atPath: dir.appendingPathComponent("data").path) {
+                try? fm.removeItem(at: dir)
             }
         }
     }

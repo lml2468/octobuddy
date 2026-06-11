@@ -27,6 +27,10 @@ public final class ControlClient: Sendable {
     private struct Mutable {
         var fd: Int32 = -1
         var idCounter = 0
+        /// Bumped on each connect; the read loop captures its epoch and stops as
+        /// soon as it no longer matches, so a loop from a previous connection can
+        /// never keep reading (and can't touch a reused fd).
+        var epoch = 0
     }
     private let mutable = OSAllocatedUnfairLock(initialState: Mutable())
 
@@ -72,13 +76,21 @@ public final class ControlClient: Sendable {
             throw ClientError.connectFailed(errno)
         }
         mutable.withLock { $0.fd = s }
-        startReadLoop(fd: s)
+        let epoch = mutable.withLock { state -> Int in
+            state.epoch += 1
+            return state.epoch
+        }
+        startReadLoop(fd: s, epoch: epoch)
     }
 
     public func disconnect() {
         let fd = mutable.withLock { state -> Int32 in
             let current = state.fd
             state.fd = -1
+            // Invalidate the running read loop's epoch so it stops before its
+            // next read — it must not read a descriptor that may be reused by a
+            // later connect().
+            state.epoch += 1
             return current
         }
         if fd >= 0 { close(fd) }
@@ -119,14 +131,20 @@ public final class ControlClient: Sendable {
         }
     }
 
-    private func startReadLoop(fd localFD: Int32) {
+    private func startReadLoop(fd localFD: Int32, epoch: Int) {
         // Capture only Sendable values; no `self`. The framer is loop-local.
+        let mutable = self.mutable
         queue.async { [continuation] in
             let framer = LineFramer()
             var buf = [UInt8](repeating: 0, count: 64 * 1024)
             while true {
+                // Stop if this connection has been superseded (disconnect/reconnect)
+                // BEFORE reading, so we never read from a fd that may have been
+                // closed and its number reused by a newer connection.
+                if mutable.withLock({ $0.epoch }) != epoch { break }
                 let n = Darwin.read(localFD, &buf, buf.count)
                 if n <= 0 { break }
+                if mutable.withLock({ $0.epoch }) != epoch { break }
                 let chunk = Data(buf[0..<n])
                 do {
                     for line in try framer.push(chunk) {

@@ -182,6 +182,14 @@ public actor CoreSupervisor {
     /// Handles a process exit / launch failure: resets the failure budget if the
     /// previous run was healthy, then either restarts with backoff or trips the
     /// circuit breaker after too many consecutive immediate failures.
+    ///
+    /// Known limitation: "healthy" is a single-run uptime threshold, so a daemon
+    /// that survives just past healthyUptime each cycle (e.g. crashes every ~16s)
+    /// keeps resetting the budget and never trips the breaker. This is a
+    /// deliberate tradeoff — keying the breaker on crash *frequency* over a
+    /// window would risk tripping on a daemon that legitimately restarts after a
+    /// long healthy run. Slow-flap detection can be layered on if it proves to
+    /// matter in practice.
     private func handleExit(reason: String, healthy: Bool) {
         if stopped { return }
         process = nil
