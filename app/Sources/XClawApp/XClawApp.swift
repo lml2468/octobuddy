@@ -29,12 +29,36 @@ struct XClawApp: App {
         .menuBarExtraStyle(.window)
 
         Window("XClaw", id: "console") {
-            ConsoleView(model: model)
-                .onAppear { if model.coreState == "stopped" { model.start() } }
-                .preferredColorScheme(Self.previewScheme)
+            Group {
+#if DEBUG
+                // Debug screenshot aid: the Settings scene can't be opened via
+                // synthetic events, so XCLAW_UI_PREVIEW=settings renders the
+                // editor in this (reliably openable) window. No effect in release.
+                if ProcessInfo.processInfo.environment["XCLAW_UI_PREVIEW"] == "settings" {
+                    ConfigEditorView(config: model.config, onSaveAndRestart: {})
+                } else {
+                    ConsoleView(model: model)
+                        .onAppear { if model.coreState == "stopped" { model.start() } }
+                }
+#else
+                ConsoleView(model: model)
+                    .onAppear { if model.coreState == "stopped" { model.start() } }
+#endif
+            }
+            .preferredColorScheme(Self.previewScheme)
         }
         .defaultSize(width: 880, height: 600)
         .windowToolbarStyle(.unified)
+#if DEBUG
+        // Screenshot aid: a reliable (menu-shortcut) way to open the console
+        // window — synthetic clicks on the menu-bar popover don't fire its
+        // actions, and the Settings scene can't be opened via synthetic events.
+        .commands {
+            CommandGroup(after: .windowList) {
+                OpenConsoleCommand()
+            }
+        }
+#endif
 
         // Config editor (Cmd-,). Loads the on-disk config when opened.
         Settings {
@@ -46,6 +70,23 @@ struct XClawApp: App {
 }
 
 // MARK: - Menu bar popover
+
+#if DEBUG
+/// A menu command (Cmd-Shift-O) that opens the console window. DEBUG-only;
+/// exists so on-device screenshot verification can open the window via a menu
+/// shortcut (reliable under synthetic events) rather than the popover.
+private struct OpenConsoleCommand: View {
+    @Environment(\.openWindow) private var openWindow
+    var body: some View {
+        Button("Open Console (Debug)") {
+            NSApp.activate(ignoringOtherApps: true)
+            openWindow(id: "console")
+        }
+        .keyboardShortcut("o", modifiers: [.command, .shift])
+    }
+}
+#endif
+
 
 /// The menu-bar status icon.
 private struct MenuBarLabel: View {

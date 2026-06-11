@@ -99,8 +99,8 @@ private struct BotForm: View {
     var body: some View {
         Form {
             Section {
-                TextField("Bot ID", text: $bot.id)
-                    .help("Letters, digits, dot, underscore, hyphen. Used as the subtree name under ~/.xclaw.")
+                textRow("Bot ID", prompt: "my-bot", $bot.id,
+                        help: "Letters, digits, dot, underscore, hyphen. Used as the subtree name under ~/.xclaw.")
                 if !ConfigStore.validSlug(bot.id) {
                     warning("Invalid id — letters, digits, . _ - only")
                 }
@@ -109,11 +109,9 @@ private struct BotForm: View {
             }
 
             Section {
-                TextField("https://your-octo-server", text: $bot.apiURL)
-                    .textContentType(.URL)
-                if let w = urlWarning(bot.apiURL) { warning(w) }
-                RevealableSecureField("Bot Token (bf_…)", text: $bot.octoToken)
-                    .help("Stored in your macOS Keychain, not in config.json.")
+                textRow("API URL", prompt: "https://your-octo-server", $bot.apiURL, validateURL: true)
+                secureRow("Bot Token", prompt: "bf_…", $bot.octoToken,
+                          help: "Stored in your macOS Keychain, not in config.json.")
             } header: {
                 Label("Connection", systemImage: "antenna.radiowaves.left.and.right")
             } footer: {
@@ -122,11 +120,9 @@ private struct BotForm: View {
             }
 
             Section {
-                TextField("Model (e.g. claude-opus-4-8)", text: $bot.model)
-                TextField("Gateway Base URL (optional)", text: $bot.gatewayBaseURL)
-                    .textContentType(.URL)
-                if let w = urlWarning(bot.gatewayBaseURL) { warning(w) }
-                RevealableSecureField("Gateway Token (optional)", text: $bot.gatewayToken)
+                textRow("Model", prompt: "claude-opus-4-8", $bot.model)
+                textRow("Gateway Base URL", prompt: "https://… (optional)", $bot.gatewayBaseURL, validateURL: true)
+                secureRow("Gateway Token", prompt: "optional", $bot.gatewayToken)
             } header: {
                 Label("Agent", systemImage: "cpu")
             } footer: {
@@ -165,6 +161,36 @@ private struct BotForm: View {
             }
         }
         .formStyle(.grouped)
+    }
+
+    // A labeled, full-width text field (label on top) — reads better than the
+    // grouped-Form default that crams long URLs/tokens to the trailing edge.
+    @ViewBuilder
+    private func textRow(_ label: String, prompt: String, _ text: Binding<String>,
+                         validateURL: Bool = false, help: String? = nil) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(label).font(.caption.weight(.medium)).foregroundStyle(.secondary)
+            // Empty title + `prompt:` keeps the placeholder INSIDE the field;
+            // `.labelsHidden()` stops the grouped Form from pulling a title into
+            // a leading column (which crammed the value to the trailing edge).
+            TextField("", text: text, prompt: Text(prompt))
+                .textFieldStyle(.roundedBorder)
+                .labelsHidden()
+                .help(help ?? "")
+            if validateURL, let w = urlWarning(text.wrappedValue) { warning(w) }
+        }
+        .padding(.vertical, 2)
+    }
+
+    @ViewBuilder
+    private func secureRow(_ label: String, prompt: String, _ text: Binding<String>,
+                           help: String? = nil) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(label).font(.caption.weight(.medium)).foregroundStyle(.secondary)
+            RevealableSecureField(prompt, text: text)
+                .help(help ?? "")
+        }
+        .padding(.vertical, 2)
     }
 
     private func warning(_ text: String) -> some View {
@@ -216,11 +242,13 @@ private struct RevealableSecureField: View {
         HStack(spacing: 6) {
             Group {
                 if revealed {
-                    TextField(title, text: $text)
+                    TextField("", text: $text, prompt: Text(title))
                 } else {
-                    SecureField(title, text: $text)
+                    SecureField("", text: $text, prompt: Text(title))
                 }
             }
+            .textFieldStyle(.roundedBorder)
+            .labelsHidden()
             Button { revealed.toggle() } label: {
                 Image(systemName: revealed ? "eye.slash" : "eye")
             }
@@ -244,11 +272,13 @@ private struct EnvEditor: View {
             ForEach($rows) { $row in
                 HStack(spacing: 6) {
                     TextField("KEY", text: $row.key)
+                        .labelsHidden()
                         .font(.system(.body, design: .monospaced))
                         .frame(maxWidth: 180)
                         .onChange(of: row.key) { sync() }
                     Text("=").foregroundStyle(.secondary)
                     SecureField("value", text: $row.value)
+                        .labelsHidden()
                         .onChange(of: row.value) { sync() }
                     Button(role: .destructive) {
                         rows.removeAll { $0.id == row.id }

@@ -63,7 +63,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   token fields, section icons, a larger window, and an apiURL subtitle in the
   bot list. Saving now **merges** into `config.json` so keys the editor doesn't
   manage (rateLimit, context, top-level agent defaults) are preserved instead of
-  dropped — and `agent.model` is no longer lost on save.
+  dropped — and `agent.model` is no longer lost on save. Form fields render
+  label-on-top with full-width, left-aligned values (`.labelsHidden()` + an
+  in-field `prompt:`) so long URLs/tokens read cleanly, instead of the grouped
+  `Form` default that pulled each field's title into a leading label and crammed
+  the value against the trailing edge.
 
 ### Fixed
 - The router's per-session lock map and per-user/per-session rate-limit buckets
