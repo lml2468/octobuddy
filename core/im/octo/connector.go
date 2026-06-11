@@ -29,9 +29,18 @@ type Connector struct {
 	runCtx context.Context
 
 	mu      sync.Mutex
-	targets map[string]replyTarget // sessionKey → where to send the reply
+	targets map[string]replyTarget   // sessionKey → where to send the reply
+	typers  map[string]*typingTicker // sessionKey → active typing heartbeat
 	sock    *socketConn
 	closed  bool
+
+	// typingInterval is the heartbeat period between typing pings
+	// (TYPING_INTERVAL_MS = 5_000 in cc-channel-octo stream-relay.ts).
+	// Overridable in tests for a fast tick.
+	typingInterval time.Duration
+	// sendTyping sends one typing indicator; defaults to rest.SendTyping but is
+	// swappable in tests to count pings without a live IM.
+	sendTyping func(ctx context.Context, channelID string, channelType ChannelType) error
 
 	// onStatus, if set, is called when the connection state changes
 	// (connected=true after a successful register+handshake; false on drop).
@@ -46,6 +55,11 @@ type Connector struct {
 // one (see secret.inject). Short enough that the bot connects promptly once the
 // GUI injects, without busy-spinning.
 const awaitTokenPoll = 2 * time.Second
+
+// defaultTypingInterval is the typing-heartbeat period: re-send the typing
+// indicator every 5s while a turn runs so it doesn't expire on a long turn
+// (TYPING_INTERVAL_MS = 5_000 in cc-channel-octo stream-relay.ts).
+const defaultTypingInterval = 5 * time.Second
 
 // OnStatus registers a connection-state callback (used by the daemon's bot
 // registry to surface per-bot status over the control bus).
@@ -68,6 +82,7 @@ func NewConnector(rest *RESTClient) *Connector {
 	return &Connector{
 		rest:          rest,
 		targets:       make(map[string]replyTarget),
+		typers:        make(map[string]*typingTicker),
 		reconnectBase: 3 * time.Second,
 		reconnectMax:  60 * time.Second,
 	}
@@ -260,21 +275,31 @@ func (c *Connector) onInbound(m BotMessage) {
 
 // --- gateway.Sink ---
 
-// OnEvent surfaces a typing indicator on the first activity of a turn. (Token /
-// tool events are not mirrored to IM in the MVP.)
+// OnEvent drives the per-turn typing heartbeat. On the first activity of a turn
+// (KindSessionStarted) it sends a typing indicator immediately and starts a 5s
+// heartbeat that keeps re-sending it until the turn ends — without this a long
+// turn lets the indicator expire and the user thinks the bot died (port of the
+// setInterval(TYPING_INTERVAL_MS) loop in cc-channel-octo stream-relay.ts).
+// KindTurnDone and a terminal (non-recoverable) KindError stop the heartbeat,
+// so a turn that errors out without ever producing a reply still cleans up. A
+// recoverable KindError is a mid-turn warning (e.g. a stderr line in
+// claude.go) and must NOT stop the heartbeat — the turn is still running.
+// (Token / tool events are not mirrored to IM in the MVP.)
 func (c *Connector) OnEvent(sessionKey string, ev agent.AgentEvent) {
-	if ev.Kind == agent.KindSessionStarted {
-		if tgt, ok := c.target(sessionKey); ok {
-			if err := c.rest.SendTyping(c.ctx(), tgt.channelID, tgt.channelType); err != nil {
-				c.logf("send typing for %s: %v", sessionKey, err)
-			}
-		}
+	switch {
+	case ev.Kind == agent.KindSessionStarted:
+		c.startTyping(sessionKey)
+	case ev.Kind == agent.KindTurnDone, ev.Kind == agent.KindError && !ev.Recoverable:
+		c.stopTyping(sessionKey)
 	}
 }
 
 // OnReply delivers the assembled assistant reply back to the originating
-// channel, split into <=3500-char segments (api/stream-relay parity).
+// channel, split into <=3500-char segments (api/stream-relay parity). It also
+// stops the typing heartbeat — the normal end-of-turn cleanup point, mirroring
+// stream-relay.ts's clearInterval in the deliver() finally block.
 func (c *Connector) OnReply(sessionKey string, text string) {
+	c.stopTyping(sessionKey)
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return
@@ -288,6 +313,84 @@ func (c *Connector) OnReply(sessionKey string, text string) {
 			c.logf("send reply to %s: %v", sessionKey, err)
 		}
 	}
+}
+
+// typingTicker holds the cancel hook and the done channel of one session's
+// typing-heartbeat goroutine. stop() cancels and waits for the goroutine to
+// exit so there is never a leaked goroutine after a turn.
+type typingTicker struct {
+	cancel context.CancelFunc
+	done   chan struct{}
+}
+
+// startTyping begins (or re-arms) the typing heartbeat for a session. It is
+// idempotent: a second KindSessionStarted for an already-typing session is a
+// no-op so we never spawn two tickers for one turn. It fires one typing ping
+// immediately, then a goroutine re-sends every typingInterval until the turn's
+// stopTyping runs or the run context is cancelled.
+func (c *Connector) startTyping(sessionKey string) {
+	tgt, ok := c.target(sessionKey)
+	if !ok {
+		return
+	}
+
+	interval := c.typingInterval
+	if interval <= 0 {
+		interval = defaultTypingInterval
+	}
+	send := c.sendTyping
+	if send == nil {
+		send = c.rest.SendTyping
+	}
+
+	// Tie the heartbeat to the run context so a cancelled Run stops every ticker.
+	ctx, cancel := context.WithCancel(c.ctx())
+
+	c.mu.Lock()
+	if _, exists := c.typers[sessionKey]; exists {
+		c.mu.Unlock()
+		cancel() // already ticking — drop the spare context
+		return
+	}
+	tt := &typingTicker{cancel: cancel, done: make(chan struct{})}
+	c.typers[sessionKey] = tt
+	c.mu.Unlock()
+
+	// Fire one immediately — don't wait for the first tick (stream-relay.ts:173).
+	if err := send(ctx, tgt.channelID, tgt.channelType); err != nil && ctx.Err() == nil {
+		c.logf("send typing for %s: %v", sessionKey, err)
+	}
+
+	go func() {
+		defer close(tt.done)
+		t := time.NewTicker(interval)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				if err := send(ctx, tgt.channelID, tgt.channelType); err != nil && ctx.Err() == nil {
+					c.logf("send typing for %s: %v", sessionKey, err)
+				}
+			}
+		}
+	}()
+}
+
+// stopTyping ends a session's typing heartbeat and waits for its goroutine to
+// exit. Safe to call when no ticker is active (no-op) and idempotent across the
+// several turn-end paths (OnReply, KindTurnDone, KindError).
+func (c *Connector) stopTyping(sessionKey string) {
+	c.mu.Lock()
+	tt := c.typers[sessionKey]
+	delete(c.typers, sessionKey)
+	c.mu.Unlock()
+	if tt == nil {
+		return
+	}
+	tt.cancel()
+	<-tt.done
 }
 
 func (c *Connector) target(sessionKey string) (replyTarget, bool) {
