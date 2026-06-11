@@ -5,11 +5,13 @@ import Foundation
 /// analogue of Open Island's process supervision — here we own the lifecycle of
 /// the daemon the GUI drives.
 ///
-/// Lifecycle is reported via the `onState` callback so an AppModel can reflect
-/// it. The supervisor does NOT own the control connection; it only guarantees a
-/// running daemon at `socketPath`. A crash-loop (repeated immediate exits) trips
-/// a circuit breaker and reports `.failed` rather than restarting forever.
-public final class CoreSupervisor: @unchecked Sendable {
+/// An `actor`, so its mutable state (including the non-`Sendable` `Process`) is
+/// compiler-isolated. Lifecycle is reported via the `onState` callback so an
+/// AppModel can reflect it. The supervisor does NOT own the control connection;
+/// it only guarantees a running daemon at `socketPath`. A crash-loop (repeated
+/// immediate exits) trips a circuit breaker and reports `.failed` rather than
+/// restarting forever.
+public actor CoreSupervisor {
     public enum State: Equatable, Sendable {
         case stopped
         case starting
@@ -33,74 +35,75 @@ public final class CoreSupervisor: @unchecked Sendable {
         public var configPath: String
         /// Extra args appended verbatim.
         public var extraArgs: [String]
+        /// Consecutive immediate failures before the circuit breaker trips and
+        /// the supervisor reports `.failed` instead of restarting.
+        public var maxConsecutiveFailures: Int
+        /// Initial restart backoff (doubles up to `maxBackoff`).
+        public var initialBackoff: TimeInterval
 
         public init(binaryPath: String, socketPath: String, dbPath: String = "",
                     configMode: Bool = false,
-                    configPath: String = "", extraArgs: [String] = []) {
+                    configPath: String = "", extraArgs: [String] = [],
+                    maxConsecutiveFailures: Int = 5,
+                    initialBackoff: TimeInterval = 1.0) {
             self.binaryPath = binaryPath
             self.socketPath = socketPath
             self.dbPath = dbPath
             self.configMode = configMode
             self.configPath = configPath
             self.extraArgs = extraArgs
+            self.maxConsecutiveFailures = maxConsecutiveFailures
+            self.initialBackoff = initialBackoff
         }
     }
 
     private let config: Config
     private let onState: @Sendable (State) -> Void
-    private let queue = DispatchQueue(label: "app.xclaw.supervisor")
 
     private var process: Process?
     private var stopped = false
-    private var backoff: TimeInterval = 1.0
+    private var backoff: TimeInterval
     private static let maxBackoff: TimeInterval = 30.0
     /// A run shorter than this counts as a failure (crash-loop detection);
     /// a longer run is "healthy" and resets the failure budget.
     private static let healthyUptime: TimeInterval = 15.0
     private var consecutiveFailures = 0
     private var launchedAt: DispatchTime?
-
-    /// Consecutive immediate failures before the circuit breaker trips and the
-    /// supervisor reports `.failed` instead of restarting. Internal so tests can
-    /// shrink it; defaults to a production-sane value.
-    var maxConsecutiveFailures = 5
-    /// Initial restart backoff (doubles up to `maxBackoff`). Internal so tests
-    /// can shrink it to keep crash-loop tests fast.
-    var initialBackoff: TimeInterval = 1.0
+    private var restartTask: Task<Void, Never>?
 
     public init(config: Config, onState: @escaping @Sendable (State) -> Void = { _ in }) {
         self.config = config
         self.onState = onState
+        self.backoff = config.initialBackoff
+    }
+
+    /// Whether the supervised binary exists and is executable. `nonisolated`:
+    /// it only reads the immutable, Sendable `config`.
+    public nonisolated var binaryAvailable: Bool {
+        FileManager.default.isExecutableFile(atPath: config.binaryPath)
     }
 
     /// Starts the daemon and keeps it alive until `stop()`.
     public func start() {
-        queue.async { [weak self] in
-            guard let self else { return }
-            self.backoff = self.initialBackoff
-            self.launchLocked()
-        }
+        stopped = false
+        consecutiveFailures = 0
+        backoff = config.initialBackoff
+        launch()
     }
 
     /// Stops the daemon and disables restarts.
     public func stop() {
-        queue.async { [weak self] in
-            guard let self else { return }
-            self.stopped = true
-            self.process?.terminationHandler = nil
-            self.process?.terminate()
-            self.process = nil
-            Log.supervisor.info("supervisor stopped")
-            self.onState(.stopped)
-        }
+        stopped = true
+        restartTask?.cancel()
+        restartTask = nil
+        process?.terminationHandler = nil
+        process?.terminate()
+        process = nil
+        Log.supervisor.info("supervisor stopped")
+        onState(.stopped)
     }
 
-    /// Whether the supervised binary exists and is executable.
-    public var binaryAvailable: Bool {
-        FileManager.default.isExecutableFile(atPath: config.binaryPath)
-    }
-
-    private func launchLocked() {
+    private func launch() {
         if stopped { return }
         guard binaryAvailable else {
             // Treat a missing binary as a retryable error so a later install/
@@ -131,15 +134,9 @@ public final class CoreSupervisor: @unchecked Sendable {
         p.standardError = FileHandle.standardError
 
         p.terminationHandler = { [weak self] proc in
-            guard let self else { return }
-            self.queue.async {
-                if self.stopped { return }
-                let uptime = self.launchedAt.map {
-                    Double(DispatchTime.now().uptimeNanoseconds - $0.uptimeNanoseconds) / 1e9
-                } ?? 0
-                let healthy = uptime >= Self.healthyUptime
-                self.handleExit(reason: "xclawd exited (status \(proc.terminationStatus))", healthy: healthy)
-            }
+            // Hops back onto the actor; capture only the Sendable status.
+            let status = proc.terminationStatus
+            Task { await self?.processExited(status: status) }
         }
 
         do {
@@ -154,6 +151,14 @@ public final class CoreSupervisor: @unchecked Sendable {
         onState(.running(pid: p.processIdentifier))
     }
 
+    private func processExited(status: Int32) {
+        if stopped { return }
+        let uptime = launchedAt.map {
+            Double(DispatchTime.now().uptimeNanoseconds - $0.uptimeNanoseconds) / 1e9
+        } ?? 0
+        handleExit(reason: "xclawd exited (status \(status))", healthy: uptime >= Self.healthyUptime)
+    }
+
     /// Handles a process exit / launch failure: resets the failure budget if the
     /// previous run was healthy, then either restarts with backoff or trips the
     /// circuit breaker after too many consecutive immediate failures.
@@ -162,11 +167,11 @@ public final class CoreSupervisor: @unchecked Sendable {
         process = nil
         if healthy {
             consecutiveFailures = 0
-            backoff = initialBackoff
+            backoff = config.initialBackoff
         }
         consecutiveFailures += 1
 
-        if consecutiveFailures > maxConsecutiveFailures {
+        if consecutiveFailures > config.maxConsecutiveFailures {
             let msg = "xclawd failed \(consecutiveFailures) times in a row; giving up. Last: \(reason)"
             Log.supervisor.fault("\(msg, privacy: .public)")
             onState(.failed(reason: msg))
@@ -177,8 +182,10 @@ public final class CoreSupervisor: @unchecked Sendable {
         backoff = min(backoff * 2, Self.maxBackoff)
         Log.supervisor.error("\(reason, privacy: .public); restarting in \(delay, format: .fixed(precision: 1))s (attempt \(self.consecutiveFailures))")
         onState(.restarting(afterError: reason))
-        queue.asyncAfter(deadline: .now() + delay) { [weak self] in
-            self?.launchLocked()
+        restartTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(delay))
+            if Task.isCancelled { return }
+            await self?.launch()
         }
     }
 }

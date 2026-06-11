@@ -10,10 +10,10 @@ func supervisorReportsMissingBinary() async {
         onState: { states.append($0) }
     )
     #expect(sup.binaryAvailable == false)
-    sup.start()
+    await sup.start()
     // It should report a restarting state (missing binary is retryable).
     try? await Task.sleep(for: .milliseconds(300))
-    sup.stop()
+    await sup.stop()
     #expect(states.contains { if case .restarting = $0 { return true }; return false })
 }
 
@@ -29,12 +29,12 @@ func supervisorLaunchesAndReportsRunning() async throws {
         onState: { states.append($0) }
     )
     #expect(sup.binaryAvailable == true)
-    sup.start()
+    await sup.start()
     try await Task.sleep(for: .milliseconds(400))
 
     let running = states.snapshot.contains { if case .running = $0 { return true }; return false }
     #expect(running)
-    sup.stop()
+    await sup.stop()
     try await Task.sleep(for: .milliseconds(100))
     #expect(states.snapshot.contains(.stopped))
 }
@@ -48,10 +48,10 @@ func supervisorRestartsOnExit() async throws {
 
     let states = StateBox()
     let sup = CoreSupervisor(
-        config: .init(binaryPath: script, socketPath: "/tmp/fake2.sock"),
+        config: .init(binaryPath: script, socketPath: "/tmp/fake2.sock", initialBackoff: 0.05),
         onState: { states.append($0) }
     )
-    sup.start()
+    await sup.start()
     // Poll for the restarting state (the fake daemon exits immediately → the
     // terminationHandler schedules a restart). Polling avoids flakiness under
     // parallel test load vs a fixed sleep.
@@ -61,7 +61,7 @@ func supervisorRestartsOnExit() async throws {
         restarts = states.snapshot.filter { if case .restarting = $0 { return true }; return false }.count
         if restarts >= 1 { break }
     }
-    sup.stop()
+    await sup.stop()
 
     let snap = states.snapshot
     #expect(restarts >= 1, "states observed: \(snap)")
@@ -76,20 +76,19 @@ func supervisorTripsCircuitBreakerOnCrashLoop() async throws {
 
     let states = StateBox()
     let sup = CoreSupervisor(
-        config: .init(binaryPath: script, socketPath: "/tmp/fake3.sock"),
+        config: .init(binaryPath: script, socketPath: "/tmp/fake3.sock",
+                      maxConsecutiveFailures: 3, initialBackoff: 0.02),
         onState: { states.append($0) }
     )
-    sup.maxConsecutiveFailures = 3
-    sup.initialBackoff = 0.02 // keep the test fast
 
-    sup.start()
+    await sup.start()
     var failed = false
     for _ in 0..<100 { // up to ~5s
         try await Task.sleep(for: .milliseconds(50))
         failed = states.snapshot.contains { if case .failed = $0 { return true }; return false }
         if failed { break }
     }
-    sup.stop()
+    await sup.stop()
     #expect(failed, "expected .failed after a crash loop; states: \(states.snapshot)")
 }
 

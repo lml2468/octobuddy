@@ -1,4 +1,5 @@
 import Foundation
+import os
 #if canImport(Darwin)
 import Darwin
 #endif
@@ -11,21 +12,23 @@ import Darwin
 /// background read loop on a dispatch queue feeding a `LineFramer`. Decoded
 /// event envelopes are published on an AsyncStream.
 ///
-/// Threading contract: `connect`/`send`/`disconnect` are called from the owner's
-/// isolation (the @MainActor AppModel), so `fd` is effectively owner-isolated;
-/// the read loop only ever touches its captured local fd and the framer (which
-/// nothing else touches). `idCounter` is lock-guarded; `continuation` is set once
-/// in init. Hence `@unchecked Sendable` is sound.
-public final class ControlClient: @unchecked Sendable {
+/// Thread safety: the only cross-thread mutable state (`fd`, `idCounter`) lives
+/// behind an `OSAllocatedUnfairLock`; the `LineFramer` is local to the read
+/// loop; the `AsyncStream.Continuation` is itself `Sendable`. So the type is
+/// fully checked-`Sendable` — no `@unchecked`.
+public final class ControlClient: Sendable {
     private let path: String
-    private var fd: Int32 = -1
     private let queue = DispatchQueue(label: "app.xclaw.control.read")
-    private let framer = LineFramer()
-    private var idCounter = 0
-    private let idLock = NSLock()
-
     private let continuation: AsyncStream<Envelope>.Continuation
     public let events: AsyncStream<Envelope>
+
+    /// Lock-protected mutable state (both fields are value types, so the lock's
+    /// state is `Sendable`).
+    private struct Mutable {
+        var fd: Int32 = -1
+        var idCounter = 0
+    }
+    private let mutable = OSAllocatedUnfairLock(initialState: Mutable())
 
     public init(path: String) {
         self.path = path
@@ -68,37 +71,41 @@ public final class ControlClient: @unchecked Sendable {
             close(s)
             throw ClientError.connectFailed(errno)
         }
-        fd = s
-        startReadLoop()
+        mutable.withLock { $0.fd = s }
+        startReadLoop(fd: s)
     }
 
     public func disconnect() {
-        if fd >= 0 {
-            close(fd)
-            fd = -1
+        let fd = mutable.withLock { state -> Int32 in
+            let current = state.fd
+            state.fd = -1
+            return current
         }
+        if fd >= 0 { close(fd) }
         continuation.finish()
     }
 
     private func nextID() -> String {
-        idLock.lock(); defer { idLock.unlock() }
-        idCounter += 1
-        return "c\(idCounter)"
+        mutable.withLock { state in
+            state.idCounter += 1
+            return "c\(state.idCounter)"
+        }
     }
 
     /// Sends a command and returns the id used (responses arrive as events with
     /// matching id on the stream).
     @discardableResult
     public func send<B: Encodable>(type: String, body: B) throws -> String {
+        let fd = mutable.withLock { $0.fd }
         guard fd >= 0 else { throw ClientError.notConnected }
         let id = nextID()
         let env = try ControlCodec.command(id: id, type: type, body: body)
         let line = try ControlCodec.encode(env)
-        try writeAll(line)
+        try writeAll(line, fd: fd)
         return id
     }
 
-    private func writeAll(_ data: Data) throws {
+    private func writeAll(_ data: Data, fd: Int32) throws {
         try data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
             guard let base = raw.bindMemory(to: UInt8.self).baseAddress else {
                 return // empty payload; nothing to write
@@ -112,31 +119,29 @@ public final class ControlClient: @unchecked Sendable {
         }
     }
 
-    private func startReadLoop() {
-        let localFD = fd
-        queue.async { [weak self] in
-            guard let self else { return }
+    private func startReadLoop(fd localFD: Int32) {
+        // Capture only Sendable values; no `self`. The framer is loop-local.
+        queue.async { [continuation] in
+            let framer = LineFramer()
             var buf = [UInt8](repeating: 0, count: 64 * 1024)
             while true {
                 let n = Darwin.read(localFD, &buf, buf.count)
                 if n <= 0 { break }
                 let chunk = Data(buf[0..<n])
                 do {
-                    for line in try self.framer.push(chunk) {
+                    for line in try framer.push(chunk) {
                         do {
-                            self.continuation.yield(try ControlCodec.decode(line))
+                            continuation.yield(try ControlCodec.decode(line))
                         } catch {
-                            // Malformed envelope — skip it but record why.
                             Log.control.error("dropping undecodable envelope: \(error.localizedDescription, privacy: .public)")
                         }
                     }
                 } catch {
-                    // Frame too large or otherwise fatal: stop the loop.
                     Log.control.error("read loop stopped: \(error.localizedDescription, privacy: .public)")
                     break
                 }
             }
-            self.continuation.finish()
+            continuation.finish()
         }
     }
 }
