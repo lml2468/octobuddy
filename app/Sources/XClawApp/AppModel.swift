@@ -99,8 +99,18 @@ final class AppModel {
         Task { await sup.start() }
     }
 
-    /// Stops the bus and the core.
+    /// Stops the bus and the core (fire-and-forget teardown, e.g. on quit).
     func stop() {
+        teardownBus()
+        if let sup = supervisor {
+            Task { await sup.stop() }
+        }
+        supervisor = nil
+        coreState = "stopped"
+    }
+
+    /// Tears down the bus connection + background tasks (shared by stop/restart).
+    private func teardownBus() {
         consumeTask?.cancel()
         consumeTask = nil
         pollTask?.cancel()
@@ -108,11 +118,22 @@ final class AppModel {
         client?.disconnect()
         client = nil
         connected = false
-        if let sup = supervisor {
-            Task { await sup.stop() }
-        }
+    }
+
+    /// Restarts the core, fully stopping the current daemon (and waiting for it
+    /// to exit) before launching the next one. Sequencing is required: the
+    /// daemon removes its control socket on exit, so overlapping a dying daemon
+    /// with a fresh one lets the old daemon's cleanup delete the new daemon's
+    /// socket — leaving the GUI unable to reconnect.
+    func restartCore() {
+        teardownBus()
+        coreState = "restarting"
+        let old = supervisor
         supervisor = nil
-        coreState = "stopped"
+        Task { @MainActor in
+            await old?.stop()
+            start()
+        }
     }
 
     /// Sends a user message to the selected bot over the bus.
@@ -338,7 +359,6 @@ final class AppModel {
     /// `config` — see ConfigEditorModel.)
     func applyConfigAndRestart() {
         config.needsRestart = false
-        stop()
-        start()
+        restartCore()
     }
 }

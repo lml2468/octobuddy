@@ -114,7 +114,7 @@ private struct MenuBarContent: View {
                     openWindow(id: "bot-editor")
                 }
                 MenuRow(title: "Restart Core", systemImage: "arrow.clockwise") {
-                    model.stop(); model.start()
+                    model.restartCore()
                 }
                 Divider().padding(.vertical, 4)
                 MenuRow(title: "Quit XClaw", systemImage: "power") {
@@ -252,7 +252,7 @@ struct ConsoleView: View {
                     Image(systemName: "eraser.line.dashed")
                 }
                 .help("Clear this bot's conversation memory")
-                Button { model.stop(); model.start() } label: {
+                Button { model.restartCore() } label: {
                     Image(systemName: "arrow.clockwise")
                 }
                 .help("Restart the xclawd core process")

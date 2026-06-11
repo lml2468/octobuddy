@@ -74,7 +74,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   collapsed to a floating inset card with a dead top gap.
 
 ### Fixed
-- The router's per-session lock map and per-user/per-session rate-limit buckets
+- "Save & Restart" (and "Restart Core") in the macOS app now reliably reconnects.
+  The restart stopped the old daemon and started a new one without waiting for
+  the old one to exit; because the daemon removes its control socket on shutdown
+  (`defer os.Remove`), the dying daemon's cleanup could delete the *new* daemon's
+  socket file, leaving the GUI unable to connect (bot stuck disconnected).
+  `CoreSupervisor.stop()` now awaits actual process exit (SIGTERM, then SIGKILL
+  after 3s) and all restart paths fully stop the current daemon before launching
+  the next, so the two never overlap on the same socket path.
   no longer grow without bound: a new `Router.Reap` evicts idle entries (lock
   eviction is refcount-guarded so an in-flight turn is never reaped). A bot now
   runs a periodic reaper that also enforces the session/sandbox TTLs over the

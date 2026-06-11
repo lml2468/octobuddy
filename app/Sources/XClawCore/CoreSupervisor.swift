@@ -91,13 +91,30 @@ public actor CoreSupervisor {
         launch()
     }
 
-    /// Stops the daemon and disables restarts.
-    public func stop() {
+    /// Stops the daemon and disables restarts. Waits for the process to actually
+    /// exit before returning: the daemon removes its control socket on shutdown
+    /// (`defer os.Remove`), so a replacement must not bind the same path until
+    /// this one is gone — otherwise the dying daemon's cleanup deletes the new
+    /// socket and clients can no longer connect. Escalates to SIGKILL if the
+    /// daemon ignores SIGTERM.
+    public func stop() async {
         stopped = true
         restartTask?.cancel()
         restartTask = nil
-        process?.terminationHandler = nil
-        process?.terminate()
+        if let p = process {
+            p.terminationHandler = nil
+            p.terminate() // SIGTERM
+            var waited = 0
+            while p.isRunning && waited < 60 { // up to ~3s
+                try? await Task.sleep(for: .milliseconds(50))
+                waited += 1
+            }
+            if p.isRunning {
+                Log.supervisor.error("xclawd ignored SIGTERM after 3s; sending SIGKILL")
+                kill(p.processIdentifier, SIGKILL)
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+        }
         process = nil
         Log.supervisor.info("supervisor stopped")
         onState(.stopped)
