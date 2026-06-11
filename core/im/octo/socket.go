@@ -286,15 +286,30 @@ func (s *socketConn) onRecv(header byte, body []byte) {
 // handleDecryptFailure implements the 3-strike poison-drop (socket.ts): below
 // the cap, do NOT ack (server redelivers); at the cap, ack-and-drop.
 func (s *socketConn) handleDecryptFailure(idStr string, messageID uint64, messageSeq uint32, cause error) {
-	if len(s.decryptFails) > maxDecryptFailKeys {
-		s.decryptFails = make(map[string]int)
-	}
 	s.decryptFails[idStr]++
 	if s.decryptFails[idStr] >= maxDecryptRetries {
 		_ = s.writeRaw(encodeRecvack(messageID, messageSeq)) // drop poison msg
 		delete(s.decryptFails, idStr)
 		if s.onError != nil {
 			s.onError(fmt.Errorf("dropping undecryptable message %s: %w", idStr, cause))
+		}
+		return
+	}
+	// Bound the map WITHOUT discarding this message's strike count: evict some
+	// other (older) entry. Resetting the whole map here would zero an in-flight
+	// poison message's count so it could never reach maxDecryptRetries — the
+	// server would then redeliver it forever (livelock).
+	for len(s.decryptFails) > maxDecryptFailKeys {
+		evicted := false
+		for k := range s.decryptFails {
+			if k != idStr {
+				delete(s.decryptFails, k)
+				evicted = true
+				break
+			}
+		}
+		if !evicted {
+			break
 		}
 	}
 	// else: no ack → redelivery

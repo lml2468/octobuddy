@@ -101,6 +101,47 @@ func TestServerBroadcast(t *testing.T) {
 
 // --- in-memory listener over net.Pipe ---
 
+// TestBroadcastDuringDisconnect stresses the path that used to crash the daemon:
+// a client disconnecting (which closes its send channel) while Broadcast is
+// mid-fan-out. With sendCh closed by close(), enqueue's `c.sendCh <- line` would
+// panic "send on closed channel" (select/default does NOT catch a closed send).
+// The fix stops the write loop via a separate done channel and never closes
+// sendCh, so this must run clean (a panic in the enqueue goroutine would crash
+// the test binary).
+func TestBroadcastDuringDisconnect(t *testing.T) {
+	srv := NewServer(nil)
+	ln := newPipeListener()
+	go srv.Serve(ln)
+	defer srv.Close()
+
+	done := make(chan struct{})
+	// Broadcaster: spam events continuously.
+	go func() {
+		for {
+			select {
+			case <-done:
+				return
+			default:
+				srv.Broadcast("session.text", SessionTextBody{SessionKey: "u", Delta: "x"})
+			}
+		}
+	}()
+
+	// Churn clients: connect then immediately close, racing the broadcaster's
+	// snapshot→enqueue window against client.close().
+	for i := 0; i < 200; i++ {
+		c := ln.dial()
+		for srv.ConnCount() == 0 {
+			time.Sleep(50 * time.Microsecond)
+		}
+		c.Close()
+		for srv.ConnCount() != 0 {
+			time.Sleep(50 * time.Microsecond)
+		}
+	}
+	close(done)
+}
+
 type pipeListener struct {
 	conns chan net.Conn
 }

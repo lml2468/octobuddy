@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"unicode/utf8"
 )
 
 // WuKongIM binary framing (wire-compatible with cc-channel-octo src/octo/socket.ts).
@@ -56,11 +57,23 @@ func (e *encoder) writeInt64(v uint64) {
 }
 
 // writeString writes a uint16-BE byte-length prefix followed by UTF-8 bytes.
+// The wire format caps a string at 65535 bytes; clamp (on a rune boundary) when
+// a field somehow exceeds that, so the length prefix can never desync from the
+// payload and corrupt every subsequent field in the frame.
 func (e *encoder) writeString(s string) {
 	b := []byte(s)
+	if len(b) > maxStringBytes {
+		cut := maxStringBytes
+		for cut > 0 && !utf8.RuneStart(b[cut]) {
+			cut--
+		}
+		b = b[:cut]
+	}
 	e.writeInt16(uint16(len(b)))
 	e.writeBytes(b)
 }
+
+const maxStringBytes = 65535 // uint16 max — the wire length-prefix ceiling
 
 // encodeVariableLength encodes an MQTT base-128 varint (socket.ts).
 func encodeVariableLength(n int) []byte {

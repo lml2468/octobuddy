@@ -281,6 +281,13 @@ func (r Resolved) DriverEnv() []string {
 // DriverEnvWith is DriverEnv with the gateway token supplied explicitly, so the
 // caller can pass a runtime-injected token (from the in-memory secret store)
 // instead of the config-file value. An empty gatewayToken omits the auth var.
+//
+// Security note: the token is handed to the spawned `claude` child as an
+// environment variable. On Linux that makes it readable from
+// /proc/<pid>/environ by any same-uid process (and via `ps eww`), so the
+// in-memory-only secret store's guarantee does not extend past the exec
+// boundary. This is the accepted tradeoff documented in SECURITY.md — the
+// agent CLI takes its credentials via env, and the daemon runs as the operator.
 func (r Resolved) DriverEnvWith(gatewayToken string) []string {
 	var out []string
 	for k, v := range r.Agent.Env {

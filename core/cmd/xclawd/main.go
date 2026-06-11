@@ -18,7 +18,6 @@ package main
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"net"
@@ -73,6 +72,11 @@ func main() {
 
 	started := time.Now()
 
+	// Run context: cancellable so an in-flight control-bus turn (session.send)
+	// and the IM connector shut down on exit instead of running detached.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	// Lone secret store for the single-bot flag path: seeded from the flag/env
 	// token, updatable via secret.inject over the control bus. The driver reads
 	// any injected gateway token lazily per turn.
@@ -117,7 +121,7 @@ func main() {
 	}
 
 	if srv != nil {
-		srv.SetHandler(makeCommandHandler(gw, st, drv, sec, started))
+		srv.SetHandler(makeCommandHandler(ctx, gw, st, drv, sec, srv, started))
 		ln := mustListenUnix(*controlSock)
 		defer ln.Close()
 		defer os.Remove(*controlSock)
@@ -132,7 +136,7 @@ func main() {
 	if connector != nil {
 		connector.SetGateway(gw)
 		go func() {
-			if err := connector.Run(context.Background()); err != nil {
+			if err := connector.Run(ctx); err != nil {
 				fmt.Fprintf(os.Stderr, "octo connector: %v\n", err)
 			}
 		}()
@@ -267,76 +271,25 @@ func mustListenUnix(path string) net.Listener {
 	return ln
 }
 
-// makeCommandHandler builds the control-bus command dispatcher. session.send is
-// fired in a goroutine so the command returns immediately and the turn streams
-// back as events.
-func makeCommandHandler(gw *gateway.Gateway, st *store.Store, drv agent.Driver, sec *secretStore, started time.Time) control.CommandHandler {
-	return func(cmdType string, body json.RawMessage) (any, error) {
-		switch cmdType {
-		case "health":
-			return control.HealthBody{
-				Uptime: int64(time.Since(started).Seconds()),
-				Driver: drv.Name(),
-			}, nil
-
-		case "secret.inject":
-			var b control.SecretInjectBody
-			if err := json.Unmarshal(body, &b); err != nil {
-				return nil, err
-			}
-			// Never log b.Value.
-			if err := sec.Set(b.Kind, b.Value); err != nil {
-				return nil, err
-			}
-			return control.OKBody{OK: true}, nil
-
-		case "session.send":
-			var b control.SessionSendBody
-			if err := json.Unmarshal(body, &b); err != nil {
-				return nil, err
-			}
-			if b.UID == "" {
-				return nil, fmt.Errorf("uid required")
-			}
-			go func() {
-				_, _ = gw.Handle(context.Background(), router.InboundMessage{
-					ChannelType: router.ChannelDM,
-					FromUID:     b.UID,
-					FromName:    b.UID,
-					Text:        b.Text,
-				})
-			}()
-			return control.OKBody{OK: true}, nil
-
-		case "session.history":
-			var b control.SessionHistoryBody
-			if err := json.Unmarshal(body, &b); err != nil {
-				return nil, err
-			}
-			limit := b.Limit
-			if limit <= 0 {
-				limit = 40
-			}
-			msgs, err := st.RecentMessages(b.SessionKey, limit)
-			if err != nil {
-				return nil, err
-			}
-			out := make([]control.HistoryMessage, 0, len(msgs))
-			for _, m := range msgs {
-				out = append(out, control.HistoryMessage{Role: string(m.Role), Content: m.Content, TS: m.Timestamp})
-			}
-			return out, nil
-
-		case "session.reset":
-			var b control.SessionSendBody // reuse {uid}
-			if err := json.Unmarshal(body, &b); err != nil {
-				return nil, err
-			}
-			_ = st.ClearResume(b.UID)
-			return control.OKBody{OK: true}, nil
-
-		default:
-			return nil, fmt.Errorf("unknown command %q", cmdType)
-		}
+// makeCommandHandler builds the single-bot control-bus dispatcher. All command
+// logic lives in the shared makeHandler; this only supplies the fixed target,
+// the synthetic one-bot roster, and the broadcast hook.
+func makeCommandHandler(ctx context.Context, gw *gateway.Gateway, st *store.Store, drv agent.Driver, sec *secretStore, srv *control.Server, started time.Time) control.CommandHandler {
+	target := &botTarget{gateway: gw, store: st, secrets: sec}
+	var broadcast func(string, any)
+	if srv != nil {
+		broadcast = srv.Broadcast
 	}
+	return makeHandler(ctx, handlerDeps{
+		started:  started,
+		driver:   drv.Name(),
+		botCount: func() int { return 1 },
+		// Single-bot mode has one implicit bot so a GUI client's bots.list
+		// bootstrap works the same as in multi-bot mode (proto parity).
+		list: func() []control.BotInfo {
+			return []control.BotInfo{{ID: "default", Connected: true}}
+		},
+		resolve:   func(string) (*botTarget, error) { return target, nil },
+		broadcast: broadcast,
+	})
 }

@@ -7,8 +7,15 @@ import (
 
 // isAllowedURL implements the SSRF policy (url-policy.ts isAllowedApiUrl):
 //   - https:// to any non-private host (private IP literals rejected)
-//   - http:// only to localhost / 127.0.0.1 / [::1]
+//   - http:// only to a loopback host (localhost / 127.0.0.0-8 / ::1)
 //   - any other scheme rejected
+//
+// This validates IP *literals* only — a hostname that resolves to a private or
+// metadata IP at request time is NOT caught here (no DNS resolution / rebind
+// protection). That is acceptable because these URLs are operator-trusted
+// config (apiUrl / gatewayBaseUrl), never attacker-supplied; the check is a
+// guardrail against fat-finger misconfig, not a defense against a hostile
+// operator. If untrusted URLs ever flow here, add resolve-time IP re-checking.
 func isAllowedURL(raw string) bool {
 	u, err := url.Parse(raw)
 	if err != nil {
@@ -22,7 +29,12 @@ func isAllowedURL(raw string) bool {
 		}
 		return host != ""
 	case "http":
-		return host == "localhost" || host == "127.0.0.1" || host == "::1"
+		// Local dev gateways only. Accept any loopback form, not just the
+		// 127.0.0.1 literal (e.g. 127.0.0.2, ::1).
+		if ip := net.ParseIP(host); ip != nil {
+			return ip.IsLoopback()
+		}
+		return host == "localhost"
 	default:
 		return false
 	}

@@ -24,36 +24,45 @@ side can implement it independently.
 
 ## Commands (client → core)
 
+Every command body may carry an optional `botId` to address a specific bot in
+multi-bot (config) mode; it is ignored in single-bot mode.
+
 | command | body | response |
 |---|---|---|
 | `bots.list` | — | `[{id, connected, lastError}]` |
-| `bot.start` | `{id}` | `{ok}` |
-| `bot.stop` | `{id}` | `{ok}` |
-| `config.reload` | — | `{ok}` |
-| `session.history` | `{sessionKey, limit}` | `[{role, content, ts}]` |
-| `session.send` | `{botId, channel, text}` | `{ok}` (turn streamed via events) |
-| `secret.inject` | `{botId, kind, value}` | `{ok}` (from Keychain; never persisted) |
-| `health` | — | `{uptime, bots, connections}` |
+| `health` | — | `{uptime, driver, bots, connections}` |
+| `session.send` | `{botId?, uid, text}` | `{ok}` (turn streamed via events) |
+| `session.history` | `{botId?, sessionKey, limit}` | `[{role, content, ts}]` |
+| `session.reset` | `{botId?, uid}` | `{ok}` (clears the resume mapping) |
+| `secret.inject` | `{botId?, kind, value}` | `{ok}` (held in memory; never persisted) |
+
+`session.send` routes `uid` as a DM inbound. A non-`ok` outcome (router drop or
+turn error) is reported asynchronously as an `error` event, since the response
+returns immediately and the turn streams back.
+
+**Planned (not yet implemented):** `bot.start`, `bot.stop`, `config.reload`.
 
 ## Events (core → client)
 
-Derived from the unified `agent.AgentEvent` plus gateway lifecycle:
+Derived from the unified `agent.AgentEvent` plus gateway lifecycle. Every event
+body carries an optional `botId` (empty in single-bot mode).
 
 | event kind | body |
 |---|---|
-| `bot.status` | `{id, connected, lastError}` |
-| `session.activity` | `{sessionKey, agent, kind}` where kind ∈ `msgIn` \| `turnStart` \| `textDelta` \| `toolUse` \| `toolResult` \| `turnDone` |
-| `session.text` | `{sessionKey, delta}` |
-| `session.tool` | `{sessionKey, name, params}` |
-| `session.usage` | `{sessionKey, inputTokens, outputTokens}` |
-| `rateLimit.hit` | `{sessionKey}` |
-| `cron.fired` | `{taskId, channel}` |
-| `error` | `{scope, message, recoverable}` |
+| `bot.status` | `{id, connected, lastError}` (multi-bot per-bot status) |
+| `session.activity` | `{botId?, sessionKey, kind}` where kind ∈ `turnStart` \| `thinking` \| `toolResult` \| `turnDone` |
+| `session.text` | `{botId?, sessionKey, delta}` (assistant token stream) |
+| `session.tool` | `{botId?, sessionKey, name, params}` |
+| `session.usage` | `{botId?, sessionKey, inputTokens, outputTokens}` |
+| `session.reply` | `{botId?, sessionKey, text}` (final assembled reply for a turn) |
+| `error` | `{botId?, scope, message, recoverable}` |
 
 ## Notes
 
-- The `session.*` event vocabulary is a 1:1 projection of `core/agent`'s
+- The `session.*` event vocabulary is a projection of `core/agent`'s
   `AgentEvent`, so the same normalization that turns a driver's native output
-  into a unified stream also unifies what every shell renders.
+  into a unified stream also unifies what every shell renders. Token text is its
+  own `session.text` event and tool calls their own `session.tool` event; the
+  `session.activity` kinds cover the non-payload lifecycle beats.
 - Secrets travel **into** the core (`secret.inject`) but never appear in any
   event or response; the core holds them in memory only.

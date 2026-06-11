@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 	"time"
@@ -16,7 +17,7 @@ func TestSecretInjectHandler(t *testing.T) {
 	reg := newBotRegistry(nil)
 	bot := &botRuntime{cfg: config.Resolved{BotID: "b1"}, secrets: &secretStore{}}
 	reg.add(bot)
-	h := makeMultiBotHandler(reg, time.Now())
+	h := makeMultiBotHandler(context.Background(), reg, time.Now())
 
 	inject := func(b control.SecretInjectBody) (any, error) {
 		raw, _ := json.Marshal(b)

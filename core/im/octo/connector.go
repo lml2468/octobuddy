@@ -115,7 +115,7 @@ func (c *Connector) Run(ctx context.Context) error {
 				continue
 			}
 			reg = r
-			c.botUID = reg.RobotID
+			c.setUID(reg.RobotID)
 			registered = true
 			backoff = c.reconnectBase
 		}
@@ -137,7 +137,7 @@ func (c *Connector) Run(ctx context.Context) error {
 		backoff = minDur(backoff*2, c.reconnectMax)
 		if fresh, rerr := c.rest.Register(ctx, true); rerr == nil {
 			reg = fresh
-			c.botUID = reg.RobotID
+			c.setUID(reg.RobotID)
 		} else {
 			registered = false // force the retry path above
 		}
@@ -178,9 +178,23 @@ func (c *Connector) ctx() context.Context {
 	return context.Background()
 }
 
+// setUID / uid guard botUID with c.mu: Run rewrites it on (re)registration while
+// the sink callbacks (OnReply/OnEvent → logf) and a concurrent turn read it.
+func (c *Connector) setUID(id string) {
+	c.mu.Lock()
+	c.botUID = id
+	c.mu.Unlock()
+}
+
+func (c *Connector) uid() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.botUID
+}
+
 // logf reports a recovered/handled error to stderr, tagged with the bot uid.
 func (c *Connector) logf(format string, args ...any) {
-	fmt.Fprintf(os.Stderr, "[octo %s] "+format+"\n", append([]any{c.botUID}, args...)...)
+	fmt.Fprintf(os.Stderr, "[octo %s] "+format+"\n", append([]any{c.uid()}, args...)...)
 }
 
 func (c *Connector) heartbeatLoop(ctx context.Context) {
@@ -199,7 +213,8 @@ func (c *Connector) heartbeatLoop(ctx context.Context) {
 // onInbound maps a decoded BotMessage to a router.InboundMessage and feeds the
 // gateway. Drops the bot's own messages and non-text payloads.
 func (c *Connector) onInbound(m BotMessage) {
-	if m.FromUID == c.botUID {
+	uid := c.uid()
+	if m.FromUID == uid {
 		return // ignore our own messages
 	}
 	if m.Payload.Type != MsgText || strings.TrimSpace(m.Payload.Content) == "" {
@@ -217,7 +232,7 @@ func (c *Connector) onInbound(m BotMessage) {
 		ChannelID:   m.ChannelID,
 		ChannelType: chType,
 		Text:        m.Payload.Content,
-		Mentioned:   m.MentionsBot(c.botUID),
+		Mentioned:   m.MentionsBot(uid),
 	}
 	key, err := inbound.SessionKey()
 	if err != nil {

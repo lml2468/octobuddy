@@ -19,6 +19,14 @@ import (
 //   - AES-128 key = first 16 ASCII chars of lowercase-hex MD5(base64(secret))
 //   - IV = first 16 bytes of the salt string
 //   - RECV payload = base64 text of an AES-128-CBC (PKCS7) ciphertext
+//
+// Security note: this scheme (CBC, deterministic IV, no MAC/AEAD) is dictated by
+// the WuKongIM wire protocol and matched byte-for-byte for interop — we cannot
+// add authentication without breaking compatibility, and this is decrypt-only.
+// Inbound IM frames therefore have NO integrity guarantee at this layer; the
+// gateway treats all inbound IM text as untrusted regardless and fences it via
+// core/safety + core/groupctx before it reaches the agent. Do not rely on the
+// transport for authenticity.
 
 // dhKeyPair holds a clamped curve25519 keypair.
 type dhKeyPair struct {

@@ -74,6 +74,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   collapsed to a floating inset card with a dead top gap.
 
 ### Fixed
+- Control-bus server no longer crashes the daemon when a client disconnects
+  during a broadcast. `client.enqueue` used `select { case sendCh <- … : default }`,
+  but a *closed* channel send is never caught by `default` and panics; a GUI
+  disconnecting mid-turn (now common, with restarts) could take down `xclawd`.
+  The write loop now stops via a separate `done` channel and `sendCh` is never
+  closed, so producers can never send on a closed channel. Regression test added.
+- Control handlers consolidated: single-bot and multi-bot modes now share one
+  command dispatcher, so `bots.list` (previously missing in single-bot mode,
+  breaking a GUI client's roster/history bootstrap) and every other command
+  behave identically. `session.send` now runs its turn under the daemon's
+  cancellable context (shutdown aborts the in-flight `claude` subprocess instead
+  of orphaning it) and reports a router drop / turn error back as an `error`
+  event instead of swallowing it with `_, _ =`, so the GUI no longer hangs.
+- `proto/README.md` reconciled with the implementation: corrected the
+  `session.send` body (`{uid}`, not `{channel}`), documented the real events
+  (`session.reply`, `session.activity` kinds incl. `thinking`) and the
+  `session.reset` command, marked `bot.start`/`bot.stop`/`config.reload` as
+  planned, and removed the never-emitted `rateLimit.hit`/`cron.fired` events.
+- Octo connector: `botUID` is now guarded by the connector mutex (it was written
+  by `Run`'s re-registration path while the sink callbacks / a concurrent turn
+  read it — a data race that could corrupt self-message filtering around a
+  reconnect).
+- Octo socket: the decrypt-failure strike map no longer wipes all counts when it
+  hits its cap (which zeroed an in-flight poison message's count so it never
+  reached the ack-and-drop threshold → infinite redelivery). It now evicts only
+  other entries, bounded, preserving the current message's count.
+- Octo wire: `writeString` clamps an over-long field (>65535 bytes) on a rune
+  boundary so the uint16 length prefix can never desync from the payload and
+  corrupt the rest of a frame.
+- Gateway logs (instead of silently swallowing) `store.Resume`/`SaveResume`
+  errors, so a transient DB failure that drops conversation continuity is
+  diagnosable.
+- `ClaudeDriver.Query` reader goroutines now send events via a `select` on
+  `ctx.Done()`, so a cancelled/abandoned consumer can't wedge a reader on a full
+  channel (leaking the goroutine + the `claude` subprocess).
+- `truncateParams` truncates tool-input previews on a rune boundary (no more
+  invalid UTF-8 in `session.tool` events).
+- Documented accepted security tradeoffs in code: WuKongIM AES-128-CBC is
+  protocol-dictated and unauthenticated (inbound IM text is treated as untrusted
+  and fenced regardless); SSRF URL validation is literal-IP-only for
+  operator-trusted config (no DNS-rebind protection); the gateway token reaches
+  the agent via the child environment (per SECURITY.md). `http` URLs now accept
+  any loopback form (e.g. `127.0.0.2`, `::1`), not just the `127.0.0.1` literal.
 - "Save & Restart" (and "Restart Core") in the macOS app now reliably reconnects.
   The restart stopped the old daemon and started a new one without waiting for
   the old one to exit; because the daemon removes its control socket on shutdown

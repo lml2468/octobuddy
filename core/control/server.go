@@ -26,42 +26,56 @@ type Server struct {
 type client struct {
 	conn      net.Conn
 	sendCh    chan []byte
+	done      chan struct{}
 	closeOnce sync.Once
 }
 
 const clientSendQueue = 256
 
 func newClient(conn net.Conn) *client {
-	c := &client{conn: conn, sendCh: make(chan []byte, clientSendQueue)}
+	c := &client{conn: conn, sendCh: make(chan []byte, clientSendQueue), done: make(chan struct{})}
 	go c.writeLoop()
 	return c
 }
 
 // writeLoop serializes all writes to this connection. Decoupling writes from
 // Broadcast means one slow client cannot stall the broadcaster (and thus the
-// agent turn) — it just fills its own queue.
+// agent turn) — it just fills its own queue. Exits when done is closed.
 func (c *client) writeLoop() {
-	for line := range c.sendCh {
-		if _, err := c.conn.Write(line); err != nil {
+	for {
+		select {
+		case <-c.done:
 			return
+		case line := <-c.sendCh:
+			if _, err := c.conn.Write(line); err != nil {
+				return
+			}
 		}
 	}
 }
 
-// enqueue queues a line for the client. If the queue is full (a stuck/slow
-// reader), the line is dropped rather than blocking the broadcaster.
+// enqueue queues a line for the client. Never blocks and never panics: sendCh is
+// never closed (close() signals via the separate done channel), so a send here
+// can only fill the buffer (dropped via default) or lose the select to done (the
+// client is going away) — neither sends on a closed channel.
 func (c *client) enqueue(line []byte) {
 	select {
 	case c.sendCh <- line:
+	case <-c.done:
+		// client closing: drop.
 	default:
 		// queue full: drop. The client is too slow; dropping an event beats
 		// stalling every other client and the agent turn.
 	}
 }
 
+// close stops the write loop and closes the connection. It does NOT close
+// sendCh — producers (Broadcast/writeTo) may still hold a reference to this
+// client and call enqueue concurrently; closing sendCh would let those sends
+// panic. Stopping via `done` keeps enqueue panic-free.
 func (c *client) close() {
 	c.closeOnce.Do(func() {
-		close(c.sendCh)
+		close(c.done)
 		_ = c.conn.Close()
 	})
 }

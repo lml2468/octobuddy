@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 // ClaudeDriver drives Claude Code headlessly via:
@@ -113,6 +114,16 @@ func (d *ClaudeDriver) Query(ctx context.Context, req Request) (<-chan AgentEven
 	var wg sync.WaitGroup
 	wg.Add(2)
 
+	// emit sends an event unless the turn's context is cancelled. Selecting on
+	// ctx.Done() means an abandoned/cancelled consumer can't wedge a reader on a
+	// full channel (which would leak the goroutine and the claude subprocess).
+	emit := func(ev AgentEvent) {
+		select {
+		case out <- ev:
+		case <-ctx.Done():
+		}
+	}
+
 	// Drain stderr; emit any non-empty lines as recoverable errors (e.g. node
 	// warnings) without blocking the child on a full pipe.
 	go func() {
@@ -124,7 +135,7 @@ func (d *ClaudeDriver) Query(ctx context.Context, req Request) (<-chan AgentEven
 			if line == "" {
 				continue
 			}
-			out <- AgentEvent{Kind: KindError, Err: line, Recoverable: true, Raw: line}
+			emit(AgentEvent{Kind: KindError, Err: line, Recoverable: true, Raw: line})
 		}
 	}()
 
@@ -139,7 +150,7 @@ func (d *ClaudeDriver) Query(ctx context.Context, req Request) (<-chan AgentEven
 				continue
 			}
 			for _, ev := range parseClaudeLine(line) {
-				out <- ev
+				emit(ev)
 			}
 		}
 	}()
@@ -148,11 +159,11 @@ func (d *ClaudeDriver) Query(ctx context.Context, req Request) (<-chan AgentEven
 		defer close(out)
 		wg.Wait()
 		if err := cmd.Wait(); err != nil {
-			out <- AgentEvent{
+			emit(AgentEvent{
 				Kind: KindError,
 				Err:  fmt.Sprintf("claude exited: %v", err),
 				Raw:  err.Error(),
-			}
+			})
 		}
 	}()
 
@@ -296,7 +307,13 @@ func truncateParams(raw json.RawMessage) string {
 	s = strings.Join(strings.Fields(s), " ") // collapse whitespace/newlines
 	const max = 120
 	if len(s) > max {
-		s = s[:max] + "…"
+		// Back up to a rune boundary so we never split a multibyte codepoint
+		// and emit invalid UTF-8 into the progress event.
+		cut := max
+		for cut > 0 && !utf8.RuneStart(s[cut]) {
+			cut--
+		}
+		s = s[:cut] + "…"
 	}
 	return s
 }

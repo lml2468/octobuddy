@@ -12,6 +12,7 @@ package gateway
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -157,8 +158,13 @@ func (g *Gateway) runTurn(ctx context.Context, sessionKey string, msg router.Inb
 		return err
 	}
 
-	// Resume the agent's prior session if we have one.
-	resumeID, _ := g.store.Resume(sessionKey)
+	// Resume the agent's prior session if we have one. A real read error (not
+	// "no row") degrades the turn to a fresh session — acceptable, but log it so
+	// silent loss of conversation continuity is diagnosable.
+	resumeID, err := g.store.Resume(sessionKey)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[gateway] resume %s: %v\n", sessionKey, err)
+	}
 
 	// Resolve the per-session sandbox (cwd + memory + skills) when enabled.
 	var cwd, memDir string
@@ -204,9 +210,12 @@ func (g *Gateway) runTurn(ctx context.Context, sessionKey string, msg router.Inb
 		}
 	}
 
-	// Persist resume id for continuity (only if the agent reported one).
+	// Persist resume id for continuity (only if the agent reported one). A write
+	// failure here silently breaks continuity on the next turn, so log it.
 	if newResume != "" {
-		_ = g.store.SaveResume(sessionKey, g.driver.Name(), newResume)
+		if err := g.store.SaveResume(sessionKey, g.driver.Name(), newResume); err != nil {
+			fmt.Fprintf(os.Stderr, "[gateway] save resume %s: %v\n", sessionKey, err)
+		}
 	}
 
 	text := reply.String()
