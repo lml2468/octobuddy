@@ -26,8 +26,9 @@ struct XClawApp: App {
 
         // Config editor (Cmd-,). Loads the on-disk config when opened.
         Settings {
-            ConfigEditorView(model: model)
-                .onAppear { model.loadConfig() }
+            ConfigEditorView(config: model.config,
+                             onSaveAndRestart: { model.applyConfigAndRestart() })
+                .onAppear { model.config.load() }
         }
     }
 }
@@ -68,7 +69,7 @@ struct ConsoleView: View {
                 if model.coreState == "needs-config" {
                     needsConfigBanner
                 }
-                if model.needsRestart {
+                if model.config.needsRestart {
                     restartBanner
                 }
                 header

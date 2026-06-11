@@ -4,21 +4,23 @@ import XClawCore
 /// Bot configuration editor (opened via Settings / Cmd-,). Lists configured
 /// bots, lets you add/remove and edit id / apiUrl / tokens, and saves to
 /// ~/.xclaw/config.json. Tokens are stored in the macOS Keychain (not the file);
-/// see AppModel.saveConfig / Keychain.swift.
+/// see ConfigEditorModel / Keychain.swift.
 struct ConfigEditorView: View {
-    @Bindable var model: AppModel
+    @Bindable var config: ConfigEditorModel
+    /// Invoked when the user chooses "Save & Restart" after a successful save.
+    var onSaveAndRestart: () -> Void
     @State private var selection: String?
 
     var body: some View {
         NavigationSplitView {
             List(selection: $selection) {
                 Section("Bots") {
-                    ForEach($model.configBots) { $bot in
+                    ForEach($config.bots) { $bot in
                         Text(bot.id.isEmpty ? "(unnamed)" : bot.id).tag(bot.id)
                     }
                     .onDelete { idx in
-                        let ids = idx.map { model.configBots[$0].id }
-                        ids.forEach { model.removeConfigBot($0) }
+                        let ids = idx.map { config.bots[$0].id }
+                        ids.forEach { config.remove($0) }
                     }
                 }
             }
@@ -26,14 +28,15 @@ struct ConfigEditorView: View {
             .toolbar {
                 ToolbarItem {
                     Button {
-                        model.addConfigBot()
-                        selection = model.configBots.last?.id
+                        config.add()
+                        selection = config.bots.last?.id
                     } label: { Image(systemName: "plus") }
+                    .help("Add a bot")
                 }
             }
         } detail: {
-            if let sel = selection, let i = model.configBots.firstIndex(where: { $0.id == sel }) {
-                BotForm(bot: $model.configBots[i])
+            if let sel = selection, let i = config.bots.firstIndex(where: { $0.id == sel }) {
+                BotForm(bot: $config.bots[i])
                     .id(sel) // rebuild cleanly when switching bots
             } else {
                 ContentUnavailableView(
@@ -49,18 +52,18 @@ struct ConfigEditorView: View {
 
     private var footer: some View {
         HStack {
-            if let err = model.configError {
+            if let err = config.error {
                 Label(err, systemImage: "exclamationmark.triangle")
                     .font(.caption).foregroundStyle(.red).lineLimit(2)
-            } else if model.needsRestart {
+            } else if config.needsRestart {
                 Label("Saved. Restart the core to apply.", systemImage: "checkmark.circle")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
-            Button("Save") { model.saveConfig() }
+            Button("Save") { config.save() }
                 .keyboardShortcut("s", modifiers: .command)
             Button("Save & Restart") {
-                if model.saveConfig() { model.applyConfigAndRestart() }
+                if config.save() { onSaveAndRestart() }
             }
             .buttonStyle(.borderedProminent)
         }

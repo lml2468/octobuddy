@@ -72,6 +72,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (its `fd`/id counter live behind an `OSAllocatedUnfairLock`, the `LineFramer`
   is local to the read loop). No production app/core type uses
   `@unchecked Sendable` anymore.
+- macOS app separation of concerns: bot-configuration editing (load/add/remove/
+  save, Keychain persistence, legacy-token migration) extracted from `AppModel`
+  into a dedicated `@Observable ConfigEditorModel`, so `AppModel` now owns only
+  runtime lifecycle, bus connection, and messaging.
 
 <!--
 Going forward, summarize notable changes here under Added / Changed / Deprecated

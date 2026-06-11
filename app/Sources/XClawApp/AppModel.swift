@@ -16,10 +16,9 @@ final class AppModel {
     var selectedBotID: String?
     var lastError: String?
 
-    // Config editing.
-    var configBots: [BotConfig] = []
-    var needsRestart: Bool = false
-    var configError: String?
+    /// Bot-configuration editor state (Settings). Separate concern from the
+    /// runtime connection/supervision this model owns.
+    let config = ConfigEditorModel()
 
     /// Sessions of the currently-selected bot (convenience for the UI).
     var sessions: [AppState.SessionView] {
@@ -59,7 +58,7 @@ final class AppModel {
 
         // Migrate any plaintext tokens still in config.json into the Keychain,
         // then rewrite the file without them (one-time, automatic).
-        migrateLegacyTokensIfNeeded()
+        config.migrateLegacyTokens()
 
         let cfg = CoreSupervisor.Config(
             binaryPath: bin,
@@ -271,68 +270,10 @@ final class AppModel {
 
     // MARK: - Config editing
 
-    /// Loads the on-disk bot configs into `configBots` for the editor, overlaying
-    /// each bot's tokens from the Keychain (falling back to any legacy value in
-    /// the file).
-    func loadConfig() {
-        configError = nil
-        do {
-            var bots = try ConfigStore.load()
-            for i in bots.indices {
-                if let t = Keychain.get(account: Keychain.account(bot: bots[i].id, kind: Keychain.kindOcto)) {
-                    bots[i].octoToken = t
-                }
-                if let t = Keychain.get(account: Keychain.account(bot: bots[i].id, kind: Keychain.kindGateway)) {
-                    bots[i].gatewayToken = t
-                }
-            }
-            configBots = bots
-        } catch {
-            configError = "\(error)"
-        }
-    }
-
-    /// Adds a new bot to the editable list (not yet saved).
-    func addConfigBot() {
-        let base = "bot"
-        var n = configBots.count + 1
-        var id = "\(base)\(n)"
-        let existing = Set(configBots.map { $0.id })
-        while existing.contains(id) { n += 1; id = "\(base)\(n)" }
-        // Inherit apiUrl from an existing bot for convenience.
-        let apiURL = configBots.first?.apiURL ?? ""
-        configBots.append(BotConfig(id: id, apiURL: apiURL))
-    }
-
-    /// Removes a bot from the editable list (not yet saved).
-    func removeConfigBot(_ id: String) {
-        configBots.removeAll { $0.id == id }
-    }
-
-    /// Validates and writes the editable config to disk (tokens go to the
-    /// Keychain, not the file). Sets needsRestart so the UI can prompt; returns
-    /// true on success.
-    @discardableResult
-    func saveConfig() -> Bool {
-        configError = nil
-        do {
-            try ConfigStore.save(configBots) // strips tokens from the file
-            // Persist tokens to the Keychain (empty value deletes the item).
-            for b in configBots {
-                try Keychain.set(account: Keychain.account(bot: b.id, kind: Keychain.kindOcto), value: b.octoToken)
-                try Keychain.set(account: Keychain.account(bot: b.id, kind: Keychain.kindGateway), value: b.gatewayToken)
-            }
-            needsRestart = true
-            return true
-        } catch {
-            configError = "\(error)"
-            return false
-        }
-    }
-
-    /// Restarts the core to pick up a saved config.
+    /// Restarts the core to pick up a saved config. (Editing itself lives in
+    /// `config` — see ConfigEditorModel.)
     func applyConfigAndRestart() {
-        needsRestart = false
+        config.needsRestart = false
         stop()
         start()
     }
