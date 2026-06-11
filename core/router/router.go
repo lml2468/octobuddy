@@ -277,5 +277,51 @@ func (r *Router) allow(sessionKey, uid string) bool {
 	r.global.take(now)
 	ub.take(now)
 	sb.take(now)
+	// A turn got through — clear the debounce flags so the NEXT time any bucket
+	// blocks, the user is notified again (cc-channel checkAllRateLimits clears
+	// notified on the all-pass path).
+	r.global.notified = false
+	ub.notified = false
+	sb.notified = false
+	return true
+}
+
+// ShouldNotifyRateLimit reports whether a "请稍后再试" reply should be sent for a
+// message the rate limiter just rejected, debouncing it to once per refill
+// window. It marks the blocking bucket as notified (without consuming a token),
+// mirroring cc-channel's per-bucket `notified` flag: the first rejection in a
+// window returns true; subsequent rejections from the same blocker return false
+// until a turn passes (allow clears the flag).
+//
+// Call this ONLY after allow has returned false for (sessionKey, uid); the
+// buckets it inspects are the same ones allow created.
+func (r *Router) ShouldNotifyRateLimit(sessionKey, uid string) bool {
+	r.rlMu.Lock()
+	defer r.rlMu.Unlock()
+	now := r.now()
+
+	// Identify the blocking bucket in the same precedence as allow's peek chain
+	// (global → user → session). A bucket missing here means it was never
+	// created, which can't happen on the post-rejection path, but guard anyway.
+	switch {
+	case r.global != nil && !r.global.peek(now):
+		return markNotified(r.global)
+	case r.perUser[uid] != nil && !r.perUser[uid].peek(now):
+		return markNotified(r.perUser[uid])
+	case r.perSess[sessionKey] != nil && !r.perSess[sessionKey].peek(now):
+		return markNotified(r.perSess[sessionKey])
+	}
+	// No bucket is blocking anymore (refilled between rejection and this call):
+	// nothing to notify about.
+	return false
+}
+
+// markNotified sets the bucket's debounce flag and reports whether this was the
+// first rejection of the current window (flag flipped from false to true).
+func markNotified(b *bucket) bool {
+	if b.notified {
+		return false
+	}
+	b.notified = true
 	return true
 }

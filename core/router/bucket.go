@@ -10,6 +10,11 @@ type bucket struct {
 	tokens     float64
 	window     time.Duration
 	lastRefill time.Time
+	// notified debounces the rate-limit reply: it is set the first time this
+	// bucket blocks a message and cleared the next time it admits one, so a
+	// flooder gets at most one "请稍后再试" per refill window (mirrors
+	// cc-channel session-router.ts TokenBucket.notified).
+	notified bool
 }
 
 func newBucket(capacity int, window time.Duration) *bucket {

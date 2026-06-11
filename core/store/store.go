@@ -200,6 +200,16 @@ func (s *Store) ClearResume(sessionKey string) error {
 	return err
 }
 
+// ClearHistory deletes the persisted conversation messages for a session (the
+// /reset side effect, the Go analogue of cc-channel's store.deleteSession
+// history clear). It does NOT touch the agent resume mapping (clear that with
+// ClearResume) nor long-term auto-memory (which lives outside the store). The
+// session row itself is kept so its TTL and channel binding survive a reset.
+func (s *Store) ClearHistory(sessionID string) error {
+	_, err := s.db.Exec(`DELETE FROM messages WHERE session_id=?`, sessionID)
+	return err
+}
+
 // --- maintenance ---
 
 // CleanupExpired deletes sessions (and, via cascade, their messages) plus

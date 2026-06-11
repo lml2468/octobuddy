@@ -232,6 +232,7 @@ func runBot(ctx context.Context, cfg config.Resolved, reg *botRegistry, srv *con
 		WithGroupContext(groupctx.New(cfg.Context.MaxContextChars)).
 		WithSystemPrompt(cfg.SystemPrompt).
 		WithModel(cfg.Agent.Model).
+		WithCommandInfo(cfg.RateLimit.MaxPerMinute, cfg.Context.MaxContextChars).
 		WithSandbox(cfg.CwdBase, cfg.MemoryBase, cfg.SkillsDir, cfg.GlobalSkillsDir)
 	connector.SetGateway(gw)
 
