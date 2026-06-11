@@ -109,8 +109,9 @@ func (r *botRegistry) list() []control.BotInfo {
 }
 
 // runConfigMode loads the single-file config, serves the control bus, and runs
-// every configured bot in its own isolated goroutine until SIGINT/SIGTERM.
-func runConfigMode(path, controlSock string) {
+// every configured bot in its own isolated goroutine until SIGINT/SIGTERM (or,
+// when exitWithParent is set, until the launching process dies).
+func runConfigMode(path, controlSock string, exitWithParent bool) {
 	bots, err := config.Load(path)
 	if err != nil {
 		fatal("config: %v", err)
@@ -121,6 +122,12 @@ func runConfigMode(path, controlSock string) {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	// When launched by the GUI, shut down if the app dies (even on a crash that
+	// skips graceful teardown) so the daemon never lingers holding the socket.
+	if exitWithParent {
+		watchParentExit(stop)
+	}
 
 	started := time.Now()
 

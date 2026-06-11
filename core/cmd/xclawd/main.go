@@ -47,6 +47,7 @@ func main() {
 		octoAPI     = flag.String("octo-api", "", "Octo API base URL (enables the Octo IM connector)")
 		octoToken   = flag.String("octo-token", "", "Octo bot token (bf_*); or set XCLAW_OCTO_TOKEN")
 		configPath  = flag.String("config", "", "load ~/.xclaw/config.json (or given path) and run all configured bots")
+		exitParent  = flag.Bool("exit-with-parent", false, "exit when the parent process dies (set by the GUI so the daemon never outlives the app)")
 	)
 	flag.Parse()
 
@@ -55,7 +56,7 @@ func main() {
 	// `-config` with no value uses the default ~/.xclaw/config.json. `-control`
 	// additionally serves the bus so a GUI can manage all bots.
 	if configFlagSet() {
-		runConfigMode(*configPath, *controlSock)
+		runConfigMode(*configPath, *controlSock, *exitParent)
 		return
 	}
 
@@ -142,6 +143,12 @@ func main() {
 	fmt.Printf("db=%s  session=dm:%s\n", *dbPath, *fromUID)
 
 	if *noREPL || connector != nil {
+		if *exitParent {
+			watchParentExit(func() {
+				fmt.Fprintln(os.Stderr, "parent exited; shutting down")
+				os.Exit(0)
+			})
+		}
 		fmt.Println("running (control bus / IM connector); press Ctrl-C to exit")
 		select {} // block forever
 	}

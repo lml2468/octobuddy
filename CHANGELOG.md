@@ -76,6 +76,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   save, Keychain persistence, legacy-token migration) extracted from `AppModel`
   into a dedicated `@Observable ConfigEditorModel`, so `AppModel` now owns only
   runtime lifecycle, bus connection, and messaging.
+- The embedded `xclawd` no longer leaks when the app dies non-gracefully
+  (crash/force-quit): a new `-exit-with-parent` flag (passed by the app) makes
+  the daemon shut down when it's orphaned (reparented to pid 1), freeing the
+  control socket. Found via a real packaged-app smoke test; graceful Quit was
+  already handled by `CoreSupervisor.stop()`.
 
 <!--
 Going forward, summarize notable changes here under Added / Changed / Deprecated

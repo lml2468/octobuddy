@@ -127,6 +127,9 @@ public actor CoreSupervisor {
                 args += ["-db", config.dbPath]
             }
         }
+        // The daemon must not outlive us: exit if this app process dies, even on
+        // a crash/force-quit where stop() never runs.
+        args.append("-exit-with-parent")
         args += config.extraArgs
         p.arguments = args
         // Inherit stdio so daemon logs surface in the app's console during dev.
