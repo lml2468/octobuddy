@@ -30,6 +30,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Formatted the entire `core/` tree with `gofmt`.
 - Converted mixed-language code comments to English.
+- macOS app UI redesigned to Tahoe / Liquid-Glass conventions: a unified window
+  toolbar (status + Reset/Restart) with navigation title/subtitle, a sidebar
+  `List` with status symbols and session-count badges, session cards with depth
+  (material/border/shadow) and a clear type hierarchy, a chat-style composer
+  (material bar + circular accent send button), material info banners, and a
+  proper menu-bar popover (`.menuBarExtraStyle(.window)`) with hoverable actions.
 
 ### Fixed
 - The router's per-session lock map and per-user/per-session rate-limit buckets
