@@ -66,6 +66,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on the composer, and a stable `.id` on the bot form for clean switching.
   VoiceOver reads bot rows and session cards as combined elements; the `AppState`
   reducer's `bot.status` / `error` / non-event paths are now directly tested.
+- macOS app concurrency made compiler-checked: `CoreSupervisor` is now an
+  `actor` (its non-`Sendable` `Process` state is actor-isolated; restart timing
+  uses a cancellable `Task`), and `ControlClient` is a checked `Sendable` class
+  (its `fd`/id counter live behind an `OSAllocatedUnfairLock`, the `LineFramer`
+  is local to the read loop). No production app/core type uses
+  `@unchecked Sendable` anymore.
 
 <!--
 Going forward, summarize notable changes here under Added / Changed / Deprecated

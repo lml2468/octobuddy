@@ -72,7 +72,7 @@ final class AppModel {
             Task { @MainActor [weak self] in self?.applyCoreState(st) }
         }
         supervisor = sup
-        sup.start()
+        Task { await sup.start() }
     }
 
     /// Stops the bus and the core.
@@ -84,7 +84,9 @@ final class AppModel {
         client?.disconnect()
         client = nil
         connected = false
-        supervisor?.stop()
+        if let sup = supervisor {
+            Task { await sup.stop() }
+        }
         supervisor = nil
         coreState = "stopped"
     }

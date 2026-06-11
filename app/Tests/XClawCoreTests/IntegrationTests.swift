@@ -24,8 +24,8 @@ func supervisorSpawnsRealCoreAndBusDelivers() async throws {
 
     let sup = CoreSupervisor(config: .init(
         binaryPath: bin, socketPath: sock, dbPath: db))
-    sup.start()
-    defer { sup.stop() }
+    await sup.start()
+    defer { Task { await sup.stop() } }
 
     // Wait for the daemon to bind the socket.
     var ready = false
@@ -165,8 +165,8 @@ func supervisorConfigModeRunsBots() async throws {
     let sock = (tmp as NSString).appendingPathComponent("ctl.sock")
     let sup = CoreSupervisor(config: .init(
         binaryPath: bin, socketPath: sock, configMode: true, configPath: cfgPath))
-    sup.start()
-    defer { sup.stop() }
+    await sup.start()
+    defer { Task { await sup.stop() } }
 
     var ready = false
     for _ in 0..<50 {
