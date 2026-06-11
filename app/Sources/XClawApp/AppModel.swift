@@ -34,6 +34,10 @@ final class AppModel {
     @ObservationIgnored private var pollTask: Task<Void, Never>?
     @ObservationIgnored private var state = AppState()
     @ObservationIgnored private let socketPath = CorePaths.socketPath
+    /// Outstanding session.history requests: command id → (botId, sessionKey).
+    @ObservationIgnored private var pendingHistory: [String: (botId: String, sessionKey: String)] = [:]
+    /// Bot sessions already hydrated from history, so we request each once.
+    @ObservationIgnored private var historyLoaded: Set<String> = []
     /// The DM uid used for messages sent from this GUI.
     @ObservationIgnored let localUID = "gui-user"
 
@@ -215,6 +219,39 @@ final class AppModel {
         }
     }
 
+    /// Requests each bot's GUI-session transcript from the gateway's store
+    /// (session.history) so a restart restores the conversation. Each bot's
+    /// session is requested once; the response is matched back by command id.
+    private func requestHistories(on c: ControlClient, for botIDs: [String]) {
+        for id in botIDs where !historyLoaded.contains(id) {
+            historyLoaded.insert(id)
+            do {
+                let reqID = try c.send(type: "session.history",
+                                       body: SessionHistoryBody(sessionKey: localUID, limit: 200, botId: id))
+                pendingHistory[reqID] = (botId: id, sessionKey: localUID)
+            } catch {
+                historyLoaded.remove(id)
+                Log.app.error("session.history request failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+    }
+
+    /// Folds a session.history response into the transcript for the session it
+    /// was requested for (matched via the correlated command id).
+    private func applyHistory(_ env: Envelope) {
+        guard let id = env.id, let target = pendingHistory.removeValue(forKey: id),
+              let history = env.decodeBody([HistoryMessage].self) else { return }
+        let msgs: [AppState.ChatMessage] = history.compactMap { h in
+            let role: AppState.ChatMessage.Role? =
+                h.role == "user" ? .user : (h.role == "assistant" ? .assistant : nil)
+            guard let role else { return nil }
+            return AppState.ChatMessage(role: role, text: h.content,
+                                        timestamp: Date(timeIntervalSince1970: TimeInterval(h.ts)))
+        }
+        state.loadHistory(botId: target.botId, sessionKey: target.sessionKey, messages: msgs)
+        publishBots()
+    }
+
     /// Moves any plaintext tokens left in config.json into the Keychain, then
     /// rewrites the file without them. No-op once the file is clean.
     private func migrateLegacyTokensIfNeeded() {
@@ -266,7 +303,10 @@ final class AppModel {
                     if let infos = env.decodeBody([BotInfo].self) {
                         self.state.setBots(infos)
                         self.publishBots()
+                        self.requestHistories(on: c, for: infos.map(\.id))
                     }
+                case .response where env.type == "session.history":
+                    self.applyHistory(env)
                 default:
                     break
                 }
