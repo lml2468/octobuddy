@@ -4,6 +4,17 @@ import Foundation
 /// truth the GUI renders, updated only via `apply(_:)`. Multi-bot aware: events
 /// are bucketed by botId (empty botId → the "default" bot in single-bot mode).
 public struct AppState: Sendable, Equatable {
+    /// One rendered message in a session transcript.
+    public struct ChatMessage: Sendable, Equatable, Identifiable {
+        public enum Role: Sendable, Equatable { case user, assistant, tool }
+        public let id: UUID
+        public var role: Role
+        public var text: String
+        public init(id: UUID = UUID(), role: Role, text: String) {
+            self.id = id; self.role = role; self.text = text
+        }
+    }
+
     public struct SessionView: Sendable, Equatable, Identifiable {
         public var sessionKey: String
         public var lastActivity: String = ""
@@ -12,6 +23,10 @@ public struct AppState: Sendable, Equatable {
         public var lastTool: String = ""
         public var inputTokens: Int = 0
         public var outputTokens: Int = 0
+        /// Ordered conversation transcript (user / assistant / tool bubbles).
+        public var messages: [ChatMessage] = []
+        /// Id of the assistant bubble currently being streamed (nil between turns).
+        public var streamingAssistant: UUID?
         public var id: String { sessionKey }
     }
 
@@ -32,6 +47,30 @@ public struct AppState: Sendable, Equatable {
     public init() {}
 
     public var sortedBots: [BotView] { bots.values.sorted { $0.id < $1.id } }
+
+#if DEBUG
+    /// A populated state for UI previews/screenshots (no daemon/bus needed).
+    public static func preview() -> AppState {
+        var s = AppState()
+        s.connected = true
+        s.setBots([
+            BotInfo(id: "main", connected: true, lastError: nil),
+            BotInfo(id: "research", connected: false, lastError: "awaiting secret"),
+        ])
+        s.mutateSession("main", "gui-user") { v in
+            v.messages = [
+                ChatMessage(role: .user, text: "List the files in the project root and summarize what this repo does."),
+                ChatMessage(role: .assistant, text: "I'll check the directory layout first."),
+                ChatMessage(role: .tool, text: "Bash · ls -la"),
+                ChatMessage(role: .assistant, text: "It's a Go + Swift monorepo: core/ is the xclawd gateway daemon, app/ is this macOS client, and proto/ holds the control-bus contract. Want me to open the README?"),
+            ]
+            v.inputTokens = 1450
+            v.outputTokens = 92
+            v.lastActivity = "reply"
+        }
+        return s
+    }
+#endif
 
     public mutating func setConnected(_ v: Bool) { connected = v }
 
@@ -62,6 +101,15 @@ public struct AppState: Sendable, Equatable {
                 mutateSession(x.botId, x.sessionKey) { s in
                     s.streamingText += x.delta
                     s.lastActivity = "text"
+                    // Extend the current streaming assistant bubble, or start one.
+                    if let sid = s.streamingAssistant,
+                       let i = s.messages.firstIndex(where: { $0.id == sid }) {
+                        s.messages[i].text += x.delta
+                    } else {
+                        let m = ChatMessage(role: .assistant, text: x.delta)
+                        s.messages.append(m)
+                        s.streamingAssistant = m.id
+                    }
                 }
             }
         case "session.tool":
@@ -69,6 +117,10 @@ public struct AppState: Sendable, Equatable {
                 mutateSession(x.botId, x.sessionKey) { s in
                     s.lastTool = x.name
                     s.lastActivity = "tool:\(x.name)"
+                    let label = x.params.isEmpty ? x.name : "\(x.name) \(x.params)"
+                    s.messages.append(ChatMessage(role: .tool, text: label))
+                    // A tool call ends the current text bubble; later text starts a new one.
+                    s.streamingAssistant = nil
                 }
             }
         case "session.usage":
@@ -82,7 +134,10 @@ public struct AppState: Sendable, Equatable {
             if let x = env.decodeBody(SessionActivityBody.self) {
                 mutateSession(x.botId, x.sessionKey) { s in
                     s.lastActivity = x.kind
-                    if x.kind == "turnStart" { s.streamingText = "" }
+                    if x.kind == "turnStart" {
+                        s.streamingText = ""
+                        s.streamingAssistant = nil
+                    }
                 }
             }
         case "session.reply":
@@ -90,6 +145,12 @@ public struct AppState: Sendable, Equatable {
                 mutateSession(x.botId, x.sessionKey) { s in
                     s.lastReply = x.text
                     s.lastActivity = "reply"
+                    // Fallback for drivers that only emit a final reply (no text
+                    // deltas): if no assistant output landed this turn, add it.
+                    if s.messages.last?.role == .user, !x.text.isEmpty {
+                        s.messages.append(ChatMessage(role: .assistant, text: x.text))
+                    }
+                    s.streamingAssistant = nil
                 }
             }
         case "error":
@@ -108,6 +169,16 @@ public struct AppState: Sendable, Equatable {
     private func botKey(_ botId: String?) -> String {
         let id = botId ?? ""
         return id.isEmpty ? "default" : id
+    }
+
+    /// Records a locally-sent user message as a bubble in the transcript (the
+    /// control bus doesn't echo our own outgoing message back as an event).
+    public mutating func appendUserMessage(botId: String?, sessionKey: String, text: String) {
+        mutateSession(botId, sessionKey) { s in
+            s.messages.append(ChatMessage(role: .user, text: text))
+            s.lastActivity = "sent"
+            s.streamingAssistant = nil
+        }
     }
 
     private mutating func mutateSession(_ botId: String?, _ sessionKey: String, _ f: (inout SessionView) -> Void) {

@@ -5,6 +5,12 @@ import XClawCore
 struct XClawApp: App {
     @State private var model = AppModel()
 
+    /// Forces a color scheme for UI preview screenshots (XCLAW_UI_PREVIEW=dark);
+    /// nil in normal use → follows the system appearance.
+    static var previewScheme: ColorScheme? {
+        ProcessInfo.processInfo.environment["XCLAW_UI_PREVIEW"] == "dark" ? .dark : nil
+    }
+
     init() {
         // Start the core on launch — a menu-bar (LSUIElement) app may never open
         // a window, so we can't rely on a view's onAppear to boot the daemon.
@@ -17,13 +23,14 @@ struct XClawApp: App {
         MenuBarExtra {
             MenuBarContent(model: model)
         } label: {
-            Image(systemName: model.connected ? "bolt.horizontal.circle.fill" : "bolt.horizontal.circle")
+            MenuBarLabel(model: model)
         }
         .menuBarExtraStyle(.window)
 
         Window("XClaw", id: "console") {
             ConsoleView(model: model)
                 .onAppear { if model.coreState == "stopped" { model.start() } }
+                .preferredColorScheme(Self.previewScheme)
         }
         .defaultSize(width: 880, height: 600)
         .windowToolbarStyle(.unified)
@@ -38,6 +45,21 @@ struct XClawApp: App {
 }
 
 // MARK: - Menu bar popover
+
+/// The menu-bar status icon. In UI-preview mode it also opens the console on
+/// launch (the `Window` scene won't auto-open behind a `MenuBarExtra`).
+private struct MenuBarLabel: View {
+    @Bindable var model: AppModel
+    @Environment(\.openWindow) private var openWindow
+    var body: some View {
+        Image(systemName: model.connected ? "bolt.horizontal.circle.fill" : "bolt.horizontal.circle")
+            .onAppear {
+                if ProcessInfo.processInfo.environment["XCLAW_UI_PREVIEW"] != nil {
+                    openWindow(id: "console")
+                }
+            }
+    }
+}
 
 /// Menu-bar dropdown — a small status card with quick actions. Uses
 /// `@Environment(\.openWindow)` to surface the console window.
@@ -184,16 +206,25 @@ struct ConsoleView: View {
                     Button("Restart now") { model.applyConfigAndRestart() }
                 }
             }
-            sessionList
+            transcript
         }
         .safeAreaInset(edge: .bottom, spacing: 0) { composer }
-        .navigationTitle(model.selectedBotID ?? "XClaw")
-        .navigationSubtitle(statusSubtitle)
         .toolbar {
+            ToolbarItem(placement: .principal) {
+                HStack(spacing: 6) {
+                    Image(systemName: model.connected ? "circle.fill" : "circle")
+                        .font(.system(size: 7))
+                        .foregroundStyle(model.connected ? Color.green : Color.secondary)
+                    Text(model.selectedBotID ?? "XClaw")
+                        .font(.headline)
+                    Text("· \(statusSubtitle)")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("\(model.selectedBotID ?? "XClaw"), \(statusSubtitle)")
+            }
             ToolbarItemGroup(placement: .primaryAction) {
-                Image(systemName: model.connected ? "bolt.horizontal.circle.fill" : "bolt.horizontal.circle")
-                    .foregroundStyle(model.connected ? Color.green : Color.secondary)
-                    .help(model.connected ? "Bus connected" : "Bus disconnected")
                 Button { model.reset() } label: {
                     Image(systemName: "eraser.line.dashed")
                 }
@@ -208,40 +239,63 @@ struct ConsoleView: View {
 
     private var statusSubtitle: String {
         switch model.coreState {
-        case "needs-config": return "Needs configuration"
-        default: return model.connected ? "Connected" : model.coreState
+        case "needs-config": return "needs configuration"
+        default: return model.connected ? "connected" : model.coreState
         }
     }
 
-    private var sessionList: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 12) {
-                if let err = model.lastError, !err.isEmpty {
-                    Label(err, systemImage: "exclamationmark.triangle.fill")
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(10)
-                        .background(.red.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                }
-                if model.sessions.isEmpty {
-                    ContentUnavailableView(
-                        "No Sessions",
-                        systemImage: "bubble.left.and.bubble.right",
-                        description: Text("Send a message below to start a conversation.")
-                    )
-                    .padding(.top, 60)
-                } else {
-                    ForEach(model.sessions, id: \.sessionKey) { s in
-                        SessionRow(session: s)
+    private var transcript: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 10) {
+                    if let err = model.lastError, !err.isEmpty {
+                        Label(err, systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(10)
+                            .background(.red.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    }
+
+                    let sessions = model.sessions
+                    if sessions.isEmpty {
+                        ContentUnavailableView(
+                            "No Conversations",
+                            systemImage: "bubble.left.and.bubble.right",
+                            description: Text("Send a message below to talk to the agent.")
+                        )
+                        .padding(.top, 60)
+                    } else {
+                        ForEach(sessions) { session in
+                            if sessions.count > 1 {
+                                Text(session.sessionKey)
+                                    .font(.caption.weight(.medium))
+                                    .foregroundStyle(.secondary)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.top, 6)
+                            }
+                            ForEach(session.messages) { msg in
+                                ChatBubble(message: msg)
+                            }
+                            if session.outputTokens > 0 {
+                                Text("\(session.inputTokens) in · \(session.outputTokens) out")
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                                    .frame(maxWidth: .infinity, alignment: .center)
+                            }
+                        }
+                        Color.clear.frame(height: 1).id("bottom")
                     }
                 }
+                .padding(16)
+                .animation(.smooth, value: model.sessions)
             }
-            .padding(16)
-            .animation(.smooth, value: model.sessions)
+            .scrollContentBackground(.hidden)
+            .onChange(of: model.sessions) { _, _ in
+                withAnimation(.smooth) { proxy.scrollTo("bottom", anchor: .bottom) }
+            }
         }
-        .scrollContentBackground(.hidden)
     }
 
     private var canSend: Bool {
@@ -309,65 +363,51 @@ private struct InfoBanner<Trailing: View>: View {
     }
 }
 
-/// One session rendered as a clean card: header (key + activity), the agent's
-/// text, an optional tool chip, and a token-usage footer.
-struct SessionRow: View {
-    let session: AppState.SessionView
-
-    private var bodyText: String {
-        session.streamingText.isEmpty ? session.lastReply : session.streamingText
-    }
+/// One message rendered as a chat bubble: user (trailing, accent), assistant
+/// (leading, surface), or a centered tool-call chip.
+struct ChatBubble: View {
+    let message: AppState.ChatMessage
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                Image(systemName: "person.crop.circle")
-                    .foregroundStyle(.tint)
-                Text(session.sessionKey)
-                    .font(.subheadline.weight(.semibold))
-                Spacer()
-                if !session.lastActivity.isEmpty {
-                    Text(session.lastActivity)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 2)
-                        .background(.quaternary, in: Capsule())
-                }
-            }
-
-            if !bodyText.isEmpty {
-                Text(bodyText)
-                    .font(.callout)
-                    .foregroundStyle(.primary)
+        switch message.role {
+        case .user:
+            HStack {
+                Spacer(minLength: 48)
+                Text(message.text)
                     .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .foregroundStyle(.white)
+                    .padding(.vertical, 8)
+                    .padding(.horizontal, 12)
+                    .background(Color.accentColor,
+                                in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             }
-
-            if !session.lastTool.isEmpty {
-                Label(session.lastTool, systemImage: "wrench.and.screwdriver.fill")
+        case .assistant:
+            HStack {
+                Text(message.text)
+                    .textSelection(.enabled)
+                    .foregroundStyle(.primary)
+                    .frame(maxWidth: 560, alignment: .leading)
+                    .padding(.vertical, 8)
+                    .padding(.horizontal, 12)
+                    .background(Color(nsColor: .controlBackgroundColor),
+                                in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .stroke(.quaternary, lineWidth: 1)
+                    )
+                Spacer(minLength: 48)
+            }
+        case .tool:
+            HStack {
+                Spacer()
+                Label(message.text, systemImage: "wrench.and.screwdriver.fill")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
+                    .padding(.vertical, 4)
+                    .padding(.horizontal, 10)
                     .background(.quaternary, in: Capsule())
-            }
-
-            if session.outputTokens > 0 {
-                Text("\(session.inputTokens) in · \(session.outputTokens) out")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                Spacer()
             }
         }
-        .padding(13)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(nsColor: .controlBackgroundColor),
-                    in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(.quaternary, lineWidth: 1)
-        )
-        .shadow(color: .black.opacity(0.05), radius: 3, y: 1)
-        .accessibilityElement(children: .combine)
     }
 }

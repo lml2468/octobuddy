@@ -36,6 +36,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (material/border/shadow) and a clear type hierarchy, a chat-style composer
   (material bar + circular accent send button), material info banners, and a
   proper menu-bar popover (`.menuBarExtraStyle(.window)`) with hoverable actions.
+- macOS app console is now a **chat transcript**: each turn renders as bubbles
+  (user trailing/accent, assistant leading/surface, tool calls as centered
+  chips) instead of per-session status cards, with the bot name + connection
+  status moved into the window title bar and auto-scroll to the latest message.
+  `AppState` gained a per-session message history; the GUI echoes its own sent
+  messages locally (the bus doesn't return them). A `#if DEBUG`/env preview seam
+  (`XCLAW_UI_PREVIEW`) renders mock data for screenshots without a daemon.
 
 ### Fixed
 - The router's per-session lock map and per-user/per-session rate-limit buckets

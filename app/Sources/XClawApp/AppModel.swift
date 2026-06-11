@@ -43,6 +43,18 @@ final class AppModel {
     func start() {
         CorePaths.ensureSupportDir()
 
+#if DEBUG
+        // UI preview/screenshot mode: seed mock data, skip the daemon/bus.
+        if ProcessInfo.processInfo.environment["XCLAW_UI_PREVIEW"] != nil {
+            state = .preview()
+            connected = true
+            coreState = "running (preview)"
+            publishBots()
+            selectedBotID = "main"
+            return
+        }
+#endif
+
         guard let bin = CorePaths.resolveBinary() else {
             coreState = "error"
             lastError = "xclawd binary not found (set XCLAWD_BIN or build core)"
@@ -97,6 +109,9 @@ final class AppModel {
         do {
             try client.send(type: "session.send",
                             body: SessionSendBody(uid: localUID, text: trimmed, botId: selectedBotID))
+            // Echo our own message into the transcript (the bus doesn't send it back).
+            state.appendUserMessage(botId: selectedBotID, sessionKey: localUID, text: trimmed)
+            publishBots()
         } catch {
             lastError = "send failed: \(error)"
         }

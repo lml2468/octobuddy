@@ -141,3 +141,52 @@ func appStateIgnoresNonEventEnvelopes() throws {
     state.apply(resp)
     #expect(state.bots.isEmpty)
 }
+
+// MARK: - chat transcript (bubble) construction
+
+private func ev(_ type: String, _ json: String) -> Envelope {
+    try! ControlCodec.decode(Data(#"{"kind":"event","type":""#.utf8) + Data(type.utf8)
+        + Data(#"","body":"#.utf8) + Data(json.utf8) + Data("}".utf8))
+}
+
+@Test
+func transcriptUserEchoThenStreamedAssistantBubble() {
+    var s = AppState()
+    s.appendUserMessage(botId: "b", sessionKey: "u1", text: "hi there")
+    s.apply(ev("session.activity", #"{"botId":"b","sessionKey":"u1","kind":"turnStart"}"#))
+    s.apply(ev("session.text", #"{"botId":"b","sessionKey":"u1","delta":"Hel"}"#))
+    s.apply(ev("session.text", #"{"botId":"b","sessionKey":"u1","delta":"lo!"}"#))
+
+    let msgs = s.bots["b"]?.sessions["u1"]?.messages ?? []
+    #expect(msgs.count == 2)
+    #expect(msgs[0].role == .user && msgs[0].text == "hi there")
+    // The two deltas accumulate into ONE assistant bubble.
+    #expect(msgs[1].role == .assistant && msgs[1].text == "Hello!")
+}
+
+@Test
+func transcriptToolBreaksBubbleIntoTwo() {
+    var s = AppState()
+    s.apply(ev("session.activity", #"{"botId":"b","sessionKey":"u1","kind":"turnStart"}"#))
+    s.apply(ev("session.text", #"{"botId":"b","sessionKey":"u1","delta":"Checking."}"#))
+    s.apply(ev("session.tool", #"{"botId":"b","sessionKey":"u1","name":"Bash","params":"ls"}"#))
+    s.apply(ev("session.text", #"{"botId":"b","sessionKey":"u1","delta":"Done."}"#))
+
+    let msgs = s.bots["b"]?.sessions["u1"]?.messages ?? []
+    #expect(msgs.map(\.role) == [.assistant, .tool, .assistant])
+    #expect(msgs[0].text == "Checking.")
+    #expect(msgs[1].text.contains("Bash"))
+    #expect(msgs[2].text == "Done.")
+}
+
+@Test
+func transcriptReplyFallbackWhenNoDeltas() {
+    var s = AppState()
+    s.appendUserMessage(botId: "b", sessionKey: "u1", text: "ping")
+    // A driver that emits only a final reply (no text deltas).
+    s.apply(ev("session.reply", #"{"botId":"b","sessionKey":"u1","text":"pong"}"#))
+
+    let msgs = s.bots["b"]?.sessions["u1"]?.messages ?? []
+    #expect(msgs.count == 2)
+    #expect(msgs[1].role == .assistant && msgs[1].text == "pong")
+}
