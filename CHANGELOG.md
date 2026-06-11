@@ -50,6 +50,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Chat affordances: each bubble reveals a timestamp + copy button on hover; when
   a bot has more than one session, a segmented session picker switches between
   them (single session renders directly).
+- App icon: a generated graphite/chat-bubbles `AppIcon.icns` (reproducible via
+  `app/Packaging/make-appicon.sh`), embedded by the packager and referenced from
+  the bundle's `Info.plist`.
 
 ### Fixed
 - The router's per-session lock map and per-user/per-session rate-limit buckets

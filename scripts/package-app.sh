@@ -58,6 +58,14 @@ cp "$app_bin" "$bundle_dir/Contents/MacOS/XClawApp"
 cp "$xclawd_bin" "$bundle_dir/Contents/Helpers/xclawd"
 chmod +x "$bundle_dir/Contents/MacOS/XClawApp" "$bundle_dir/Contents/Helpers/xclawd"
 
+# App icon (generate with app/Packaging/make-appicon.sh).
+app_icon="$repo_root/app/Packaging/AppIcon.icns"
+icon_key=""
+if [[ -f "$app_icon" ]]; then
+    cp "$app_icon" "$bundle_dir/Contents/Resources/AppIcon.icns"
+    icon_key=$'\n    <key>CFBundleIconFile</key><string>AppIcon</string>'
+fi
+
 cat > "$bundle_dir/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -65,7 +73,7 @@ cat > "$bundle_dir/Contents/Info.plist" <<EOF
 <dict>
     <key>CFBundleDevelopmentRegion</key><string>en</string>
     <key>CFBundleDisplayName</key><string>$app_name</string>
-    <key>CFBundleExecutable</key><string>XClawApp</string>
+    <key>CFBundleExecutable</key><string>XClawApp</string>$icon_key
     <key>CFBundleIdentifier</key><string>$bundle_id</string>
     <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
     <key>CFBundleName</key><string>$app_name</string>
