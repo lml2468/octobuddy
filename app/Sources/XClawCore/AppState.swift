@@ -28,10 +28,21 @@ public struct AppState: Sendable, Equatable {
         public var messages: [ChatMessage] = []
         /// Id of the assistant bubble currently being streamed (nil between turns).
         public var streamingAssistant: UUID?
+        /// Index of that bubble in `messages`, kept in lockstep with
+        /// `streamingAssistant` so text deltas append in O(1) (no per-token
+        /// `firstIndex` scan — a hot-path cost during long streamed replies).
+        public var streamingAssistantIndex: Int?
         /// True between sending a message and the agent's first output (drives a
         /// "typing…" indicator).
         public var awaitingReply: Bool = false
         public var id: String { sessionKey }
+
+        /// Ends the current streaming assistant bubble (resets id + index in
+        /// lockstep). Call wherever a turn boundary closes the bubble.
+        public mutating func clearStreaming() {
+            streamingAssistant = nil
+            streamingAssistantIndex = nil
+        }
     }
 
     public struct BotView: Sendable, Equatable, Identifiable {
@@ -122,14 +133,22 @@ public struct AppState: Sendable, Equatable {
                     s.streamingText += x.delta
                     s.lastActivity = "text"
                     s.awaitingReply = false
-                    // Extend the current streaming assistant bubble, or start one.
-                    if let sid = s.streamingAssistant,
-                       let i = s.messages.firstIndex(where: { $0.id == sid }) {
-                        s.messages[i].text += x.delta
+                    // Extend the current streaming assistant bubble via its tracked
+                    // index (O(1)); fall back to a scan only if the index drifted
+                    // (defensive — effectively never hit). Otherwise start a bubble.
+                    if let sid = s.streamingAssistant {
+                        if let i = s.streamingAssistantIndex,
+                           i < s.messages.count, s.messages[i].id == sid {
+                            s.messages[i].text += x.delta
+                        } else if let i = s.messages.firstIndex(where: { $0.id == sid }) {
+                            s.messages[i].text += x.delta
+                            s.streamingAssistantIndex = i
+                        }
                     } else {
                         let m = ChatMessage(role: .assistant, text: x.delta)
                         s.messages.append(m)
                         s.streamingAssistant = m.id
+                        s.streamingAssistantIndex = s.messages.count - 1
                     }
                 }
             }
@@ -142,7 +161,7 @@ public struct AppState: Sendable, Equatable {
                     let label = x.params.isEmpty ? x.name : "\(x.name) \(x.params)"
                     s.messages.append(ChatMessage(role: .tool, text: label))
                     // A tool call ends the current text bubble; later text starts a new one.
-                    s.streamingAssistant = nil
+                    s.clearStreaming()
                 }
             }
         case "session.usage":
@@ -158,7 +177,7 @@ public struct AppState: Sendable, Equatable {
                     s.lastActivity = x.kind
                     if x.kind == "turnStart" {
                         s.streamingText = ""
-                        s.streamingAssistant = nil
+                        s.clearStreaming()
                         s.awaitingReply = true
                     } else if x.kind == "turnDone" {
                         s.awaitingReply = false
@@ -176,7 +195,7 @@ public struct AppState: Sendable, Equatable {
                     if s.messages.last?.role == .user, !x.text.isEmpty {
                         s.messages.append(ChatMessage(role: .assistant, text: x.text))
                     }
-                    s.streamingAssistant = nil
+                    s.clearStreaming()
                 }
             }
         case "error":
@@ -203,7 +222,7 @@ public struct AppState: Sendable, Equatable {
         mutateSession(botId, sessionKey) { s in
             s.messages.append(ChatMessage(role: .user, text: text))
             s.lastActivity = "sent"
-            s.streamingAssistant = nil
+            s.clearStreaming()
             s.awaitingReply = true
         }
     }

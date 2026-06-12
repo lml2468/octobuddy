@@ -30,6 +30,16 @@ enum CoreUIState: Equatable {
     }
 }
 
+/// A lean, structural summary of one bot for the sidebar. It changes only on
+/// membership/connection/error events — never on streamed text — so the sidebar
+/// is not invalidated per token (the core of the freeze fix).
+struct BotRosterItem: Identifiable, Equatable, Sendable {
+    let id: String
+    var connected: Bool
+    var lastError: String?
+    var sessionCount: Int
+}
+
 /// Central app state: owns the CoreSupervisor (xclawd lifecycle) and the
 /// ControlClient (the bus), folds the inbound event stream into an AppState on
 /// the main actor, and exposes everything the SwiftUI views render. The XClaw
@@ -43,6 +53,25 @@ final class AppModel {
     var bots: [AppState.BotView] = []
     var selectedBotID: String?
     var lastError: String?
+
+    /// Lean structural roster for the sidebar (no per-token churn).
+    var roster: [BotRosterItem] = []
+    /// Selected conversation (session) within the selected bot.
+    var selectedSessionKey: String?
+    /// Bot ids whose transcript history is currently being fetched (drives the
+    /// loading skeleton). Cleared when the history response lands.
+    var historyLoadingBots: Set<String> = []
+
+    /// The selected bot's subtree, derived from the published `bots` tree (which
+    /// refreshes at ~30fps during streaming). Computed — no per-token storage.
+    var currentBot: AppState.BotView? { bots.first { $0.id == selectedBotID } }
+
+    /// The selected conversation, falling back to the bot's first session.
+    var currentSession: AppState.SessionView? {
+        guard let b = currentBot else { return nil }
+        let ss = b.sortedSessions
+        return ss.first { $0.sessionKey == selectedSessionKey } ?? ss.first
+    }
 
     /// Bot-configuration editor state (Settings). Separate concern from the
     /// runtime connection/supervision this model owns.
@@ -69,6 +98,14 @@ final class AppModel {
     /// The DM uid used for messages sent from this GUI.
     @ObservationIgnored let localUID = "gui-user"
 
+    // Coalesced UI publishing: inbound events fold into `state` at full speed,
+    // but we re-publish to SwiftUI at most once per `flushInterval` (~30fps),
+    // so a streamed reply of hundreds of tokens collapses to ≤1 publish/frame.
+    @ObservationIgnored private var rosterDirty = false
+    @ObservationIgnored private var transcriptDirty = false
+    @ObservationIgnored private var flushScheduled = false
+    @ObservationIgnored private let flushInterval: Duration = .milliseconds(33)
+
     /// Boots the core and connects the control bus. Defaults to multi-bot config
     /// mode when ~/.xclaw/config.json exists; otherwise surfaces a needs-config
     /// state (the app shouldn't silently run an empty single-bot daemon).
@@ -90,8 +127,9 @@ final class AppModel {
             ]
             connected = true
             coreState = .preview
-            publishBots()
             selectedBotID = "main"
+            rosterDirty = true; transcriptDirty = true
+            flush()
             return
         }
 #endif
@@ -151,6 +189,9 @@ final class AppModel {
         // over).
         historyLoaded.removeAll()
         pendingHistory.removeAll()
+        historyLoadingBots.removeAll()
+        // Publish any pending coalesced state so the final transcript lands.
+        flush()
     }
 
     /// Restarts the core, fully stopping the current daemon (and waiting for it
@@ -173,26 +214,20 @@ final class AppModel {
     func send(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let client else { return }
-        do {
-            try client.send(type: "session.send",
-                            body: SessionSendBody(uid: localUID, text: trimmed, botId: selectedBotID))
-            // Echo our own message into the transcript (the bus doesn't send it back).
-            state.appendUserMessage(botId: selectedBotID, sessionKey: localUID, text: trimmed)
-            publishBots()
-        } catch {
-            lastError = "send failed: \(error)"
-        }
+        // Non-blocking send: the socket write runs on the client's write queue so
+        // a full kernel buffer can't beachball the main actor.
+        client.sendAsync(type: "session.send",
+                         body: SessionSendBody(uid: localUID, text: trimmed, botId: selectedBotID))
+        // Echo our own message into the transcript (the bus doesn't send it back).
+        state.appendUserMessage(botId: selectedBotID, sessionKey: localUID, text: trimmed)
+        markTranscriptDirty()
     }
 
     /// Clears the selected bot's GUI session resume mapping.
     func reset() {
         guard let client else { return }
-        do {
-            try client.send(type: "session.reset",
-                            body: SessionSendBody(uid: localUID, text: "", botId: selectedBotID))
-        } catch {
-            Log.app.error("reset failed: \(error.localizedDescription, privacy: .public)")
-        }
+        client.sendAsync(type: "session.reset",
+                         body: SessionSendBody(uid: localUID, text: "", botId: selectedBotID))
     }
 
     // MARK: - private
@@ -288,12 +323,14 @@ final class AppModel {
     private func requestHistories(on c: ControlClient, for botIDs: [String]) {
         for id in botIDs where !historyLoaded.contains(id) {
             historyLoaded.insert(id)
+            historyLoadingBots.insert(id)
             do {
                 let reqID = try c.send(type: "session.history",
                                        body: SessionHistoryBody(sessionKey: localUID, limit: 200, botId: id))
                 pendingHistory[reqID] = (botId: id, sessionKey: localUID)
             } catch {
                 historyLoaded.remove(id)
+                historyLoadingBots.remove(id)
                 Log.app.error("session.history request failed: \(error.localizedDescription, privacy: .public)")
             }
         }
@@ -302,8 +339,10 @@ final class AppModel {
     /// Folds a session.history response into the transcript for the session it
     /// was requested for (matched via the correlated command id).
     private func applyHistory(_ env: Envelope) {
-        guard let id = env.id, let target = pendingHistory.removeValue(forKey: id),
-              let history = env.decodeBody([HistoryMessage].self) else { return }
+        guard let id = env.id, let target = pendingHistory.removeValue(forKey: id) else { return }
+        historyLoadingBots.remove(target.botId)
+        markTranscriptDirty()
+        guard let history = env.decodeBody([HistoryMessage].self) else { return }
         let msgs: [AppState.ChatMessage] = history.compactMap { h in
             let role: AppState.ChatMessage.Role? =
                 h.role == "user" ? .user : (h.role == "assistant" ? .assistant : nil)
@@ -312,7 +351,7 @@ final class AppModel {
                                         timestamp: Date(timeIntervalSince1970: TimeInterval(h.ts)))
         }
         state.loadHistory(botId: target.botId, sessionKey: target.sessionKey, messages: msgs)
-        publishBots()
+        markTranscriptDirty()
     }
 
     private func startBotPolling(on c: ControlClient) {
@@ -337,7 +376,13 @@ final class AppModel {
                 switch env.kind {
                 case .event:
                     self.state.apply(env)
-                    self.publishBots()
+                    // Route to the right (coalesced) publish: status/error touch the
+                    // sidebar roster; session.* events only touch the transcript.
+                    if env.type == "bot.status" || env.type == "error" {
+                        self.markRosterDirty()
+                    } else {
+                        self.markTranscriptDirty()
+                    }
                 case .response where env.type == "bots.list":
                     if let infos = env.decodeBody([BotInfo].self) {
                         self.state.setBots(infos)
@@ -349,7 +394,7 @@ final class AppModel {
                         } else if self.selectedBotID == nil {
                             self.selectedBotID = infos.first?.id
                         }
-                        self.publishBots()
+                        self.markRosterDirty()
                         self.requestHistories(on: c, for: infos.map(\.id))
                     }
                 case .response where env.type == "session.history":
@@ -363,11 +408,39 @@ final class AppModel {
         }
     }
 
-    private func publishBots() {
-        bots = state.sortedBots
-        if selectedBotID == nil {
-            selectedBotID = bots.first?.id
+    // MARK: - coalesced publishing
+
+    private func markRosterDirty() { rosterDirty = true; scheduleFlush() }
+    private func markTranscriptDirty() { transcriptDirty = true; scheduleFlush() }
+
+    /// Arms a single deferred flush (~30fps). Repeated marks within the window
+    /// collapse into one publish, so hundreds of streamed tokens don't each
+    /// trigger a SwiftUI re-render.
+    private func scheduleFlush() {
+        guard !flushScheduled else { return }
+        flushScheduled = true
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: self?.flushInterval ?? .milliseconds(33))
+            self?.flush()
         }
+    }
+
+    /// Publishes pending state to SwiftUI: re-publishes the bot tree at most once
+    /// per call, and refreshes the lean `roster` only when structure/status
+    /// changed. `currentBot` tracks the selection for the (Stage-4) detail view.
+    private func flush() {
+        flushScheduled = false
+        guard rosterDirty || transcriptDirty else { return }
+        bots = state.sortedBots
+        if rosterDirty {
+            roster = bots.map {
+                BotRosterItem(id: $0.id, connected: $0.connected,
+                              lastError: $0.lastError, sessionCount: $0.sessions.count)
+            }
+            if selectedBotID == nil { selectedBotID = bots.first?.id }
+        }
+        rosterDirty = false
+        transcriptDirty = false
     }
 
     // MARK: - Config editing

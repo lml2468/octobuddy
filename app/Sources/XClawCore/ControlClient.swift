@@ -19,6 +19,10 @@ import Darwin
 public final class ControlClient: Sendable {
     private let path: String
     private let queue = DispatchQueue(label: "app.xclaw.control.read")
+    /// Dedicated write queue so a blocking `write(2)` never runs on the caller's
+    /// thread (the main actor). Separate from the read queue, which is parked in
+    /// a blocking `read(2)`. Writes are FIFO here, preserving command order.
+    private let writeQueue = DispatchQueue(label: "app.xclaw.control.write")
     private let continuation: AsyncStream<Envelope>.Continuation
     public let events: AsyncStream<Envelope>
 
@@ -114,6 +118,30 @@ public final class ControlClient: Sendable {
         let env = try ControlCodec.command(id: id, type: type, body: body)
         let line = try ControlCodec.encode(env)
         try writeAll(line, fd: fd)
+        return id
+    }
+
+    /// Like `send`, but performs the blocking socket write on `writeQueue` so the
+    /// caller (typically the main actor) never blocks on `write(2)` if the kernel
+    /// send buffer is full. Encoding + id allocation happen synchronously and the
+    /// id is returned immediately. A write failure breaks the connection via the
+    /// read loop (next `read` fails → stream finishes), which the UI reflects —
+    /// hence no throw. Use this on the UI hot path; keep `send` for probe/tests.
+    @discardableResult
+    public func sendAsync<B: Encodable>(type: String, body: B) -> String {
+        let id = nextID()
+        let fd = mutable.withLock { $0.fd }
+        guard fd >= 0 else { return id }
+        do {
+            let env = try ControlCodec.command(id: id, type: type, body: body)
+            let line = try ControlCodec.encode(env)
+            writeQueue.async { [weak self] in
+                do { try self?.writeAll(line, fd: fd) }
+                catch { Log.control.error("async write failed: \(error.localizedDescription, privacy: .public)") }
+            }
+        } catch {
+            Log.control.error("sendAsync encode failed: \(error.localizedDescription, privacy: .public)")
+        }
         return id
     }
 

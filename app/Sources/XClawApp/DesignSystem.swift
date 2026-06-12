@@ -4,10 +4,16 @@ import AppKit
 // MARK: - Brand
 
 extension Color {
-    /// XClaw brand accent, sampled from the app icon's ocean-blue gradient.
-    /// Drives the app-wide `.tint` and the chat/compose accents so the GUI reads
-    /// as the same product as the icon.
-    static let brand = Color(.sRGB, red: 0.20, green: 0.50, blue: 0.95, opacity: 1)
+    /// XClaw brand accent — adaptive light/dark, defined in code (not an asset
+    /// catalog) so it resolves identically in `swift build` dev runs and packaged
+    /// builds. Sampled from the app icon's ocean-blue; the dark variant is
+    /// brighter for contrast on dark surfaces.
+    static let brand = Color(nsColor: NSColor(name: "XClawBrand") { appearance in
+        let isDark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        return isDark
+            ? NSColor(srgbRed: 0.40, green: 0.66, blue: 1.00, alpha: 1)
+            : NSColor(srgbRed: 0.16, green: 0.46, blue: 0.92, alpha: 1)
+    })
 }
 
 // MARK: - Liquid Glass + depth
@@ -31,6 +37,112 @@ extension View {
         self
             .shadow(color: .black.opacity(0.07), radius: 8, y: 3)
             .shadow(color: .black.opacity(0.04), radius: 2, y: 1)
+    }
+}
+
+// MARK: - Theme tokens
+
+enum AppTheme {
+    /// The global motion curve — hovers, selections, insertions, focus.
+    static let spring = Animation.spring(response: 0.4, dampingFraction: 0.8)
+}
+
+// MARK: - Typography
+
+/// App type ramp: rounded, slightly-tracked titles per the design spec. Apply
+/// via `.appFont(.title)`. Use `.monospacedDigit()` at the call site for counts.
+enum AppFont {
+    case largeTitle, title, headline, body, callout, caption
+
+    var font: Font {
+        switch self {
+        case .largeTitle: return .system(size: 26, weight: .bold, design: .rounded)
+        case .title:      return .system(size: 20, weight: .semibold, design: .rounded)
+        case .headline:   return .system(size: 15, weight: .semibold, design: .rounded)
+        case .body:       return .system(size: 13, weight: .regular)
+        case .callout:    return .system(size: 12, weight: .regular)
+        case .caption:    return .system(size: 11, weight: .regular)
+        }
+    }
+    var tracking: CGFloat {
+        switch self {
+        case .largeTitle, .title, .headline: return -0.2
+        default: return 0
+        }
+    }
+}
+
+extension View {
+    func appFont(_ f: AppFont) -> some View { font(f.font).tracking(f.tracking) }
+}
+
+// MARK: - Interaction modifiers
+
+extension View {
+    /// Focus ring: brand 2pt stroke + soft glow, spring-animated. For text inputs.
+    func focusRing(_ focused: Bool, cornerRadius: CGFloat = 9) -> some View {
+        overlay(
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .strokeBorder(Color.brand, lineWidth: focused ? 2 : 0)
+        )
+        .shadow(color: Color.brand.opacity(focused ? 0.30 : 0), radius: 4)
+        .animation(AppTheme.spring, value: focused)
+    }
+
+    /// Subtle hover lift (scale + spring); tracks its own hover state.
+    func hoverScale(_ scale: CGFloat = 1.02) -> some View { modifier(HoverScale(scale: scale)) }
+
+    /// Selected-row highlight pill that slides between rows via matchedGeometry.
+    @ViewBuilder
+    func selectionPill(_ selected: Bool, in namespace: Namespace.ID, cornerRadius: CGFloat = 8) -> some View {
+        background {
+            if selected {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(Color.brand.opacity(0.14))
+                    .matchedGeometryEffect(id: "selectionPill", in: namespace)
+            }
+        }
+    }
+
+    /// A small material capsule tag (11pt text in ultraThinMaterial).
+    func capsuleTag() -> some View {
+        appFont(.caption)
+            .padding(.horizontal, 8).padding(.vertical, 3)
+            .background(.ultraThinMaterial, in: Capsule())
+            .overlay(Capsule().strokeBorder(.white.opacity(0.12), lineWidth: 0.5))
+    }
+
+    /// Loading shimmer for skeleton placeholders.
+    func shimmering() -> some View { modifier(Shimmer()) }
+}
+
+private struct HoverScale: ViewModifier {
+    @State private var hovering = false
+    var scale: CGFloat = 1.02
+    func body(content: Content) -> some View {
+        content
+            .scaleEffect(hovering ? scale : 1)
+            .animation(AppTheme.spring, value: hovering)
+            .onHover { hovering = $0 }
+    }
+}
+
+private struct Shimmer: ViewModifier {
+    @State private var phase: CGFloat = -1
+    func body(content: Content) -> some View {
+        content.overlay(
+            GeometryReader { geo in
+                LinearGradient(colors: [.clear, .white.opacity(0.35), .clear],
+                               startPoint: .leading, endPoint: .trailing)
+                    .frame(width: geo.size.width * 0.6)
+                    .offset(x: geo.size.width * phase)
+                    .blendMode(.plusLighter)
+                    .allowsHitTesting(false)
+            }
+        )
+        .onAppear {
+            withAnimation(.linear(duration: 1.2).repeatForever(autoreverses: false)) { phase = 1.6 }
+        }
     }
 }
 

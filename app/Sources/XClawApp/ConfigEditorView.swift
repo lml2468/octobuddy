@@ -48,6 +48,9 @@ struct ConfigEditorView: View {
                 }
             }
             .frame(minWidth: 200)
+            .listStyle(.sidebar)
+            .scrollContentBackground(.hidden)
+            .background(.ultraThinMaterial)
             .toolbar {
                 ToolbarItem {
                     Button {
@@ -70,13 +73,20 @@ struct ConfigEditorView: View {
                 .id(sel) // rebuild cleanly when switching bots
             } else {
                 ContentUnavailableView {
-                    Label("No Bot Selected", systemImage: "person.crop.square.badge.plus")
+                    Label {
+                        Text("No Bot Selected").appFont(.title)
+                    } icon: {
+                        OctopusShape().fill(style: FillStyle(eoFill: true))
+                            .foregroundStyle(Color.brand)
+                            .frame(width: 48, height: 48)
+                    }
                 } description: {
                     Text("Select a bot on the left, or add one with +.")
+                        .appFont(.body).foregroundStyle(.secondary)
                 }
             }
         }
-        .frame(minWidth: 720, minHeight: 560)
+        .frame(minWidth: 820, minHeight: 560)
         .safeAreaInset(edge: .bottom) { footer }
     }
 
@@ -84,10 +94,10 @@ struct ConfigEditorView: View {
         HStack {
             if let err = config.error {
                 Label(err, systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption).foregroundStyle(.red).lineLimit(2)
+                    .appFont(.caption).foregroundStyle(.red).lineLimit(2)
             } else if config.needsRestart {
                 Label("Saved. Restart the core to apply.", systemImage: "checkmark.circle.fill")
-                    .font(.caption).foregroundStyle(.green)
+                    .appFont(.caption).foregroundStyle(.green)
             }
             Spacer()
             Button("Save") { config.save() }
