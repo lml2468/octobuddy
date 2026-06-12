@@ -180,6 +180,35 @@ func (g *GroupContext) ResolveMentions(channelID, text string) []string {
 	return out
 }
 
+// MemberMap returns a snapshot of the channel's displayName→uid map (the shape
+// mention-utils.ts's memberMap expects for @name fallback resolution). Returns
+// nil when the channel has no known members. The returned map is a copy, safe
+// to read without holding g.mu.
+func (g *GroupContext) MemberMap(channelID string) map[string]string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	src := g.nameToUID[channelID]
+	if len(src) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(src))
+	for name, uid := range src {
+		out[name] = uid
+	}
+	return out
+}
+
+// IsMember reports whether uid is a known member of the channel. Mirrors
+// GroupContext.isMember in cc-channel-octo: the best-effort membership predicate
+// resolveMentions uses to downgrade hallucinated structured-mention uids to
+// plain text. Only as fresh as the last roster/Push learn.
+func (g *GroupContext) IsMember(channelID, uid string) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	_, ok := g.uidToName[channelID][uid]
+	return ok
+}
+
 // LearnMember records a uid↔name mapping (e.g. from a member roster refresh).
 func (g *GroupContext) LearnMember(channelID, uid, name string) {
 	g.mu.Lock()

@@ -87,6 +87,28 @@ func (g *Gateway) WithGroupMD(l *groupmd.Loader) *Gateway {
 	return g
 }
 
+// MemberMap exposes the channel's displayName→uid roster snapshot (or nil) for
+// outbound @name mention resolution. Nil-safe: returns nil when no group context
+// is attached (e.g. DM-only deployments). Keeps the connector pointing at the
+// gateway rather than reaching into groupctx directly.
+func (g *Gateway) MemberMap(channelID string) map[string]string {
+	if g.groups == nil {
+		return nil
+	}
+	return g.groups.MemberMap(channelID)
+}
+
+// IsMember reports whether uid is a known member of the channel, used to
+// downgrade hallucinated structured mentions. Nil-safe: with no group context
+// every uid is treated as valid (the connector then trusts structured uids,
+// matching cc-channel-octo's "omit isValidUid" DM path).
+func (g *Gateway) IsMember(channelID, uid string) bool {
+	if g.groups == nil {
+		return true
+	}
+	return g.groups.IsMember(channelID, uid)
+}
+
 // WithSystemPrompt sets the operator-trusted system prompt (SOUL.md + AGENTS.md).
 func (g *Gateway) WithSystemPrompt(p string) *Gateway {
 	g.systemPrompt = p

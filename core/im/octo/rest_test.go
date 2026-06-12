@@ -51,7 +51,7 @@ func TestSendTextRequestShape(t *testing.T) {
 	defer srv.Close()
 
 	c := NewRESTClient(srv.URL, tok("bf_secret"))
-	res, err := c.SendText(context.Background(), "chan1", ChannelGroup, "hi there", []string{"u2"}, false)
+	res, err := c.SendText(context.Background(), "chan1", ChannelGroup, "hi there", []string{"u2"}, nil, false)
 	if err != nil {
 		t.Fatalf("send: %v", err)
 	}

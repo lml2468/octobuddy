@@ -487,29 +487,79 @@ func (c *Connector) maybeSendToolNotice(sessionKey string, ev agent.AgentEvent) 
 	if !ok {
 		return
 	}
-	if _, err := c.rest.SendText(c.ctx(), tgt.channelID, tgt.channelType, "🔧 Running "+label+"…", nil, false); err != nil {
+	if _, err := c.rest.SendText(c.ctx(), tgt.channelID, tgt.channelType, "🔧 Running "+label+"…", nil, nil, false); err != nil {
 		c.logf("send tool-progress for %s: %v", sessionKey, err)
 	}
 }
 
 // OnReply delivers the assembled assistant reply back to the originating
-// channel, split into <=3500-char segments (api/stream-relay parity). For a
-// persona clone replying as the grantor, the reply carries on_behalf_of so the
+// channel. It resolves @mentions (structured @[uid:name] + plain @name +
+// @all/@所有人) ONCE over the full text — so splitting can never break a mention
+// across segments — then splits into <=3500-UTF-16-unit segments, rebasing each
+// entity's offset to segment-local before sending (api/stream-relay parity). For
+// a persona clone replying as the grantor, each send carries on_behalf_of so the
 // server presents it as the grantor (openclaw OBO). It also stops the typing
-// heartbeat — the normal end-of-turn cleanup point, mirroring stream-relay.ts's
-// clearInterval in the deliver() finally block.
+// heartbeat — the end-of-turn cleanup point (stream-relay.ts deliver() finally).
+//
+// Empty reply → a no-response placeholder is sent instead of silently dropping
+// the turn (cc-channel-octo index.ts behavior).
 func (c *Connector) OnReply(sessionKey string, text string) {
 	c.stopTyping(sessionKey)
 	text = strings.TrimSpace(text)
-	if text == "" {
-		return
-	}
 	tgt, ok := c.target(sessionKey)
 	if !ok {
 		return
 	}
-	for _, seg := range splitMessage(text, 3500) {
-		if _, err := c.rest.SendTextAs(c.ctx(), tgt.channelID, tgt.channelType, seg, nil, false, tgt.onBehalfOf); err != nil {
+	if text == "" {
+		// No output from the agent: deliver a placeholder so the user isn't left
+		// hanging. No mentions on a fixed system string.
+		if _, err := c.rest.SendTextAs(c.ctx(), tgt.channelID, tgt.channelType, noResponseFallback, nil, nil, false, tgt.onBehalfOf); err != nil {
+			c.logf("send no-response fallback to %s: %v", sessionKey, err)
+		}
+		return
+	}
+
+	// Resolve mentions against the channel roster. Plain @name resolution and the
+	// member-validity downgrade only apply to group channels (DMs have no
+	// roster); for DMs memberMap is nil and structured uids are trusted
+	// (isValidUid=nil), matching cc-channel-octo's "omit memberMap/isValidUid in
+	// DMs" path.
+	var memberMap map[string]string
+	var isValidUid func(string) bool
+	if tgt.channelType == ChannelGroup && c.gateway != nil {
+		memberMap = c.gateway.MemberMap(tgt.channelID)
+		channelID := tgt.channelID
+		isValidUid = func(uid string) bool { return c.gateway.IsMember(channelID, uid) }
+	}
+	res := resolveMentions(text, memberMap, isValidUid)
+
+	// Protect each resolved @name span so splitMessageProtected won't cut through it.
+	ranges := make([]protectedRange, 0, len(res.mentionEntries))
+	for _, e := range res.mentionEntries {
+		ranges = append(ranges, protectedRange{start: e.Offset, end: e.Offset + e.Length})
+	}
+
+	mentionAllConsumed := false
+	for _, seg := range splitMessageProtected(res.finalContent, 3500, ranges) {
+		segStart := seg.start
+		segEnd := segStart + utf16Len(seg.text)
+		// Entities fully inside this segment, rebased to segment-local offsets.
+		var segEntities []MentionEntity
+		var segUids []string
+		for _, e := range res.mentionEntries {
+			if e.Offset >= segStart && e.Offset+e.Length <= segEnd {
+				segEntities = append(segEntities, MentionEntity{UID: e.UID, Offset: e.Offset - segStart, Length: e.Length})
+				segUids = append(segUids, e.UID)
+			}
+		}
+		// mentionAll applies to the FIRST segment only (stream-relay parity:
+		// avoids re-broadcasting @所有人 on every segment of a long reply).
+		useMentionAll := res.mentionAll && !mentionAllConsumed
+		if useMentionAll {
+			mentionAllConsumed = true
+		}
+		// SendTextAs carries on_behalf_of for a persona clone (empty otherwise).
+		if _, err := c.rest.SendTextAs(c.ctx(), tgt.channelID, tgt.channelType, seg.text, segUids, segEntities, useMentionAll, tgt.onBehalfOf); err != nil {
 			c.logf("send reply to %s: %v", sessionKey, err)
 		}
 	}
@@ -592,6 +642,10 @@ func (c *Connector) stopTyping(sessionKey string) {
 	tt.cancel()
 	<-tt.done
 }
+
+// noResponseFallback is sent when the agent produced no text (cc-channel-octo
+// index.ts) so the user gets a reply rather than silence.
+const noResponseFallback = "[No response generated. Please try rephrasing your question.]"
 
 func (c *Connector) target(sessionKey string) (replyTarget, bool) {
 	c.mu.Lock()

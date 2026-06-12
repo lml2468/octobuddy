@@ -77,25 +77,29 @@ type SendMessageResult struct {
 	MessageSeq  int    `json:"message_seq"`
 }
 
-// SendText posts a Text message to a channel (api.ts sendMessage). mentionUIDs
-// and mentionAll are optional.
-func (c *RESTClient) SendText(ctx context.Context, channelID string, channelType ChannelType, content string, mentionUIDs []string, mentionAll bool) (SendMessageResult, error) {
-	return c.SendTextAs(ctx, channelID, channelType, content, mentionUIDs, mentionAll, "")
+// SendText posts a Text message to a channel (api.ts sendMessage). mentionUIDs,
+// mentionEntities, and mentionAll are optional; the mention object is only
+// attached when at least one is present (stream-relay.ts sendMessage parity).
+func (c *RESTClient) SendText(ctx context.Context, channelID string, channelType ChannelType, content string, mentionUIDs []string, mentionEntities []MentionEntity, mentionAll bool) (SendMessageResult, error) {
+	return c.SendTextAs(ctx, channelID, channelType, content, mentionUIDs, mentionEntities, mentionAll, "")
 }
 
 // SendTextAs is SendText with an optional on_behalf_of grantor uid (openclaw OBO
 // relay). When onBehalfOf is non-empty, the server presents the message as the
 // grantor speaking (api-fetch.ts sendMessage `on_behalf_of`). An empty string
 // is identical to SendText.
-func (c *RESTClient) SendTextAs(ctx context.Context, channelID string, channelType ChannelType, content string, mentionUIDs []string, mentionAll bool, onBehalfOf string) (SendMessageResult, error) {
+func (c *RESTClient) SendTextAs(ctx context.Context, channelID string, channelType ChannelType, content string, mentionUIDs []string, mentionEntities []MentionEntity, mentionAll bool, onBehalfOf string) (SendMessageResult, error) {
 	payload := map[string]any{
 		"type":    int(MsgText),
 		"content": content,
 	}
-	if len(mentionUIDs) > 0 || mentionAll {
+	if len(mentionUIDs) > 0 || len(mentionEntities) > 0 || mentionAll {
 		mention := map[string]any{}
 		if len(mentionUIDs) > 0 {
 			mention["uids"] = mentionUIDs
+		}
+		if len(mentionEntities) > 0 {
+			mention["entities"] = mentionEntities
 		}
 		if mentionAll {
 			mention["all"] = 1
