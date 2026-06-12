@@ -7,6 +7,7 @@
 package groupctx
 
 import (
+	"sort"
 	"strings"
 	"sync"
 	"unicode/utf16"
@@ -202,6 +203,35 @@ func (g *GroupContext) learnMemberLocked(channelID, uid, name string) {
 	}
 	g.uidToName[channelID][uid] = name
 	g.nameToUID[channelID][name] = uid
+}
+
+// Member is a learned uid↔name pair for a channel.
+type Member struct {
+	UID  string
+	Name string
+}
+
+// Members returns the channel's learned roster (uid + sanitized name), sorted
+// by name then uid for deterministic output. Push learns members as messages
+// arrive; LearnMember can seed them from a roster refresh.
+func (g *GroupContext) Members(channelID string) []Member {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	m := g.uidToName[channelID]
+	if len(m) == 0 {
+		return nil
+	}
+	out := make([]Member, 0, len(m))
+	for uid, name := range m {
+		out = append(out, Member{UID: uid, Name: name})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Name != out[j].Name {
+			return out[i].Name < out[j].Name
+		}
+		return out[i].UID < out[j].UID
+	})
+	return out
 }
 
 func utf16Len(s string) int {

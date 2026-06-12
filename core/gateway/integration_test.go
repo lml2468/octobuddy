@@ -140,3 +140,71 @@ func TestLineLeadingForgeryEscaped(t *testing.T) {
 		t.Fatalf("line-leading role-label forgery not escaped:\n%s", prompt)
 	}
 }
+
+// TestGroupRosterInjectedIntoSystemPrompt verifies a GROUP turn injects the
+// learned roster + mention-format hint into SystemAppend, after the
+// non-overridable security prefix.
+func TestGroupRosterInjectedIntoSystemPrompt(t *testing.T) {
+	st := newTestStore(t)
+	drv := &fakeDriver{threadID: "t", reply: "ok"}
+	gc := groupctx.New(6000)
+	gw := New(drv, st, router.New(router.Config{MaxPerMinute: 100}), newCaptureSink()).
+		WithGroupContext(gc).
+		WithSystemPrompt("you are XClaw")
+
+	// alice is observed (learned) before bob triggers a turn.
+	gw.Observe(router.InboundMessage{
+		ChannelType: router.ChannelGroup, ChannelID: "c1", FromUID: "alice", FromName: "alice",
+		Text: "hello team",
+	})
+	_, err := gw.Handle(context.Background(), router.InboundMessage{
+		ChannelType: router.ChannelGroup, ChannelID: "c1", FromUID: "bob", FromName: "bob",
+		Text: "hi", Mentioned: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sys := drv.requests[0].SystemAppend
+	// Security prefix stays first and non-overridable.
+	if !strings.Contains(sys, "UNTRUSTED") {
+		t.Fatalf("security prefix missing:\n%s", sys)
+	}
+	secIdx := strings.Index(sys, "UNTRUSTED")
+	rosterIdx := strings.Index(sys, "[Group Members]")
+	if rosterIdx < 0 {
+		t.Fatalf("roster not injected into system prompt:\n%s", sys)
+	}
+	if rosterIdx < secIdx {
+		t.Fatalf("roster must come after the security prefix:\n%s", sys)
+	}
+	// Both observed members are inlined (alice and the triggering bob).
+	if !strings.Contains(sys, "alice (alice)") || !strings.Contains(sys, "bob (bob)") {
+		t.Fatalf("roster missing learned members:\n%s", sys)
+	}
+	// Structured-mention format hint present.
+	if !strings.Contains(sys, "ONE colon") {
+		t.Fatalf("mention-format hint missing:\n%s", sys)
+	}
+}
+
+// TestDMTurnHasNoRoster verifies DM turns never carry the group roster.
+func TestDMTurnHasNoRoster(t *testing.T) {
+	st := newTestStore(t)
+	drv := &fakeDriver{threadID: "t", reply: "ok"}
+	gc := groupctx.New(6000)
+	gw := New(drv, st, router.New(router.Config{MaxPerMinute: 100}), newCaptureSink()).
+		WithGroupContext(gc).
+		WithSystemPrompt("you are XClaw")
+
+	_, err := gw.Handle(context.Background(), router.InboundMessage{
+		ChannelType: router.ChannelDM, FromUID: "u1", FromName: "alice", Text: "hi",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sys := drv.requests[0].SystemAppend
+	if strings.Contains(sys, "[Group Members]") || strings.Contains(sys, "ONE colon") {
+		t.Fatalf("DM turn must not carry a roster:\n%s", sys)
+	}
+}

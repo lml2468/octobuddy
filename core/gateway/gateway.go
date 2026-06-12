@@ -197,13 +197,21 @@ func (g *Gateway) runTurn(ctx context.Context, sessionKey string, msg router.Inb
 		}
 	}
 
+	// For GROUP turns, inject the channel roster + structured-mention format as
+	// operator-trusted system context (gateway-authored, not user text). DMs get
+	// no roster. Computed here where the channel id is in scope.
+	var rosterPrefix string
+	if g.groups != nil && msg.ChannelType == router.ChannelGroup && msg.ChannelID != "" {
+		rosterPrefix = g.groups.MemberListPrefix(msg.ChannelID)
+	}
+
 	events, err := g.driver.Query(ctx, agent.Request{
 		Prompt:       prompt,
 		SessionID:    resumeID,
 		Cwd:          cwd,
 		MemoryDir:    memDir,
 		Model:        g.model,
-		SystemAppend: g.buildSystemPrompt(msg),
+		SystemAppend: g.buildSystemPrompt(msg, rosterPrefix),
 	})
 	if err != nil {
 		return err
@@ -240,18 +248,23 @@ func (g *Gateway) runTurn(ctx context.Context, sessionKey string, msg router.Inb
 }
 
 // buildSystemPrompt assembles the frozen system-prompt append: the
-// non-overridable security prefix, the operator-trusted SOUL/config prompt, then
-// (for group/thread turns only) the operator-authored [Group instructions] block
-// for this channel. The SecurityPrefix always stays first. (The driver's preset
-// base prompt is prepended by the agent CLI.)
+// non-overridable security prefix, the operator-trusted SOUL/config prompt,
+// then (for GROUP/thread turns only) the gateway-authored member roster +
+// mention-format hint and the operator-authored [Group instructions] block for
+// this channel. The SecurityPrefix always stays first and non-overridable. (The
+// driver's preset base prompt is prepended by the agent CLI.)
 //
-// Mirrors cc-channel-octo index.ts: [Group instructions] is injected only for
-// groups — DMs key on the peer uid, not a shared channel — and wrapped as
-// trustedText (agent-bridge.ts), being operator-authored.
-func (g *Gateway) buildSystemPrompt(msg router.InboundMessage) string {
+// rosterPrefix is "" for DMs and for groups with no learned members; when set it
+// is gateway-authored. [Group instructions] is injected only for groups — DMs
+// key on the peer uid, not a shared channel (mirrors cc-channel-octo index.ts).
+// Both are wrapped as safety.TrustedText, being gateway/operator-authored.
+func (g *Gateway) buildSystemPrompt(msg router.InboundMessage, rosterPrefix string) string {
 	parts := []safety.SafeText{safety.TrustedText(safety.SecurityPrefix)}
 	if g.systemPrompt != "" {
 		parts = append(parts, safety.TrustedText(g.systemPrompt))
+	}
+	if rosterPrefix != "" {
+		parts = append(parts, safety.TrustedText(rosterPrefix))
 	}
 	if g.groupMD != nil && msg.ChannelType == router.ChannelGroup && msg.ChannelID != "" {
 		if instr, ok := g.groupMD.Load(msg.ChannelID); ok {
