@@ -51,10 +51,11 @@ into driver-specific behavior; keep the dependency pointing at `agent`.
 Inbound message flows through (`core/gateway/gateway.go` `runTurn`):
 
 ```
-inbound → router (mention gate → sessionKey → size gate → rate limit → per-session lock)
-        → store.GetOrCreate → load resume id → [group-context injection]
-        → driver.Query → stream AgentEvents → sink.OnEvent → assemble reply
-        → persist assistant text + resume id → sink.OnReply
+inbound → router (mention/免@ gate → bot-loop guard → sessionKey → size gate → rate limit → per-session lock)
+        → store.GetOrCreate → load resume id → groupctx backfill + answered/new segmentation
+        → materialize attachments into cwd → buildSystemPrompt (SecurityPrefix + SOUL/AGENTS + roster + GROUP.md + persona)
+        → driver.Query → stream AgentEvents → sink.OnEvent (typing heartbeat / opt-in tool-progress) → assemble reply
+        → persist assistant text + resume id + reply cursor → sink.OnReply (mention resolution / persona voice)
 ```
 
 Key invariants to preserve:
@@ -78,6 +79,12 @@ Key invariants to preserve:
   Bypass is mandatory — there is no terminal to answer approval prompts, so any
   other mode hangs the turn. Tool/permission policy is intentionally NOT in
   `agent.Request`; it is a fixed claude-only invariant.
+- **Feature modules layered on the pipeline** (each cites its TS source in its
+  package doc): `core/cron/` — per-bot scheduled tasks, owner-gated
+  `cron.create/list/delete` over the control bus; `core/groupmd/` — operator
+  `<channelId>.md` → trusted `[Group instructions]`; `core/persona/` — OBO
+  persona-clone reply voice. Inbound media/markers, outbound @mention
+  resolution, threads, and typing/tool-progress all live in `core/im/octo/`.
 
 ## Security model (group chat / prompt injection)
 
@@ -104,9 +111,15 @@ store, gateway, driver, group-context, Octo connector, each under `~/.xclaw/<id>
   concatenated with `<id>/AGENTS.md` (behavior norms), passed as the
   operator-trusted append. Either may be omitted.
 - Each `bots[]` entry is `id` + `octoToken` and may override top-level
-  `apiUrl`/`agent`/`rateLimit`/`context` defaults.
+  `apiUrl`/`agent`/`rateLimit`/`context` defaults. Capability switches live under
+  `agent` (`cron`, `toolProgress`); the group-gating lists (`mentionFreeGroups`,
+  `knownBotUids`, `allowedBotUids`, `botBlocklist`) plus `groupConfigDir` and
+  `onBehalfOf` are top-level defaults a bot may override — a per-bot value
+  REPLACES the default. `core/config.example.json` is the canonical field list.
 - `core/config/` does slug + SSRF validation on URLs — keep that on any new
-  config field that holds a URL.
+  config field that holds a URL. `groupConfigDir` files are injected UNSANITIZED
+  as `[Group instructions]`, so config load rejects a dir at/under a bot's
+  `cwdBase` (else a user-driven agent could write its own future instructions).
 
 ## IM connector
 
@@ -115,6 +128,9 @@ AES-128-CBC key derivation, verified byte-identical to the upstream cc-channel
 reference) plus REST. Inbound → router; replies go out via REST. It is one
 connector behind the agent/IM-agnostic `router.InboundMessage` — the gateway
 neither knows nor cares which IM is attached.
+Beyond plain text it renders non-text payloads to markers, materializes inbound
+media/files into the session cwd, resolves outbound @mentions, runs the OBO
+persona relay + thread routing, and emits a 5 s typing heartbeat.
 
 ## Lineage
 
