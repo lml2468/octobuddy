@@ -18,6 +18,7 @@ import (
 
 	"github.com/lml2468/xclaw/core/agent"
 	"github.com/lml2468/xclaw/core/groupctx"
+	"github.com/lml2468/xclaw/core/groupmd"
 	"github.com/lml2468/xclaw/core/router"
 	"github.com/lml2468/xclaw/core/safety"
 	"github.com/lml2468/xclaw/core/sandbox"
@@ -44,6 +45,10 @@ type Gateway struct {
 	// Optional group-context (set via WithGroupContext). When set, group
 	// messages get a [Recent group messages] delta injected into the prompt.
 	groups *groupctx.GroupContext
+	// Optional per-conversation instruction loader (set via WithGroupMD). When
+	// set, group/thread turns get an operator-authored [Group instructions] block
+	// (from groupConfigDir/<channelId>.md) appended to the system prompt.
+	groupMD *groupmd.Loader
 	// Operator-trusted system prompt (assembled from SOUL.md + AGENTS.md).
 	// Appended after the non-overridable security prefix.
 	systemPrompt string
@@ -63,6 +68,14 @@ func New(d agent.Driver, st *store.Store, rt *router.Router, sink Sink) *Gateway
 // WithGroupContext enables group-context injection.
 func (g *Gateway) WithGroupContext(gc *groupctx.GroupContext) *Gateway {
 	g.groups = gc
+	return g
+}
+
+// WithGroupMD enables per-conversation [Group instructions] injection. The
+// loader reads operator-authored files from groupConfigDir; passing a nil or
+// empty-dir loader leaves injection off.
+func (g *Gateway) WithGroupMD(l *groupmd.Loader) *Gateway {
+	g.groupMD = l
 	return g
 }
 
@@ -190,7 +203,7 @@ func (g *Gateway) runTurn(ctx context.Context, sessionKey string, msg router.Inb
 		Cwd:          cwd,
 		MemoryDir:    memDir,
 		Model:        g.model,
-		SystemAppend: g.buildSystemPrompt(),
+		SystemAppend: g.buildSystemPrompt(msg),
 	})
 	if err != nil {
 		return err
@@ -227,12 +240,23 @@ func (g *Gateway) runTurn(ctx context.Context, sessionKey string, msg router.Inb
 }
 
 // buildSystemPrompt assembles the frozen system-prompt append: the
-// non-overridable security prefix followed by the operator-trusted SOUL/config
-// prompt. (The driver's preset base prompt is prepended by the agent CLI.)
-func (g *Gateway) buildSystemPrompt() string {
+// non-overridable security prefix, the operator-trusted SOUL/config prompt, then
+// (for group/thread turns only) the operator-authored [Group instructions] block
+// for this channel. The SecurityPrefix always stays first. (The driver's preset
+// base prompt is prepended by the agent CLI.)
+//
+// Mirrors cc-channel-octo index.ts: [Group instructions] is injected only for
+// groups — DMs key on the peer uid, not a shared channel — and wrapped as
+// trustedText (agent-bridge.ts), being operator-authored.
+func (g *Gateway) buildSystemPrompt(msg router.InboundMessage) string {
 	parts := []safety.SafeText{safety.TrustedText(safety.SecurityPrefix)}
 	if g.systemPrompt != "" {
 		parts = append(parts, safety.TrustedText(g.systemPrompt))
+	}
+	if g.groupMD != nil && msg.ChannelType == router.ChannelGroup && msg.ChannelID != "" {
+		if instr, ok := g.groupMD.Load(msg.ChannelID); ok {
+			parts = append(parts, safety.TrustedText("[Group instructions]\n"+instr))
+		}
 	}
 	var b strings.Builder
 	for i, p := range parts {

@@ -53,17 +53,22 @@ type BotEntry struct {
 	Agent     *AgentConfig     `json:"agent,omitempty"`
 	RateLimit *RateLimitConfig `json:"rateLimit,omitempty"`
 	Context   *ContextConfig   `json:"context,omitempty"`
+	// GroupConfigDir is an operator-controlled directory holding per-conversation
+	// instruction files (<channelId>.md), injected as a trusted [Group instructions]
+	// block. Overrides the top-level default. MUST be outside CwdBase — see Resolved.
+	GroupConfigDir string `json:"groupConfigDir,omitempty"`
 }
 
 // File is the on-disk shape of the single ~/.xclaw/config.json. The top-level
 // apiUrl/agent/rateLimit/context are shared defaults; each bots[] entry may
 // override them.
 type File struct {
-	APIURL    string           `json:"apiUrl,omitempty"`
-	Agent     *AgentConfig     `json:"agent,omitempty"`
-	RateLimit *RateLimitConfig `json:"rateLimit,omitempty"`
-	Context   *ContextConfig   `json:"context,omitempty"`
-	Bots      []BotEntry       `json:"bots,omitempty"`
+	APIURL         string           `json:"apiUrl,omitempty"`
+	Agent          *AgentConfig     `json:"agent,omitempty"`
+	RateLimit      *RateLimitConfig `json:"rateLimit,omitempty"`
+	Context        *ContextConfig   `json:"context,omitempty"`
+	GroupConfigDir string           `json:"groupConfigDir,omitempty"`
+	Bots           []BotEntry       `json:"bots,omitempty"`
 }
 
 // Resolved is a single bot's fully-resolved, ready-to-run configuration.
@@ -79,6 +84,14 @@ type Resolved struct {
 	// SystemPrompt is the operator-trusted persona/behavior prompt, assembled
 	// from SOUL.md + AGENTS.md in the bot dir (not from config).
 	SystemPrompt string
+
+	// GroupConfigDir is the operator-controlled directory of per-conversation
+	// instruction files (<channelId>.md → trusted [Group instructions] block).
+	// Empty disables the feature. Validated to be outside CwdBase — its files are
+	// injected UNSANITIZED into the system prompt, so it must not be the
+	// agent-writable sandbox (else a user-driven agent could write its own future
+	// instructions). Mirrors cc-channel-octo's assertGroupConfigDirOutsideCwd.
+	GroupConfigDir string
 
 	// Derived per-bot directories (never from file).
 	DataDir         string // ~/.xclaw/<id>/data       — SQLite + state
@@ -194,6 +207,9 @@ func resolveBots(global File, baseDir string) ([]Resolved, error) {
 		// System prompt: SOUL.md (identity) + AGENTS.md (behavior), file-based.
 		r.SystemPrompt = soul(botRoot)
 
+		// Per-bot groupConfigDir overrides the top-level default. Empty = feature off.
+		r.GroupConfigDir = firstNonEmpty(bot.GroupConfigDir, global.GroupConfigDir)
+
 		// validation. octoToken is intentionally NOT required: it may be omitted
 		// from the file and injected at runtime via the control bus (secret.inject)
 		// from the GUI's Keychain. The connector waits for a token before connecting.
@@ -202,6 +218,13 @@ func resolveBots(global File, baseDir string) ([]Resolved, error) {
 		}
 		if r.Agent.GatewayBaseURL != "" && !isAllowedURL(r.Agent.GatewayBaseURL) {
 			return nil, fmt.Errorf("bot %q: unsafe gatewayBaseUrl %q (SSRF protection)", id, r.Agent.GatewayBaseURL)
+		}
+		// groupConfigDir files are injected UNSANITIZED into the system prompt, so
+		// the dir must NOT be the agent-writable sandbox — otherwise a user-driven
+		// agent could write its own future instructions. Mirrors cc-channel-octo's
+		// assertGroupConfigDirOutsideCwd.
+		if err := assertGroupConfigDirOutsideCwd(id, r.GroupConfigDir, r.CwdBase); err != nil {
+			return nil, err
 		}
 
 		out = append(out, r)
@@ -276,6 +299,53 @@ func soul(botRoot string) string {
 		}
 	}
 	return strings.Join(parts, "\n\n")
+}
+
+// assertGroupConfigDirOutsideCwd enforces that groupConfigDir (whose files are
+// injected UNSANITIZED into the system prompt) is neither the agent-writable
+// cwdBase nor nested under it. Otherwise a user-driven agent (default
+// allowedTools '*' + bypassPermissions) could write <groupConfigDir>/<id>.md and
+// inject its own future trusted instructions. Empty dir = feature off, no check.
+//
+// Resolves to real paths when they exist (so a symlink can't dodge the boundary)
+// and falls back to a lexical clean for not-yet-created dirs. Mirrors
+// cc-channel-octo config.ts assertGroupConfigDirOutsideCwd.
+func assertGroupConfigDirOutsideCwd(botID, groupConfigDir, cwdBase string) error {
+	if groupConfigDir == "" {
+		return nil
+	}
+	gd := canonicalPath(groupConfigDir)
+	cb := canonicalPath(cwdBase)
+	if cb != "" && (gd == cb || isPathInside(gd, cb)) {
+		return fmt.Errorf("bot %q: unsafe groupConfigDir %q — it is the same as or nested under the agent-writable cwdBase %q; "+
+			"its files are injected into the system prompt, so it must be operator-controlled and outside the sandbox",
+			botID, groupConfigDir, cwdBase)
+	}
+	return nil
+}
+
+// canonicalPath resolves p to its real path when it exists (defeating symlink
+// dodges) and otherwise to an absolute lexical clean.
+func canonicalPath(p string) string {
+	if p == "" {
+		return ""
+	}
+	if real, err := filepath.EvalSymlinks(p); err == nil {
+		return real
+	}
+	if abs, err := filepath.Abs(p); err == nil {
+		return filepath.Clean(abs)
+	}
+	return filepath.Clean(p)
+}
+
+// isPathInside reports whether child is strictly nested under parent.
+func isPathInside(child, parent string) bool {
+	rel, err := filepath.Rel(parent, child)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // DriverEnv builds the KEY=VALUE environment to layer onto the claude CLI's

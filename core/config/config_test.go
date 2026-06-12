@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -213,4 +214,54 @@ func TestMissingConfigRejected(t *testing.T) {
 	if _, err := Load(filepath.Join(t.TempDir(), "nope.json")); err == nil {
 		t.Fatal("expected error for missing/empty config")
 	}
+}
+
+func TestGroupConfigDirResolution(t *testing.T) {
+	dir := t.TempDir()
+	gcd := filepath.Join(dir, "groupcfg") // outside any bot's workspace
+	topGCD := filepath.Join(dir, "topgroupcfg")
+	cfg := filepath.Join(dir, "config.json")
+	writeFile(t, cfg, `{
+		"apiUrl":"https://o",
+		"groupConfigDir":`+jsonStr(topGCD)+`,
+		"bots":[
+			{"id":"a","octoToken":"x"},
+			{"id":"b","octoToken":"y","groupConfigDir":`+jsonStr(gcd)+`}
+		]
+	}`)
+	bots, err := Load(cfg)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if bots[0].GroupConfigDir != topGCD {
+		t.Fatalf("bot a should inherit top-level groupConfigDir, got %q", bots[0].GroupConfigDir)
+	}
+	if bots[1].GroupConfigDir != gcd {
+		t.Fatalf("bot b should use its own groupConfigDir, got %q", bots[1].GroupConfigDir)
+	}
+}
+
+func TestGroupConfigDirInsideCwdRejected(t *testing.T) {
+	dir := t.TempDir()
+	// CwdBase for bot "a" is <dir>/a/workspace. A groupConfigDir nested under it
+	// is an injection sink (agent-writable) and must be rejected.
+	bad := filepath.Join(dir, "a", "workspace", "groupcfg")
+	cfg := filepath.Join(dir, "config.json")
+	writeFile(t, cfg, `{"apiUrl":"https://o","bots":[{"id":"a","octoToken":"x","groupConfigDir":`+jsonStr(bad)+`}]}`)
+	if _, err := Load(cfg); err == nil {
+		t.Fatal("groupConfigDir nested under cwdBase must be rejected")
+	}
+
+	// Equal to cwdBase is also rejected.
+	bad2 := filepath.Join(dir, "a", "workspace")
+	writeFile(t, cfg, `{"apiUrl":"https://o","bots":[{"id":"a","octoToken":"x","groupConfigDir":`+jsonStr(bad2)+`}]}`)
+	if _, err := Load(cfg); err == nil {
+		t.Fatal("groupConfigDir equal to cwdBase must be rejected")
+	}
+}
+
+// jsonStr renders s as a JSON string literal (handles Windows backslashes).
+func jsonStr(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
 }

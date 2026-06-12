@@ -11,6 +11,8 @@
   },
   "rateLimit": { "maxPerMinute": 5 },
   "context": { "maxContextChars": 6000 },
+  "_comment_groupConfigDir": "Optional directory of operator-authored per-conversation instruction files. For a group channel <channelId>, the file <groupConfigDir>/<channelId>.md is injected into the system prompt as a trusted [Group instructions] block (capped at 32 KiB). A thread channel '<groupNo>____<shortId>' prefers <groupNo>____<shortId>.md and falls back to <groupNo>.md. SECURITY: these files are injected UNSANITIZED, so the dir MUST be operator-controlled and OUTSIDE the agent-writable workspace — config load rejects a groupConfigDir at or under a bot's cwdBase, and group/world-writable files are refused. Settable top-level (shared) and per bot (override).",
+  "groupConfigDir": "/etc/xclaw/groups",
   "bots": [
     {
       "id": "my-bot",

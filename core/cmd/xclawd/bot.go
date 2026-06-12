@@ -17,6 +17,7 @@ import (
 	"github.com/lml2468/xclaw/core/cron"
 	"github.com/lml2468/xclaw/core/gateway"
 	"github.com/lml2468/xclaw/core/groupctx"
+	"github.com/lml2468/xclaw/core/groupmd"
 	"github.com/lml2468/xclaw/core/im/octo"
 	"github.com/lml2468/xclaw/core/router"
 	"github.com/lml2468/xclaw/core/sandbox"
@@ -232,6 +233,7 @@ func runBot(ctx context.Context, cfg config.Resolved, reg *botRegistry, srv *con
 
 	gw := gateway.New(drv, st, rt, sinks).
 		WithGroupContext(groupctx.New(cfg.Context.MaxContextChars)).
+		WithGroupMD(groupmd.New(cfg.GroupConfigDir)).
 		WithSystemPrompt(cfg.SystemPrompt).
 		WithModel(cfg.Agent.Model).
 		WithSandbox(cfg.CwdBase, cfg.MemoryBase, cfg.SkillsDir, cfg.GlobalSkillsDir)
