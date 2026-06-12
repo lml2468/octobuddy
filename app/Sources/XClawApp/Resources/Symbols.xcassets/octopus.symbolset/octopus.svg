@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="900" height="100" viewBox="0 0 900 100">
+ <!--Generated for XClaw: octopus custom symbol-->
+ <g id="Notes">
+  <rect id="artboard" fill="none" width="900" height="100"/>
+ </g>
+ <g id="Guides">
+  <line id="Capline-S" stroke="#27AAE1" x1="0" y1="8" x2="900" y2="8"/>
+  <line id="Baseline-S" stroke="#27AAE1" x1="0" y1="92" x2="900" y2="92"/>
+  <line id="Capline-M" stroke="#27AAE1" x1="0" y1="8" x2="900" y2="8"/>
+  <line id="Baseline-M" stroke="#27AAE1" x1="0" y1="92" x2="900" y2="92"/>
+  <line id="Capline-L" stroke="#27AAE1" x1="0" y1="8" x2="900" y2="8"/>
+  <line id="Baseline-L" stroke="#27AAE1" x1="0" y1="92" x2="900" y2="92"/>
+ </g>
+ <defs>
+  <path id="octo" d="M20,35 a30,29 0 1,0 60,0 a30,29 0 1,0 -60,0 z M15,63 a12,13 0 1,0 24,0 a12,13 0 1,0 -24,0 z M31,67 a12,17 0 1,0 24,0 a12,17 0 1,0 -24,0 z M45,67 a12,17 0 1,0 24,0 a12,17 0 1,0 -24,0 z M61,63 a12,13 0 1,0 24,0 a12,13 0 1,0 -24,0 z M38,31.5 a4.5,5.5 0 1,1 9,0 a4.5,5.5 0 1,1 -9,0 z M53,31.5 a4.5,5.5 0 1,1 9,0 a4.5,5.5 0 1,1 -9,0 z"/>
+ </defs>
+ <g id="Symbols">
+  <g id="Ultralight-S" transform="translate(0,0)"><use xlink:href="#octo"/></g>
+  <g id="Ultralight-M" transform="translate(100,0)"><use xlink:href="#octo"/></g>
+  <g id="Ultralight-L" transform="translate(200,0)"><use xlink:href="#octo"/></g>
+  <g id="Regular-S" transform="translate(300,0)"><use xlink:href="#octo"/></g>
+  <g id="Regular-M" transform="translate(400,0)"><use xlink:href="#octo"/></g>
+  <g id="Regular-L" transform="translate(500,0)"><use xlink:href="#octo"/></g>
+  <g id="Black-S" transform="translate(600,0)"><use xlink:href="#octo"/></g>
+  <g id="Black-M" transform="translate(700,0)"><use xlink:href="#octo"/></g>
+  <g id="Black-L" transform="translate(800,0)"><use xlink:href="#octo"/></g>
+ </g>
+</svg>

@@ -26,7 +26,11 @@ let package = Package(
         // Mirrors Open Island's OpenIslandApp.
         .executableTarget(
             name: "XClawApp",
-            dependencies: ["XClawCore"]
+            dependencies: ["XClawCore"],
+            // The custom-symbol asset catalog is compiled by actool in
+            // scripts/package-app.sh (command-line SwiftPM can't run actool), so
+            // exclude it here to avoid an unhandled-files warning.
+            exclude: ["Resources/Symbols.xcassets"]
         ),
         // CLI harness: connect to a running xclawd control socket, send a
         // command, print the event stream. Used to prove Swift↔Go end-to-end.

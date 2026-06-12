@@ -93,6 +93,31 @@ cat > "$bundle_dir/Contents/Info.plist" <<EOF
 EOF
 plutil -lint "$bundle_dir/Contents/Info.plist" >/dev/null
 
+# Asset catalog: compile the custom-symbol set (octopus menu-bar glyph) into
+# Contents/Resources/Assets.car. Command-line SwiftPM can't run actool, and the
+# CLT toolchain doesn't ship it, so locate actool from a full Xcode install.
+# Non-fatal: if actool is unavailable, the app falls back to its SF-Symbol glyph.
+symbols_catalog="$repo_root/app/Sources/XClawApp/Resources/Symbols.xcassets"
+if [[ -d "$symbols_catalog" ]]; then
+    actool_bin="$(/usr/bin/xcrun --find actool 2>/dev/null || true)"
+    if [[ -z "$actool_bin" ]]; then
+        for xc in /Applications/Xcode*.app; do
+            [[ -x "$xc/Contents/Developer/usr/bin/actool" ]] && { actool_bin="$xc/Contents/Developer/usr/bin/actool"; break; }
+        done
+    fi
+    if [[ -n "$actool_bin" ]]; then
+        echo "▸ compiling asset catalog (custom symbols)…"
+        "$actool_bin" "$symbols_catalog" --compile "$bundle_dir/Contents/Resources" \
+            --platform macosx --minimum-deployment-target 14.0 \
+            --output-partial-info-plist "$out_dir/.assetcat.plist" >/dev/null 2>&1 \
+            && echo "  Assets.car written" \
+            || echo "  (actool failed — menu-bar icon falls back to SF Symbol)"
+        rm -f "$out_dir/.assetcat.plist"
+    else
+        echo "  (actool not found — menu-bar icon falls back to SF Symbol)"
+    fi
+fi
+
 # --- verify structure ---
 for required in "Contents/MacOS/XClawApp" "Contents/Helpers/xclawd" "Contents/Info.plist"; do
     [[ -e "$bundle_dir/$required" ]] || { echo "ERROR: missing $required" >&2; exit 1; }
