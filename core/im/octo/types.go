@@ -4,7 +4,11 @@
 // gateway and delivers replies via REST sendMessage.
 package octo
 
-import "github.com/lml2468/xclaw/core/persona"
+import (
+	"encoding/json"
+
+	"github.com/lml2468/xclaw/core/persona"
+)
 
 // ChannelType mirrors Octo's channel kind (types.ts ChannelType).
 type ChannelType int
@@ -19,8 +23,17 @@ const (
 type MessageType int
 
 const (
-	MsgText  MessageType = 1
-	MsgImage MessageType = 2
+	MsgText            MessageType = 1
+	MsgImage           MessageType = 2
+	MsgGIF             MessageType = 3
+	MsgVoice           MessageType = 4
+	MsgVideo           MessageType = 5
+	MsgLocation        MessageType = 6
+	MsgCard            MessageType = 7
+	MsgFile            MessageType = 8
+	MsgMultipleForward MessageType = 11
+	// MsgRichText is text + inline images (types.ts MessageType.RichText).
+	MsgRichText MessageType = 14
 )
 
 // Mention is the @-mention payload (types.ts MentionPayload). Only the fields
@@ -33,22 +46,176 @@ type Mention struct {
 }
 
 // MessagePayload is the decrypted RECV payload JSON (types.ts MessagePayload).
+//
+// `content` is type-polymorphic on the wire: a string for Text and most types,
+// but a RichText(=14) block array. UnmarshalJSON therefore decodes it into
+// RichContent (any) and additionally surfaces a string form as Content when the
+// raw value is a JSON string — so existing string-only callers keep working
+// while RichText can read the array via RichContent.
 type MessagePayload struct {
-	Type    MessageType `json:"type"`
-	Content string      `json:"content,omitempty"`
-	URL     string      `json:"url,omitempty"`
-	Name    string      `json:"name,omitempty"`
-	Mention *Mention    `json:"mention,omitempty"`
+	Type    MessageType
+	Content string   // string `content` (Text et al.); empty for array content
+	URL     string   // media storage path / URL
+	Name    string   // file name / card name
+	UID     string   // card uid (types.ts Card payload)
+	Plain   string   // RichText server-authoritative plain text
+	Mention *Mention // @-mention payload
+	Reply   *ReplyPayload
+
+	// RichContent is the raw `content` value (string or []block) for RichText.
+	RichContent any
+
+	// Latitude/Longitude (+ Lat/Lng/Lon aliases) are user-controlled location
+	// coordinates; kept as any so toFiniteCoord can reject non-numeric forgeries.
+	Latitude  any
+	Longitude any
+	Lat       any
+	Lng       any
+	Lon       any
+
+	// Users/Msgs are the MultipleForward(=11) nested transcript.
+	Users []forwardUser
+	Msgs  []forwardMessage
 
 	// OBO v2 fan-out fields (openclaw inbound.ts ~L2102). Present only on
 	// grantor-relayed fan-out messages; the connector trusts them ONLY when the
 	// message is sent by the configured grantor (security gate). All optional.
-	OBOOriginChannelID   string `json:"obo_origin_channel_id,omitempty"`
-	OBOOriginChannelType *int   `json:"obo_origin_channel_type,omitempty"`
-	OBOOriginFromUID     string `json:"obo_origin_from_uid,omitempty"`
-	OBORespondAs         string `json:"obo_respond_as,omitempty"`
-	OBOGrantorUID        string `json:"obo_grantor_uid,omitempty"`
-	OBOSystemHint        string `json:"obo_system_hint,omitempty"`
+	OBOOriginChannelID   string
+	OBOOriginChannelType *int
+	OBOOriginFromUID     string
+	OBORespondAs         string
+	OBOGrantorUID        string
+	OBOSystemHint        string
+}
+
+// payloadWire is the on-the-wire shape used to decode MessagePayload. content is
+// captured raw so we can accept either a string or an array.
+type payloadWire struct {
+	Type      MessageType      `json:"type"`
+	Content   json.RawMessage  `json:"content"`
+	URL       string           `json:"url"`
+	Name      string           `json:"name"`
+	UID       string           `json:"uid"`
+	Plain     string           `json:"plain"`
+	Mention   *Mention         `json:"mention"`
+	Reply     *ReplyPayload    `json:"reply"`
+	Latitude  any              `json:"latitude"`
+	Longitude any              `json:"longitude"`
+	Lat       any              `json:"lat"`
+	Lng       any              `json:"lng"`
+	Lon       any              `json:"lon"`
+	Users     []forwardUser    `json:"users"`
+	Msgs      []forwardMessage `json:"msgs"`
+
+	OBOOriginChannelID   string `json:"obo_origin_channel_id"`
+	OBOOriginChannelType *int   `json:"obo_origin_channel_type"`
+	OBOOriginFromUID     string `json:"obo_origin_from_uid"`
+	OBORespondAs         string `json:"obo_respond_as"`
+	OBOGrantorUID        string `json:"obo_grantor_uid"`
+	OBOSystemHint        string `json:"obo_system_hint"`
+}
+
+// UnmarshalJSON decodes a MessagePayload, splitting the polymorphic `content`
+// field into Content (when it is a JSON string) and RichContent (always — the
+// raw decoded value, used by the RichText expander).
+func (p *MessagePayload) UnmarshalJSON(b []byte) error {
+	var w payloadWire
+	if err := json.Unmarshal(b, &w); err != nil {
+		return err
+	}
+	*p = MessagePayload{
+		Type:      w.Type,
+		URL:       w.URL,
+		Name:      w.Name,
+		UID:       w.UID,
+		Plain:     w.Plain,
+		Mention:   w.Mention,
+		Reply:     w.Reply,
+		Latitude:  w.Latitude,
+		Longitude: w.Longitude,
+		Lat:       w.Lat,
+		Lng:       w.Lng,
+		Lon:       w.Lon,
+		Users:     w.Users,
+		Msgs:      w.Msgs,
+
+		OBOOriginChannelID:   w.OBOOriginChannelID,
+		OBOOriginChannelType: w.OBOOriginChannelType,
+		OBOOriginFromUID:     w.OBOOriginFromUID,
+		OBORespondAs:         w.OBORespondAs,
+		OBOGrantorUID:        w.OBOGrantorUID,
+		OBOSystemHint:        w.OBOSystemHint,
+	}
+	if len(w.Content) > 0 && string(w.Content) != "null" {
+		var anyVal any
+		if err := json.Unmarshal(w.Content, &anyVal); err == nil {
+			p.RichContent = anyVal
+			if s, ok := anyVal.(string); ok {
+				p.Content = s
+			}
+		}
+	}
+	return nil
+}
+
+// ReplyPayload is a quoted prior message (types.ts ReplyPayload).
+type ReplyPayload struct {
+	Payload  *MessagePayload `json:"payload,omitempty"`
+	FromUID  string          `json:"from_uid,omitempty"`
+	FromName string          `json:"from_name,omitempty"`
+}
+
+// forwardUser is a sender entry in a MultipleForward payload (types.ts
+// ForwardUser). uid AND name are both user-controlled.
+type forwardUser struct {
+	UID  string `json:"uid"`
+	Name string `json:"name"`
+}
+
+// forwardMessage is one nested message inside a MultipleForward payload
+// (types.ts ForwardMessage).
+type forwardMessage struct {
+	FromUID string         `json:"from_uid"`
+	Payload forwardPayload `json:"payload"`
+}
+
+// forwardPayload is a forward child's payload. Like MessagePayload its `content`
+// is polymorphic (RichContent), so it uses the same split-decode approach.
+type forwardPayload struct {
+	Type        int
+	Content     string
+	URL         string
+	Name        string
+	Plain       string
+	RichContent any
+	Users       []forwardUser
+	Msgs        []forwardMessage
+}
+
+func (p *forwardPayload) UnmarshalJSON(b []byte) error {
+	var w struct {
+		Type    int              `json:"type"`
+		Content json.RawMessage  `json:"content"`
+		URL     string           `json:"url"`
+		Name    string           `json:"name"`
+		Plain   string           `json:"plain"`
+		Users   []forwardUser    `json:"users"`
+		Msgs    []forwardMessage `json:"msgs"`
+	}
+	if err := json.Unmarshal(b, &w); err != nil {
+		return err
+	}
+	*p = forwardPayload{Type: w.Type, URL: w.URL, Name: w.Name, Plain: w.Plain, Users: w.Users, Msgs: w.Msgs}
+	if len(w.Content) > 0 && string(w.Content) != "null" {
+		var anyVal any
+		if err := json.Unmarshal(w.Content, &anyVal); err == nil {
+			p.RichContent = anyVal
+			if s, ok := anyVal.(string); ok {
+				p.Content = s
+			}
+		}
+	}
+	return nil
 }
 
 // BotMessage is one inbound message decoded from a RECV packet (types.ts

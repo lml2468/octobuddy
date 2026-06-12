@@ -40,6 +40,10 @@ func NewRESTClient(apiURL string, token func() string) *RESTClient {
 // decide whether a token has been injected yet).
 func (c *RESTClient) Token() string { return c.token() }
 
+// APIURL returns the configured API base (trailing slash stripped). Used by the
+// connector to resolve relative media storage paths against the bot host.
+func (c *RESTClient) APIURL() string { return c.apiURL }
+
 // RegisterResponse mirrors BotRegisterResp (types.ts) — all six fields.
 type RegisterResponse struct {
 	RobotID        string `json:"robot_id"`
@@ -142,6 +146,17 @@ func (c *RESTClient) SendTypingAs(ctx context.Context, channelID string, channel
 // Heartbeat posts the REST heartbeat (api.ts sendHeartbeat).
 func (c *RESTClient) Heartbeat(ctx context.Context) error {
 	return c.postJSON(ctx, "/v1/bot/heartbeat", map[string]any{}, nil)
+}
+
+// SendReadReceipt acks one or more messages as read (api.ts sendReadReceipt,
+// POST /v1/bot/readReceipt). Called fire-and-forget after an inbound message is
+// handled.
+func (c *RESTClient) SendReadReceipt(ctx context.Context, channelID string, channelType ChannelType, messageIDs []string) error {
+	return c.postJSON(ctx, "/v1/bot/readReceipt", map[string]any{
+		"channel_id":   channelID,
+		"channel_type": int(channelType),
+		"message_ids":  messageIDs,
+	}, nil)
 }
 
 // postJSON performs a POST with Bearer auth and decodes the JSON response into
