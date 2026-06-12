@@ -89,8 +89,10 @@ private struct MenuBarLabel: View {
         Group {
             if Self.hasOctopus {
                 Image("octopus")   // custom symbol from the bundle's Assets.car
+                    .font(.system(size: 22)).imageScale(.large)
             } else {
                 Image(systemName: model.connected ? "bolt.horizontal.circle.fill" : "bolt.horizontal.circle")
+                    .font(.system(size: 16))
             }
         }
         .accessibilityLabel(model.connected ? "XClaw, connected" : "XClaw, disconnected")
