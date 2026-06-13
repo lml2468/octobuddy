@@ -188,24 +188,36 @@ enum MarkdownBlock: Equatable {
     }
 }
 
-/// Renders a message body as Markdown: prose with inline styling (line breaks
-/// preserved), fenced code as styled monospaced panels with a copy affordance.
-struct MarkdownMessage: View {
-    let text: String
+/// A fully-rendered Markdown block: prose pre-converted to `AttributedString`,
+/// fenced code kept as raw text for a monospaced panel.
+enum RenderedBlock {
+    case prose(AttributedString)
+    case code(String, language: String?)
+}
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ForEach(Array(MarkdownBlock.parse(text).enumerated()), id: \.offset) { _, block in
-                switch block {
-                case .prose(let s):
-                    Text(Self.attributed(s))
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                case .code(let code, let lang):
-                    CodeBlock(code: code, language: lang)
-                }
+/// Memoizes the (parse + AttributedString) work per message text. Without this,
+/// `MarkdownMessage.body` re-parsed Markdown for every visible bubble on every
+/// view evaluation — i.e. on every scroll frame — which froze the transcript on
+/// long/code-heavy conversations. The cache makes a re-render an O(1) lookup.
+enum MarkdownRenderer {
+    private final class Box { let blocks: [RenderedBlock]; init(_ b: [RenderedBlock]) { blocks = b } }
+    private static let cache: NSCache<NSString, Box> = {
+        let c = NSCache<NSString, Box>()
+        c.countLimit = 400   // bounds memory; streaming-intermediate strings evict
+        return c
+    }()
+
+    static func render(_ text: String) -> [RenderedBlock] {
+        let key = text as NSString
+        if let box = cache.object(forKey: key) { return box.blocks }
+        let rendered: [RenderedBlock] = MarkdownBlock.parse(text).map { block in
+            switch block {
+            case .prose(let s): return .prose(attributed(s))
+            case .code(let c, let l): return .code(c, language: l)
             }
         }
+        cache.setObject(Box(rendered), forKey: key)
+        return rendered
     }
 
     /// Parse inline markup while preserving author line breaks (so multi-line
@@ -215,6 +227,28 @@ struct MarkdownMessage: View {
             interpretedSyntax: .inlineOnlyPreservingWhitespace,
             failurePolicy: .returnPartiallyParsedIfPossible)
         return (try? AttributedString(markdown: s, options: opts)) ?? AttributedString(s)
+    }
+}
+
+/// Renders a message body as Markdown: prose with inline styling (line breaks
+/// preserved), fenced code as styled monospaced panels with a copy affordance.
+/// Parsing is memoized (see `MarkdownRenderer`) so scrolling is cheap.
+struct MarkdownMessage: View {
+    let text: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(Array(MarkdownRenderer.render(text).enumerated()), id: \.offset) { _, block in
+                switch block {
+                case .prose(let attributed):
+                    Text(attributed)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                case .code(let code, let lang):
+                    CodeBlock(code: code, language: lang)
+                }
+            }
+        }
     }
 }
 
