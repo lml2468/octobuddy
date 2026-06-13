@@ -250,8 +250,9 @@ private struct TranscriptDetail: View {
                     } else if currentMessages.isEmpty {
                         emptyState
                     } else {
+                        let streamingID = model.currentSession?.streamingAssistant
                         ForEach(currentMessages) { msg in
-                            ChatBubble(message: msg)
+                            ChatBubble(message: msg, streaming: streamingID == msg.id)
                                 .transition(.asymmetric(
                                     insertion: .scale(scale: 0.96, anchor: .bottom).combined(with: .opacity),
                                     removal: .opacity))
@@ -371,6 +372,7 @@ private struct InfoBanner<Trailing: View>: View {
 /// One message: tool calls render as a centered chip; user/assistant as a bubble.
 struct ChatBubble: View {
     let message: AppState.ChatMessage
+    var streaming: Bool = false
 
     var body: some View {
         if message.role == .tool {
@@ -384,7 +386,7 @@ struct ChatBubble: View {
                 Spacer()
             }
         } else {
-            BubbleRow(message: message)
+            BubbleRow(message: message, streaming: streaming)
         }
     }
 }
@@ -392,6 +394,7 @@ struct ChatBubble: View {
 /// A user/assistant bubble that reveals a timestamp + copy button on hover.
 private struct BubbleRow: View {
     let message: AppState.ChatMessage
+    var streaming: Bool = false
     @State private var hovering = false
 
     private var isUser: Bool { message.role == .user }
@@ -431,11 +434,15 @@ private struct BubbleRow: View {
         }
     }
 
-    /// User text stays plain (white on the brand bubble); assistant text renders
-    /// Markdown (inline styling + fenced code panels), width-capped for readability.
+    /// User text stays plain (white on the brand bubble). The in-flight assistant
+    /// bubble uses a smooth typewriter reveal (bursty deltas → continuous typing);
+    /// once complete it renders formatted Markdown. Width-capped for readability.
     @ViewBuilder private var content: some View {
         if isUser {
             Text(message.text).appFont(.body).textSelection(.enabled).foregroundStyle(.white)
+        } else if streaming {
+            TypewriterText(text: message.text)
+                .frame(maxWidth: 640, alignment: .leading)
         } else {
             MarkdownMessage(text: message.text)
                 .appFont(.body)
@@ -463,6 +470,35 @@ private struct BubbleRow: View {
             .buttonStyle(.borderless)
             .help("Copy message")
             .accessibilityLabel("Copy message")
+    }
+}
+
+/// Smoothly reveals streamed text at a steady per-frame rate so bursty deltas
+/// (the agent emits text in chunks every few hundred ms) read as continuous
+/// typing. Used only for the in-flight assistant bubble; the completed message
+/// switches to formatted Markdown. The reveal eases out — it advances a fraction
+/// of the backlog each frame (min 1 char) so a burst is spread, not snapped, and
+/// it catches up fast enough that the hand-off to Markdown is seamless.
+private struct TypewriterText: View {
+    let text: String
+    @State private var shown: Int = 0
+    private let tick = Timer.publish(every: 1.0 / 60.0, on: .main, in: .common).autoconnect()
+
+    var body: some View {
+        Text(String(text.prefix(shown)))
+            .appFont(.body)
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .onReceive(tick) { _ in
+                let total = text.count
+                guard shown < total else { return }
+                let backlog = total - shown
+                shown = min(total, shown + max(1, backlog / 8))
+            }
+            .onChange(of: text) { _, newText in
+                if shown > newText.count { shown = 0 } // text replaced (new turn)
+            }
+            .onAppear { if shown > text.count { shown = 0 } }
     }
 }
 
