@@ -15,6 +15,11 @@ guard args.count >= 2 else {
 let sockPath = args[1]
 let uid = args.count >= 3 ? args[2] : "probe-user"
 let text = args.count >= 4 ? args[3] : "hello from swift"
+// Probe lifetime in seconds (env override, default 6) — bump it to watch a long
+// streamed reply arrive token-by-token.
+let runSecs = Double(ProcessInfo.processInfo.environment["XCLAW_PROBE_SECS"] ?? "") ?? 6
+let t0 = Date()
+func stamp() -> String { String(format: "+%5dms", Int(Date().timeIntervalSince(t0) * 1000)) }
 
 let client = ControlClient(path: sockPath)
 do {
@@ -57,15 +62,15 @@ Task.detached {
         case .event:
             switch env.type {
             case "session.text":
-                if let b = env.decodeBody(SessionTextBody.self) { seen.add(b.sessionKey); print("  [text] \(b.delta)") }
+                if let b = env.decodeBody(SessionTextBody.self) { seen.add(b.sessionKey); print("  \(stamp()) [text] \(b.delta)") }
             case "session.tool":
-                if let b = env.decodeBody(SessionToolBody.self) { seen.add(b.sessionKey); print("  [tool] 🔧 \(b.name)(\(b.params))") }
+                if let b = env.decodeBody(SessionToolBody.self) { seen.add(b.sessionKey); print("  \(stamp()) [tool] 🔧 \(b.name)(\(b.params))") }
             case "session.activity":
-                if let b = env.decodeBody(SessionActivityBody.self) { seen.add(b.sessionKey); print("  [activity] \(b.kind)") }
+                if let b = env.decodeBody(SessionActivityBody.self) { seen.add(b.sessionKey); print("  \(stamp()) [activity] \(b.kind)") }
             case "session.reply":
-                if let b = env.decodeBody(SessionReplyBody.self) { seen.add(b.sessionKey); print("  [reply] 💬 \(b.text)") }
+                if let b = env.decodeBody(SessionReplyBody.self) { seen.add(b.sessionKey); print("  \(stamp()) [reply] 💬 \(b.text.prefix(80))…") }
             case "session.usage":
-                if let b = env.decodeBody(SessionUsageBody.self) { seen.add(b.sessionKey); print("  [usage] in=\(b.inputTokens) out=\(b.outputTokens)") }
+                if let b = env.decodeBody(SessionUsageBody.self) { seen.add(b.sessionKey); print("  \(stamp()) [usage] in=\(b.inputTokens) out=\(b.outputTokens)") }
             case "error":
                 if let b = env.decodeBody(ErrorBody.self) { print("  [error] \(b.message)") }
             default:
@@ -79,7 +84,7 @@ Task.detached {
 }
 
 // Bound the probe lifetime; close the connection to end the stream.
-_ = done.wait(timeout: .now() + 6)
+_ = done.wait(timeout: .now() + runSecs)
 client.disconnect()
 _ = done.wait(timeout: .now() + 1)
 print("── probe done ──")
