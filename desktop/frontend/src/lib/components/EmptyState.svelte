@@ -33,7 +33,7 @@
   .chip {
     width: 100%; text-align: left; padding: 10px 14px; font-size: 13px;
     background: color-mix(in srgb, var(--ink) 5%, transparent); color: var(--ink);
-    border: none; border-radius: 10px;
+    border: none; border-radius: 7px;
     transition: background 0.14s ease;
   }
   .chip:hover { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent-strong); }

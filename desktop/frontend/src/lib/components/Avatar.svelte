@@ -19,7 +19,7 @@
   }
   const color = $derived(palette[hash(name || "x") % palette.length]);
   const initial = $derived((name.trim()[0] || "?").toUpperCase());
-  const radius = $derived(Math.round(size * 0.28));
+  const radius = $derived(Math.round(size * 0.2));
 </script>
 
 <div

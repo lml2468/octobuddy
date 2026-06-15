@@ -65,7 +65,7 @@
   }
   .search {
     flex: 1; display: flex; align-items: center; gap: 7px;
-    height: 30px; padding: 0 10px; border-radius: 8px;
+    height: 30px; padding: 0 10px; border-radius: 6px;
     background: color-mix(in srgb, var(--ink) 7%, transparent);
     border: 1px solid transparent;
     color: var(--ink-faint);
@@ -81,7 +81,7 @@
   .row {
     display: flex; align-items: center; gap: 12px; width: 100%;
     height: var(--row-h); padding: 0 12px; border: none; background: transparent;
-    border-radius: 10px; text-align: left; color: var(--ink);
+    border-radius: 7px; text-align: left; color: var(--ink);
   }
   .row:hover { background: color-mix(in srgb, var(--ink) 4%, transparent); }
   .row.sel, .row.sel:hover { background: var(--list-sel); }

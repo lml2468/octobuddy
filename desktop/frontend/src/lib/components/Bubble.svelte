@@ -84,14 +84,14 @@
   .md :global(p) { margin: 0 0 7px; }
   .md :global(p:last-child) { margin-bottom: 0; }
   .md :global(code) { font-family: var(--mono); font-size: 0.88em; }
-  .md :global(:not(pre) > code) { background: color-mix(in srgb, var(--ink) 8%, transparent); padding: 1px 5px; border-radius: 5px; }
+  .md :global(:not(pre) > code) { background: color-mix(in srgb, var(--ink) 8%, transparent); padding: 1px 5px; border-radius: 4px; }
   .md :global(a) { color: var(--accent-strong); }
   .md :global(ul), .md :global(ol) { margin: 0 0 7px; padding-left: 20px; }
   .md :global(blockquote) { margin: 0 0 7px; padding-left: 11px; border-left: 3px solid var(--hairline-strong); color: var(--ink-soft); }
 
   /* Code block — header bar (language + copy) over a tinted mono panel. */
   .md :global(.codeblock) {
-    margin: 8px 0; border-radius: 10px; overflow: hidden;
+    margin: 8px 0; border-radius: 7px; overflow: hidden;
     border: 1px solid var(--hairline);
     background: var(--code-bg);
   }
@@ -104,7 +104,7 @@
   .md :global(.cb-lang) { font-family: var(--mono); font-size: 11px; color: var(--ink-soft); letter-spacing: 0.3px; }
   .md :global(.cb-copy) {
     font-family: var(--mono); font-size: 11px; color: var(--ink-faint);
-    background: transparent; border: none; padding: 5px 9px; border-radius: 6px; cursor: pointer;
+    background: transparent; border: none; padding: 5px 9px; border-radius: 5px; cursor: pointer;
     transition: color 0.14s ease, background 0.14s ease;
   }
   .md :global(.cb-copy:hover) { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }

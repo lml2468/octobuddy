@@ -57,7 +57,7 @@
   .scroller { flex: 1; overflow-y: auto; background: var(--chat); }
   .stack { display: flex; flex-direction: column; gap: 14px; padding: 22px var(--gutter, 28px) 12px; max-width: var(--content-max); width: 100%; margin: 0 auto; }
 
-  .err { align-self: center; color: var(--danger); font-size: 12px; background: color-mix(in srgb, var(--danger) 12%, transparent); border-radius: 8px; padding: 7px 12px; }
+  .err { align-self: center; color: var(--danger); font-size: 12px; background: color-mix(in srgb, var(--danger) 12%, transparent); border-radius: 7px; padding: 7px 12px; }
 
   .row { display: flex; gap: 10px; align-items: flex-start; }
   .typing { display: inline-flex; gap: 5px; padding: 13px 14px; background: var(--in-bubble); border-radius: var(--bubble-radius); border-top-left-radius: 5px; box-shadow: 0 1px 1.5px rgba(20,22,28,0.08); }

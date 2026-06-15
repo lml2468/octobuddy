@@ -13,7 +13,7 @@ that version together against one contract:
   cross-compiles to mac/linux/windows.
 - `desktop/` — **Go + Wails v3** desktop app (Svelte + TS frontend, macOS/Win/Linux).
   A control-bus client; never talks to Claude directly — it spawns + drives
-  `xclawd`. The UI is a hand-painted **watercolor** design system (CSS/SVG), not
+  `xclawd`. The UI is a clean **WeChat/iMessage-grade** chat UI (CSS/SVG), not
   native chrome. Its Go backend reuses the wire contract directly.
 - `proto/` — the language-neutral control-bus contract (NDJSON envelopes over a
   Unix socket) shared by core and the app. Spec lives in `proto/README.md`; the
@@ -150,6 +150,46 @@ neither knows nor cares which IM is attached.
 Beyond plain text it renders non-text payloads to markers, materializes inbound
 media/files into the session cwd, resolves outbound @mentions, runs the OBO
 persona relay + thread routing, and emits a 5 s typing heartbeat.
+
+## Desktop app (`desktop/`)
+
+A thin control-bus client (Wails v3 alpha + Svelte 5/TS); the daemon holds all
+logic, so swapping the GUI never touches `core/`.
+
+- **Go backend**: `main.go` (app + window + system tray + single-instance);
+  `xclawservice.go` is the Wails-bound bridge — spawns `xclawd`, dials the control
+  socket, forwards every envelope to the frontend as the `xclaw:event` Wails event,
+  exposes command/config methods, and auto-reconnects on daemon crash.
+  `internal/`: `control` (UDS/NDJSON client over `core/control/wire`), `core`
+  (supervisor: resolve binary → spawn `-control … -exit-with-parent` → stop/restart),
+  `configstore` (read/write `~/.xclaw/config.json` + per-bot SOUL/AGENTS),
+  `secrets` (tokens in the OS credential store via go-keyring, zero cgo; injected
+  at runtime, **never** written to config.json).
+- **Frontend** (`frontend/src`): `lib/store.svelte.ts` is the single reducer —
+  it folds `xclaw:event` envelopes into bots/sessions/messages and owns the
+  rAF typewriter/coalescing. Components in `lib/components/` (Rail · Conversations
+  · Transcript · Bubble · Composer · ConfigEditor · Avatar); tokens in
+  `lib/styles/theme.css`.
+- **Design direction (committed — do not re-pivot)**: clean WeChat/iMessage-grade
+  chat UI. Dark bot-rail → conversation list → chat; green accent (`#07c160`),
+  green selected rows + outgoing bubbles, square-rounded avatars, **Geist** (Sans
+  for UI, Mono for code + metadata), restrained 4–8px radii, content edge-to-edge.
+  Watercolor and Liquid-Glass were both tried and rejected.
+- **Verify UI by measurement, not eyeballing**: `XCLAW_PREVIEW=1` (with
+  `XCLAW_PREVIEW_THEME=dark|light`, `XCLAW_PREVIEW_EMPTY=1`, `XCLAW_PREVIEW_EDITOR=1`)
+  seeds mock data and skips the daemon. Run `wails3 dev`, then drive
+  `http://127.0.0.1:9245/?preview=1&theme=dark` in headless Chrome via Playwright
+  (`playwright-core` + `channel:"chrome"`) to screenshot and assert geometry
+  (viewport fill, header alignment, overflow/clipping, tap-target size). This
+  caught real bugs the eye missed (a template-CSS inset "ring", rail flex-overflow
+  clipping).
+- **macOS gotchas**: traffic lights overlap the leftmost pane — only the rail
+  clears them (taller rail header); list/chat headers stay compact. Don't link a
+  global `style.css` in `index.html` (the Vite template's `#app{max-width;padding}`
+  re-insets everything) — `theme.css` is the single source of truth, imported in
+  `App.svelte`. Keychain injection prompts on an unsigned/re-signed binary (allow
+  once; a stable signing identity makes it stick). After changing Go binding
+  signatures: `cd desktop && wails3 generate bindings -d frontend/bindings`.
 
 ## Lineage
 

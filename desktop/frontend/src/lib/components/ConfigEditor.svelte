@@ -144,15 +144,15 @@
 
   .body { flex: 1; display: grid; grid-template-columns: 200px 1fr; overflow: hidden; }
   .bots { border-right: 1px solid var(--hairline); padding: 10px; display: flex; flex-direction: column; gap: 3px; overflow-y: auto; background: color-mix(in srgb, var(--ink) 3%, transparent); }
-  .botrow { text-align: left; padding: 8px 10px; border: none; background: transparent; border-radius: 8px; color: var(--ink); }
+  .botrow { text-align: left; padding: 8px 10px; border: none; background: transparent; border-radius: 7px; color: var(--ink); }
   .botrow:hover { background: color-mix(in srgb, var(--ink) 5%, transparent); }
   .botrow.sel { background: color-mix(in srgb, var(--accent) 16%, transparent); }
-  .add { text-align: left; padding: 8px 10px; border: 1px dashed var(--hairline); background: transparent; border-radius: 8px; color: var(--ink-soft); margin-top: 4px; }
+  .add { text-align: left; padding: 8px 10px; border: 1px dashed var(--hairline); background: transparent; border-radius: 7px; color: var(--ink-soft); margin-top: 4px; }
   .add.sm { font-size: 12px; padding: 5px 8px; }
 
   .form { padding: 16px 18px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
   label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--ink-soft); }
-  input, textarea { background: color-mix(in srgb, var(--ink) 4%, var(--surface)); border: 1px solid var(--hairline); border-radius: 8px; padding: 7px 10px; color: var(--ink); font-size: 13px; outline: none; }
+  input, textarea { background: color-mix(in srgb, var(--ink) 4%, var(--surface)); border: 1px solid var(--hairline); border-radius: 7px; padding: 7px 10px; color: var(--ink); font-size: 13px; outline: none; }
   input:focus, textarea:focus { border-color: color-mix(in srgb, var(--accent) 55%, var(--hairline)); }
   textarea { resize: vertical; font-family: var(--ui); }
   small { color: var(--ink-faint); font-size: 11px; }
@@ -162,12 +162,12 @@
   .envrow { display: flex; align-items: center; gap: 6px; }
   .envrow .k { width: 160px; font-family: var(--mono); font-size: 12px; }
   .envrow .v { flex: 1; }
-  .del { width: 26px; height: 26px; border-radius: 6px; border: 1px solid var(--hairline); background: color-mix(in srgb, var(--ink) 4%, var(--surface)); color: var(--ink-soft); }
-  .remove { align-self: flex-start; margin-top: 6px; color: var(--danger); background: transparent; border: 1px solid color-mix(in srgb, var(--danger) 40%, var(--hairline)); border-radius: 8px; padding: 6px 12px; }
+  .del { width: 26px; height: 26px; border-radius: 5px; border: 1px solid var(--hairline); background: color-mix(in srgb, var(--ink) 4%, var(--surface)); color: var(--ink-soft); }
+  .remove { align-self: flex-start; margin-top: 6px; color: var(--danger); background: transparent; border: 1px solid color-mix(in srgb, var(--danger) 40%, var(--hairline)); border-radius: 7px; padding: 6px 12px; }
 
   footer { display: flex; align-items: center; gap: 10px; padding: 12px 18px; border-top: 1px solid var(--hairline); }
   .spacer { flex: 1; }
-  footer button { padding: 7px 16px; border-radius: 9px; border: 1px solid var(--hairline); background: color-mix(in srgb, var(--ink) 4%, var(--surface)); color: var(--ink); }
+  footer button { padding: 7px 16px; border-radius: 7px; border: 1px solid var(--hairline); background: color-mix(in srgb, var(--ink) 4%, var(--surface)); color: var(--ink); }
   footer .primary { background: var(--accent); color: #fff; border-color: var(--accent); }
   .err { color: var(--danger); font-size: 12px; }
   .ok { color: #5aa873; font-size: 12px; }

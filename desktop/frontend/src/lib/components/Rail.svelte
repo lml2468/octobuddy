@@ -60,7 +60,7 @@
   }
   .pill {
     width: 52px; height: 52px; display: grid; place-items: center;
-    border-radius: 15px; transition: background 0.14s ease;
+    border-radius: 8px; transition: background 0.14s ease;
   }
   .slot:hover .pill { background: color-mix(in srgb, var(--rail-ink) 14%, transparent); }
   .slot.sel .pill { background: color-mix(in srgb, var(--accent) 24%, transparent); }
@@ -76,7 +76,7 @@
 
   .foot { padding-top: 8px; }
   .icon {
-    width: 38px; height: 38px; border-radius: 10px; border: none; background: transparent;
+    width: 38px; height: 38px; border-radius: 8px; border: none; background: transparent;
     color: var(--rail-ink); display: flex; align-items: center; justify-content: center;
     transition: background 0.14s ease, color 0.14s ease;
   }

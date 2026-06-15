@@ -45,10 +45,10 @@
   --row-h: 72px;
   --avatar: 40px;
   --avatar-sm: 36px;
-  --bubble-radius: 13px;
+  --bubble-radius: 8px;
   --content-max: 720px;
   --gutter: 28px;
-  --radius: 14px;
+  --radius: 9px;
 
   --shadow-pop: 0 8px 30px rgba(20, 22, 28, 0.16), 0 2px 8px rgba(20, 22, 28, 0.08);
 
