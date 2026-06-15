@@ -1,111 +1,143 @@
-/* Watercolor palette + base. Phase 3 layers the living canvas (SVG turbulence
-   washes + paper grain) over these tokens; here we establish the ink/paper
-   vocabulary, typography, and reset so the console is legible from the start. */
+/* XClaw design tokens — a clean, professional messaging UI (WeChat / iMessage
+   grade): neutral surfaces, a confident blue accent, square-rounded avatars,
+   dense grid-aligned rows. No texture, no washes — clarity over decoration. */
 
 :root {
-  --paper: #f5efe4;
-  --paper-raised: #fcfaf3;
-  --ink: #2d2a24;
-  --ink-soft: #6f685c;
-  --ink-faint: #9a917f;
-  --brand: #4f7196;     /* ink-blue — assistant voice, accents */
-  --brand-strong: #3c5d80;
-  --coral: #cb8568;     /* warm — user voice */
-  --hairline: #e4dbc8;
-  --danger: #b3503f;
+  /* Three regions: dark bot-rail, conversation list, chat area. */
+  --rail: #2c2f36;          /* far-left bot rail (dark in both themes) */
+  --rail-ink: #c9ccd3;      /* rail icon/text */
+  --rail-active: #3a3e47;   /* rail selected chip */
 
-  /* Watercolor washes that bleed across the page (Canvas.svelte). */
-  --wash-1: #a9c3dd; /* fog blue  */
-  --wash-2: #e9b59c; /* coral     */
-  --wash-3: #b7d2c7; /* sea green */
-  --wash-4: #cfc3e0; /* lilac     */
-  --wash-blend: multiply;
-  --wash-opacity: 0.55;
-  --grain-blend: multiply;
-  --grain-opacity: 0.5;
+  --list: #f5f5f6;          /* conversation list column */
+  --list-sel: #e4e5e8;      /* selected conversation row */
+  --chat: #ededed;          /* chat message area */
+  --surface: #ffffff;       /* headers, search field, incoming bubble, composer */
 
-  --radius: 16px;
-  --radius-sm: 10px;
-  --shadow-feather: 0 8px 18px rgba(60, 48, 32, 0.10), 0 2px 5px rgba(60, 48, 32, 0.06);
+  --ink: #1b1c1e;           /* primary text */
+  --ink-soft: #76787d;      /* secondary text (previews, timestamps) */
+  --ink-faint: #a6a8ad;     /* tertiary / placeholders */
 
-  --serif: "Iowan Old Style", "Palatino Linotype", "Source Serif 4", Georgia, "Times New Roman", serif;
-  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+  --accent: #2b7fff;        /* brand blue — selection, send, links */
+  --accent-strong: #1f6ae6;
+  --out-bubble: #2b7fff;    /* outgoing (user) bubble */
+  --out-ink: #ffffff;
+  --in-bubble: #ffffff;     /* incoming (assistant) bubble */
+  --in-ink: #1b1c1e;
+  --badge: #ff3b30;
+  --online: #34c759;
+
+  --hairline: #e3e3e6;
+  --hairline-strong: #d6d6da;
+  --danger: #e0533f;
+
+  /* Code syntax tints */
+  --tok-kw: #8a5cf6;
+  --tok-str: #2f8f5b;
+  --tok-num: #b07219;
+  --code-bg: #f4f4f5;
+
+  /* Layout */
+  --rail-w: 66px;
+  --list-w: 300px;
+  --titlebar: 28px;        /* draggable strip for traffic lights */
+  --header-h: 56px;
+  --row-h: 64px;
+  --avatar: 40px;
+  --avatar-sm: 36px;
+  --bubble-radius: 13px;
+  --content-max: 720px;
+  --gutter: 28px;
+  --radius: 14px;
+
+  --shadow-pop: 0 8px 30px rgba(20, 22, 28, 0.16), 0 2px 8px rgba(20, 22, 28, 0.08);
+
+  --ui: "Geist Variable", -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", system-ui, sans-serif;
+  --mono: "Geist Mono Variable", ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
 }
 
-/* Dark palette: applied explicitly via [data-theme="dark"], or by the OS
-   preference unless the user has forced light. Vars live in one place via a
-   shared declaration block referenced by both selectors. */
 :root[data-theme="dark"] {
-  --paper: #14171f;
-  --paper-raised: #1f232e;
-  --ink: #ede7db;
-  --ink-soft: #b6ad9c;
-  --ink-faint: #7e7768;
-  --brand: #96b6dc;
-  --brand-strong: #b3ccea;
-  --coral: #cf8e74;
-  --hairline: #2d323d;
-  --danger: #e08a6e;
-  --shadow-feather: 0 10px 22px rgba(0, 0, 0, 0.32), 0 3px 7px rgba(0, 0, 0, 0.22);
-  --wash-1: #35506f;
-  --wash-2: #6e4a40;
-  --wash-3: #2f5650;
-  --wash-4: #4a3f63;
-  --wash-blend: screen;
-  --wash-opacity: 0.5;
-  --grain-blend: screen;
-  --grain-opacity: 0.45;
+  --rail: #0e0f12;
+  --rail-ink: #9a9da6;
+  --rail-active: #20232a;
+
+  --list: #1a1b1f;
+  --list-sel: #2a2c33;
+  --chat: #161719;
+  --surface: #202227;
+
+  --ink: #ececee;
+  --ink-soft: #8e9098;
+  --ink-faint: #62646b;
+
+  --accent: #3b8aff;
+  --accent-strong: #5a9dff;
+  --out-bubble: #2f6fd6;
+  --out-ink: #ffffff;
+  --in-bubble: #26282e;
+  --in-ink: #ececee;
+  --badge: #ff453a;
+  --online: #32d74b;
+
+  --hairline: #2c2e34;
+  --hairline-strong: #34373e;
+  --danger: #e0816e;
+    --tok-kw: #a98bff;
+    --tok-str: #7ec699;
+    --tok-num: #d9a441;
+    --code-bg: #1c1e24;
+
+  --shadow-pop: 0 10px 34px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.4);
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --paper: #14171f;
-    --paper-raised: #1f232e;
-    --ink: #ede7db;
-    --ink-soft: #b6ad9c;
-    --ink-faint: #7e7768;
-    --brand: #96b6dc;
-    --brand-strong: #b3ccea;
-    --coral: #cf8e74;
-    --hairline: #2d323d;
-    --danger: #e08a6e;
-    --shadow-feather: 0 10px 22px rgba(0, 0, 0, 0.32), 0 3px 7px rgba(0, 0, 0, 0.22);
-    --wash-1: #35506f;
-    --wash-2: #6e4a40;
-    --wash-3: #2f5650;
-    --wash-4: #4a3f63;
-    --wash-blend: screen;
-    --wash-opacity: 0.5;
-    --grain-blend: screen;
-    --grain-opacity: 0.45;
+    --rail: #0e0f12;
+    --rail-ink: #9a9da6;
+    --rail-active: #20232a;
+    --list: #1a1b1f;
+    --list-sel: #2a2c33;
+    --chat: #161719;
+    --surface: #202227;
+    --ink: #ececee;
+    --ink-soft: #8e9098;
+    --ink-faint: #62646b;
+    --accent: #3b8aff;
+    --accent-strong: #5a9dff;
+    --out-bubble: #2f6fd6;
+    --out-ink: #ffffff;
+    --in-bubble: #26282e;
+    --in-ink: #ececee;
+    --badge: #ff453a;
+    --online: #32d74b;
+    --hairline: #2c2e34;
+    --hairline-strong: #34373e;
+    --danger: #e0816e;
+    --tok-kw: #a98bff;
+    --tok-str: #7ec699;
+    --tok-num: #d9a441;
+    --code-bg: #1c1e24;
+    --shadow-pop: 0 10px 34px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.4);
   }
 }
 
 * { box-sizing: border-box; }
-
-html, body, #app {
-  height: 100%;
-  margin: 0;
-}
+html, body, #app { height: 100%; margin: 0; }
 
 body {
-  font-family: var(--sans);
+  font-family: var(--ui);
   font-size: 13px;
-  line-height: 1.55;
+  line-height: 1.5;
   color: var(--ink);
-  background: var(--paper);
+  background: var(--chat);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   overflow: hidden;
 }
 
-h1, h2, h3 { font-family: var(--serif); font-weight: 600; letter-spacing: 0.2px; margin: 0; }
-
 button, input, textarea { font-family: inherit; font-size: inherit; color: inherit; }
 button { cursor: pointer; }
 
-::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar { width: 9px; height: 9px; }
 ::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--ink) 18%, transparent); border-radius: 8px; border: 2px solid transparent; background-clip: padding-box; }
 ::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, var(--ink) 30%, transparent); background-clip: padding-box; }
 ::-webkit-scrollbar-track { background: transparent; }

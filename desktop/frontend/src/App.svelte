@@ -2,8 +2,7 @@
   import "./lib/styles/theme.css";
   import { Events } from "@wailsio/runtime";
   import { store } from "./lib/store.svelte";
-  import Canvas from "./lib/components/Canvas.svelte";
-  import Sidebar from "./lib/components/Sidebar.svelte";
+  import Rail from "./lib/components/Rail.svelte";
   import Conversations from "./lib/components/Conversations.svelte";
   import Transcript from "./lib/components/Transcript.svelte";
   import Composer from "./lib/components/Composer.svelte";
@@ -12,27 +11,29 @@
   let composer: Composer;
   let showEditor = $state(new URLSearchParams(location.search).has("editor"));
 
-  // The tray "Edit Bots…" item opens the editor.
-  Events.On("xclaw:open-editor", () => (showEditor = true));
+  // Tray "Edit Bots…" opens the editor (guarded: the Wails runtime is absent in
+  // a plain browser, e.g. the headless UI-audit harness).
+  try { Events.On("xclaw:open-editor", () => (showEditor = true)); } catch {}
 
-  function pick(prompt: string) {
-    composer?.setDraft(prompt);
-  }
+  function pick(prompt: string) { composer?.setDraft(prompt); }
 </script>
 
-<Canvas />
 <div class="shell">
-  <aside class="col sidebar"><Sidebar onedit={() => (showEditor = true)} /></aside>
-  <section class="col conversations"><Conversations /></section>
-  <main class="col detail">
-    <div class="detail-bar" style="--wails-draggable: drag;">
-      <span class="dtitle">{store.currentSession?.title ?? ""}</span>
+  <Rail onedit={() => (showEditor = true)} />
+  <section class="list"><Conversations /></section>
+  <main class="chat">
+    <header class="chat-bar" style="--wails-draggable: drag;">
+      <span class="title">{store.currentSession?.title ?? "XClaw"}</span>
       <span class="spacer"></span>
       {#if store.currentBot}
-        <button class="tool-btn" title="Clear conversation memory" onclick={() => store.reset()} aria-label="Clear memory">⌫</button>
-        <button class="tool-btn" title="Restart core" onclick={() => store.restartCore()} aria-label="Restart core">⟳</button>
+        <button class="icon" style="--wails-draggable: no-drag;" title="Clear conversation memory" onclick={() => store.reset()} aria-label="Clear memory">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m-9 0v14a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2V6"/></svg>
+        </button>
+        <button class="icon" style="--wails-draggable: no-drag;" title="Restart core" onclick={() => store.restartCore()} aria-label="Restart core">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>
+        </button>
       {/if}
-    </div>
+    </header>
     <Transcript onpick={pick} />
     <Composer bind:this={composer} />
   </main>
@@ -43,26 +44,23 @@
 {/if}
 
 <style>
-  .shell {
-    position: relative;
-    z-index: 1;
-    display: grid;
-    grid-template-columns: 200px 280px 1fr;
-    height: 100vh;
-  }
-  .col { min-width: 0; height: 100vh; overflow: hidden; }
-  /* Columns are translucent paper tints so the watercolor canvas breathes
-     through them; hairlines give the contrast steps. */
-  .sidebar { background: color-mix(in srgb, var(--paper) 72%, transparent); border-right: 1px solid var(--hairline); backdrop-filter: saturate(1.1); }
-  .conversations { background: color-mix(in srgb, var(--paper) 58%, transparent); border-right: 1px solid var(--hairline); }
-  .detail { display: flex; flex-direction: column; background: transparent; }
+  .shell { display: flex; height: 100vh; background: var(--chat); }
+  .list { width: var(--list-w); flex: 0 0 var(--list-w); height: 100vh; border-right: 1px solid var(--hairline); overflow: hidden; }
+  .chat { flex: 1; min-width: 0; height: 100vh; display: flex; flex-direction: column; background: var(--chat); }
 
-  .detail-bar { display: flex; align-items: center; gap: 8px; padding: 30px 16px 8px; }
-  .dtitle { font-family: var(--serif); font-weight: 600; font-size: 14px; color: var(--ink-soft); }
-  .spacer { flex: 1; }
-  .tool-btn {
-    width: 28px; height: 28px; border-radius: 8px; border: 1px solid var(--hairline);
-    background: var(--paper-raised); color: var(--ink-soft); font-size: 14px; line-height: 1;
+  .chat-bar {
+    height: var(--header-h); flex: 0 0 var(--header-h);
+    display: flex; align-items: center; gap: 6px;
+    padding: var(--titlebar) var(--gutter) 0;
+    background: var(--surface); border-bottom: 1px solid var(--hairline);
   }
-  .tool-btn:hover { color: var(--ink); border-color: color-mix(in srgb, var(--brand) 40%, var(--hairline)); }
+  .title { font-size: 15px; font-weight: 600; color: var(--ink); }
+  .spacer { flex: 1; }
+  .icon {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 32px; height: 32px; border-radius: 8px; border: none;
+    background: transparent; color: var(--ink-soft);
+    transition: background 0.14s ease, color 0.14s ease;
+  }
+  .icon:hover { background: color-mix(in srgb, var(--ink) 7%, transparent); color: var(--accent); }
 </style>

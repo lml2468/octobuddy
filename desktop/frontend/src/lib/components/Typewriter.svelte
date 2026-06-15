@@ -33,7 +33,7 @@
     width: 0.5em; height: 1em;
     margin-left: 1px;
     vertical-align: text-bottom;
-    background: var(--brand);
+    background: var(--accent);
     opacity: 0.7;
     animation: blink 1s steps(2, start) infinite;
   }

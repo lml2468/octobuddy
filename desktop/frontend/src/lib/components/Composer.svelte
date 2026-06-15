@@ -11,30 +11,24 @@
     ta?.focus();
     autogrow();
   }
-
   function autogrow() {
     if (!ta) return;
     ta.style.height = "auto";
-    ta.style.height = Math.min(ta.scrollHeight, 150) + "px";
+    ta.style.height = Math.min(ta.scrollHeight, 140) + "px";
   }
-
   function send() {
     if (!canSend) return;
     store.send(draft.trim());
     draft = "";
     requestAnimationFrame(autogrow);
   }
-
   function onKey(e: KeyboardEvent) {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      send();
-    }
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
   }
 </script>
 
 <div class="composer">
-  <div class="pill">
+  <div class="field">
     <textarea
       bind:this={ta}
       bind:value={draft}
@@ -44,35 +38,34 @@
       onkeydown={onKey}
     ></textarea>
     <button class="send" class:on={canSend} onclick={send} disabled={!canSend} aria-label="Send">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
     </button>
   </div>
 </div>
 
 <style>
-  .composer { padding: 8px 16px 16px; }
-  .pill {
-    display: flex; align-items: flex-end; gap: 8px;
-    background: var(--paper-raised);
-    border: 1px solid var(--hairline);
-    border-radius: 22px;
-    padding: 6px 6px 6px 16px;
-    box-shadow: var(--shadow-feather);
-    transition: border-color 0.18s ease, box-shadow 0.18s ease;
+  .composer {
+    background: var(--surface);
+    padding: 12px var(--gutter) 14px;
   }
-  .pill:focus-within { border-color: color-mix(in srgb, var(--brand) 55%, var(--hairline)); }
+  .field {
+    max-width: var(--content-max); margin: 0 auto;
+    display: flex; align-items: flex-end; gap: 9px;
+  }
   textarea {
-    flex: 1; border: none; outline: none; background: transparent; resize: none;
-    line-height: 1.5; padding: 7px 0; max-height: 150px; color: var(--ink);
+    flex: 1; border: none; outline: none; resize: none;
+    background: color-mix(in srgb, var(--ink) 6%, transparent);
+    border-radius: 11px; padding: 10px 13px; line-height: 1.45; max-height: 140px;
+    color: var(--ink); font-size: 14px;
   }
   textarea::placeholder { color: var(--ink-faint); }
   .send {
-    flex: 0 0 36px; width: 36px; height: 36px; border-radius: 50%;
-    border: none; display: grid; place-items: center;
-    background: color-mix(in srgb, var(--ink) 12%, transparent); color: var(--paper-raised);
-    transition: transform 0.15s ease, background 0.15s ease;
+    flex: 0 0 34px; width: 34px; height: 34px; border-radius: 9px; border: none;
+    display: grid; place-items: center; margin-bottom: 1px;
+    background: color-mix(in srgb, var(--ink) 10%, transparent); color: var(--ink-faint);
+    transition: background 0.15s ease, color 0.15s ease, transform 0.12s ease;
   }
-  .send.on { background: var(--brand); color: #fff; }
-  .send.on:hover { transform: scale(1.08); }
+  .send.on { background: var(--accent); color: #fff; }
+  .send.on:hover { background: var(--accent-strong); transform: translateY(-1px); }
   .send:disabled { cursor: default; }
 </style>

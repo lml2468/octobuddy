@@ -89,10 +89,10 @@ func openConsole() {
 	w := app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Name:      consoleWindow,
 		Title:     "XClaw",
-		Width:     1200,
-		Height:    780,
-		MinWidth:  900,
-		MinHeight: 600,
+		Width:     1040,
+		Height:    720,
+		MinWidth:  820,
+		MinHeight: 560,
 		Mac: application.MacWindow{
 			InvisibleTitleBarHeight: 36,
 			Backdrop:                application.MacBackdropNormal, // opaque paper — the watercolor canvas, not glass

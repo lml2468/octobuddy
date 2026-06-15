@@ -1,5 +1,5 @@
 <script lang="ts">
-  import Octopus from "./Octopus.svelte";
+  import Avatar from "./Avatar.svelte";
 
   let { onpick }: { onpick: (prompt: string) => void } = $props();
 
@@ -11,66 +11,30 @@
 </script>
 
 <div class="empty">
-  <div class="hero">
-    <div class="halo"></div>
-    <Octopus size={60} />
-  </div>
+  <Avatar octopus size={60} />
   <h1>Talk to your agent</h1>
   <p class="sub">Ask anything below, or start with one of these.</p>
   <div class="chips">
     {#each prompts as p}
-      <button class="chip" onclick={() => onpick(p)}>
-        <span class="spark">✦</span>
-        <span class="label">{p}</span>
-      </button>
+      <button class="chip" onclick={() => onpick(p)}>{p}</button>
     {/each}
   </div>
 </div>
 
 <style>
   .empty {
-    width: 100%;
-    max-width: 460px;
-    margin: 0 auto;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    text-align: center;
-    padding-top: 8vh;
-    gap: 14px;
+    width: 100%; max-width: 400px; margin: 0 auto; min-height: 62vh;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    text-align: center; gap: 12px;
   }
-  .hero { position: relative; color: var(--brand); display: grid; place-items: center; width: 100px; height: 100px; }
-  .halo {
-    position: absolute; width: 160px; height: 160px; border-radius: 50%;
-    background: radial-gradient(circle, color-mix(in srgb, var(--brand) 20%, transparent), transparent 70%);
-    filter: blur(6px);
-  }
-  h1 { font-size: 30px; }
-  .sub { color: var(--ink-soft); margin: 0; }
-
-  .chips {
-    width: 100%;
-    display: flex;
-    flex-direction: column;
-    align-items: stretch;
-    gap: 9px;
-    margin-top: 4px;
-  }
+  h1 { font-size: 22px; font-weight: 600; letter-spacing: -0.2px; margin: 6px 0 0; }
+  .sub { color: var(--ink-soft); margin: 0; font-size: 13px; }
+  .chips { display: flex; flex-direction: column; align-items: stretch; gap: 6px; width: 100%; margin-top: 8px; }
   .chip {
-    display: flex;
-    align-items: center;
-    gap: 9px;
-    width: 100%;
-    text-align: left;
-    padding: 11px 16px;
-    background: var(--paper-raised);
-    color: var(--ink);
-    border: 1px solid var(--hairline);
-    border-radius: 14px;
-    box-shadow: var(--shadow-feather);
-    transition: transform 0.15s ease, border-color 0.15s ease;
+    width: 100%; text-align: left; padding: 10px 14px; font-size: 13px;
+    background: color-mix(in srgb, var(--ink) 5%, transparent); color: var(--ink);
+    border: none; border-radius: 10px;
+    transition: background 0.14s ease;
   }
-  .chip:hover { transform: translateY(-1px); border-color: color-mix(in srgb, var(--brand) 40%, var(--hairline)); }
-  .spark { color: var(--brand); flex: 0 0 auto; }
-  .label { flex: 1; white-space: normal; }
+  .chip:hover { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent-strong); }
 </style>

@@ -15,8 +15,6 @@
        c5 -4 8 -11 8 -19
        C82 29 71 14 50 14 Z"
   />
-  <circle cx="41" cy="48" r="4.4" fill="var(--paper)" />
-  <circle cx="59" cy="48" r="4.4" fill="var(--paper)" />
-  <circle cx="42.2" cy="49" r="1.7" fill="currentColor" />
-  <circle cx="60.2" cy="49" r="1.7" fill="currentColor" />
+  <circle cx="41" cy="48" r="4.2" fill="rgba(0,0,0,0.32)" />
+  <circle cx="59" cy="48" r="4.2" fill="rgba(0,0,0,0.32)" />
 </svg>
