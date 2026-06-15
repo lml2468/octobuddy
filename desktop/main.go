@@ -112,7 +112,7 @@ func openConsole() {
 // setupSystemTray adds the menu-bar octopus with quick actions + a status line.
 func setupSystemTray() {
 	tray := app.SystemTray.New()
-	tray.SetTemplateIcon(octopusTemplatePNG())
+	tray.SetIcon(octoMenuBarPNG)
 	tray.SetTooltip("XClaw")
 
 	menu := app.NewMenu()
