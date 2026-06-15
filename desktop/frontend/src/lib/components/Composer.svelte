@@ -46,6 +46,7 @@
 <style>
   .composer {
     background: var(--surface);
+    border-top: 1px solid var(--hairline);
     padding: 12px var(--gutter) 14px;
   }
   .field {
@@ -53,11 +54,13 @@
     display: flex; align-items: flex-end; gap: 9px;
   }
   textarea {
-    flex: 1; border: none; outline: none; resize: none;
+    flex: 1; border: 1px solid transparent; outline: none; resize: none;
     background: color-mix(in srgb, var(--ink) 6%, transparent);
     border-radius: 11px; padding: 10px 13px; line-height: 1.45; max-height: 140px;
     color: var(--ink); font-size: 14px;
+    transition: border-color 0.15s ease, background 0.15s ease;
   }
+  textarea:focus { border-color: color-mix(in srgb, var(--accent) 55%, transparent); background: color-mix(in srgb, var(--ink) 3%, transparent); }
   textarea::placeholder { color: var(--ink-faint); }
   .send {
     flex: 0 0 34px; width: 34px; height: 34px; border-radius: 9px; border: none;

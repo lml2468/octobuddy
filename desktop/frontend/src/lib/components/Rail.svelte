@@ -8,7 +8,7 @@
 
 <div class="rail">
   <div class="brand" style="--wails-draggable: drag;" title="XClaw">
-    <Octopus size={22} />
+    <Octopus size={30} />
   </div>
 
   <div class="bots">
@@ -44,8 +44,9 @@
     padding-bottom: 12px;
   }
   .brand {
-    height: calc(var(--titlebar) + 30px);
-    display: flex; align-items: flex-end; justify-content: center; padding-bottom: 8px;
+    height: 72px; flex: 0 0 72px;
+    display: flex; align-items: center; justify-content: center;
+    padding-top: var(--titlebar);
     color: #fff;
   }
   .bots { width: var(--rail-w); flex: 1; overflow-y: auto; overflow-x: hidden; padding-top: 4px; scrollbar-width: none; }
@@ -62,7 +63,7 @@
     border-radius: 15px; transition: background 0.14s ease;
   }
   .slot:hover .pill { background: color-mix(in srgb, var(--rail-ink) 14%, transparent); }
-  .slot.sel .pill { background: var(--rail-active); }
+  .slot.sel .pill { background: color-mix(in srgb, var(--accent) 24%, transparent); }
 
   .tile { position: relative; width: 40px; height: 40px; }
   .status {

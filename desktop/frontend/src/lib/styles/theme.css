@@ -9,7 +9,8 @@
   --rail-active: #3a3e47;   /* rail selected chip */
 
   --list: #f5f5f6;          /* conversation list column */
-  --list-sel: #e4e5e8;      /* selected conversation row */
+  --list-sel: #07c160;      /* selected conversation row (WeChat green) */
+  --sel-ink: #08220f;       /* text on the green selected row */
   --chat: #ededed;          /* chat message area */
   --surface: #ffffff;       /* headers, search field, incoming bubble, composer */
 
@@ -17,14 +18,14 @@
   --ink-soft: #76787d;      /* secondary text (previews, timestamps) */
   --ink-faint: #a6a8ad;     /* tertiary / placeholders */
 
-  --accent: #2b7fff;        /* brand blue — selection, send, links */
-  --accent-strong: #1f6ae6;
-  --out-bubble: #2b7fff;    /* outgoing (user) bubble */
-  --out-ink: #ffffff;
+  --accent: #07c160;        /* WeChat green — selection, send, active */
+  --accent-strong: #06a854;
+  --out-bubble: #95ec69;    /* outgoing (user) bubble — WeChat green */
+  --out-ink: #06210f;
   --in-bubble: #ffffff;     /* incoming (assistant) bubble */
   --in-ink: #1b1c1e;
-  --badge: #ff3b30;
-  --online: #34c759;
+  --badge: #fa5151;
+  --online: #07c160;
 
   --hairline: #e3e3e6;
   --hairline-strong: #d6d6da;
@@ -37,11 +38,11 @@
   --code-bg: #f4f4f5;
 
   /* Layout */
-  --rail-w: 66px;
-  --list-w: 300px;
-  --titlebar: 28px;        /* draggable strip for traffic lights */
-  --header-h: 56px;
-  --row-h: 64px;
+  --rail-w: 72px;
+  --list-w: 318px;
+  --titlebar: 36px;       /* rail logo clearance below the traffic lights */
+  --header-h: 60px;       /* list/chat header (content right of the lights) */
+  --row-h: 72px;
   --avatar: 40px;
   --avatar-sm: 36px;
   --bubble-radius: 13px;
@@ -61,7 +62,8 @@
   --rail-active: #20232a;
 
   --list: #1a1b1f;
-  --list-sel: #2a2c33;
+  --list-sel: #07c160;
+    --sel-ink: #06270f;
   --chat: #161719;
   --surface: #202227;
 
@@ -69,14 +71,14 @@
   --ink-soft: #8e9098;
   --ink-faint: #62646b;
 
-  --accent: #3b8aff;
-  --accent-strong: #5a9dff;
-  --out-bubble: #2f6fd6;
+  --accent: #07c160;
+  --accent-strong: #2bcb7e;
+  --out-bubble: #1f8a52;
   --out-ink: #ffffff;
   --in-bubble: #26282e;
   --in-ink: #ececee;
-  --badge: #ff453a;
-  --online: #32d74b;
+  --badge: #fa5151;
+  --online: #07c160;
 
   --hairline: #2c2e34;
   --hairline-strong: #34373e;
@@ -95,20 +97,21 @@
     --rail-ink: #9a9da6;
     --rail-active: #20232a;
     --list: #1a1b1f;
-    --list-sel: #2a2c33;
+    --list-sel: #07c160;
+    --sel-ink: #06270f;
     --chat: #161719;
     --surface: #202227;
     --ink: #ececee;
     --ink-soft: #8e9098;
     --ink-faint: #62646b;
-    --accent: #3b8aff;
-    --accent-strong: #5a9dff;
-    --out-bubble: #2f6fd6;
+    --accent: #07c160;
+    --accent-strong: #2bcb7e;
+    --out-bubble: #1f8a52;
     --out-ink: #ffffff;
     --in-bubble: #26282e;
     --in-ink: #ececee;
-    --badge: #ff453a;
-    --online: #32d74b;
+    --badge: #fa5151;
+    --online: #07c160;
     --hairline: #2c2e34;
     --hairline-strong: #34373e;
     --danger: #e0816e;
@@ -122,6 +125,8 @@
 
 * { box-sizing: border-box; }
 html, body, #app { height: 100%; margin: 0; }
+/* #app must fill the window edge-to-edge — no template max-width/padding ring. */
+#app { width: 100%; max-width: none; padding: 0; }
 
 body {
   font-family: var(--ui);
@@ -136,6 +141,9 @@ body {
 
 button, input, textarea { font-family: inherit; font-size: inherit; color: inherit; }
 button { cursor: pointer; }
+
+::selection { background: color-mix(in srgb, var(--accent) 28%, transparent); }
+:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: 2px; }
 
 ::-webkit-scrollbar { width: 9px; height: 9px; }
 ::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--ink) 18%, transparent); border-radius: 8px; border: 2px solid transparent; background-clip: padding-box; }

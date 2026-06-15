@@ -51,7 +51,7 @@
   .chat-bar {
     height: var(--header-h); flex: 0 0 var(--header-h);
     display: flex; align-items: center; gap: 6px;
-    padding: var(--titlebar) var(--gutter) 0;
+    padding: 0 var(--gutter);
     background: var(--surface); border-bottom: 1px solid var(--hairline);
   }
   .title { font-size: 15px; font-weight: 600; color: var(--ink); }

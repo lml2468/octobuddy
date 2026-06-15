@@ -104,7 +104,7 @@
   .md :global(.cb-lang) { font-family: var(--mono); font-size: 11px; color: var(--ink-soft); letter-spacing: 0.3px; }
   .md :global(.cb-copy) {
     font-family: var(--mono); font-size: 11px; color: var(--ink-faint);
-    background: transparent; border: none; padding: 2px 6px; border-radius: 5px; cursor: pointer;
+    background: transparent; border: none; padding: 5px 9px; border-radius: 6px; cursor: pointer;
     transition: color 0.14s ease, background 0.14s ease;
   }
   .md :global(.cb-copy:hover) { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }

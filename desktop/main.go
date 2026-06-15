@@ -98,7 +98,7 @@ func openConsole() {
 			Backdrop:                application.MacBackdropNormal, // opaque paper — the watercolor canvas, not glass
 			TitleBar:                application.MacTitleBarHiddenInset,
 		},
-		BackgroundColour: application.NewRGB(245, 239, 228), // paper (light); the canvas paints the rest
+		BackgroundColour: application.NewRGB(22, 23, 25), // neutral dark; only shows at the window's rounded corners
 		URL:              baseURL,
 	})
 	w.Show()
