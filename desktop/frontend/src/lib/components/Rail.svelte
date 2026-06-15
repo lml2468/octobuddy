@@ -45,9 +45,9 @@
     box-shadow: inset -1px 0 0 rgba(255, 255, 255, 0.04);
   }
   .brand {
-    height: 78px; flex: 0 0 78px;
+    height: 88px; flex: 0 0 88px;
     display: flex; align-items: center; justify-content: center;
-    padding-top: calc(var(--titlebar) + 8px);
+    padding-top: calc(var(--titlebar) + 18px);
     color: #fff;
   }
   /* Brand logo: the Octo app icon, rounded with a soft lift. */
