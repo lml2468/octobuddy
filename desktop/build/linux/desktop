@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Name=XClaw
+Comment=XClaw — agent gateway desktop
+# The Exec line includes %u to pass the URL to the application
+Exec=/usr/local/bin/xclaw %u
+Terminal=false
+Type=Application
+Icon=xclaw
+Categories=Utility;
+StartupWMClass=xclaw
+
+ 

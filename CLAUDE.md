@@ -11,10 +11,17 @@ that version together against one contract:
 
 - `core/` — Go daemon `xclawd` (the gateway). Single static binary, **zero cgo**,
   cross-compiles to mac/linux/windows.
-- `app/` — Swift macOS app (SwiftPM, macOS 14+). A control-bus client; never
-  talks to Claude directly — it drives `xclawd`.
+- `desktop/` — **Go + Wails v3** desktop app (Svelte + TS frontend, macOS/Win/Linux).
+  A control-bus client; never talks to Claude directly — it spawns + drives
+  `xclawd`. The UI is a hand-painted **watercolor** design system (CSS/SVG), not
+  native chrome. Its Go backend reuses the wire contract directly.
 - `proto/` — the language-neutral control-bus contract (NDJSON envelopes over a
-  Unix socket) shared by core and app. Spec lives in `proto/README.md`.
+  Unix socket) shared by core and the app. Spec lives in `proto/README.md`; the
+  Go types live in `core/control/wire` (a dependency-free leaf both sides import).
+
+The repo is a **Go workspace** (`go.work`) tying `./core` and `./desktop`. The
+desktop module is `github.com/lml2468/xclaw/desktop` and pulls `core` in via a
+local `replace`.
 
 ## Commands
 
@@ -27,14 +34,23 @@ go run ./cmd/xclawd -control /tmp/xclaw.sock   # serve control bus for GUI clien
 go run ./cmd/xclawd -config               # multi-bot from ~/.xclaw/config.json
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /tmp/xclawd ./cmd/xclawd  # cross-compile
 
-# Swift app
-cd app && swift build && swift test
-zsh scripts/run-dev.sh                     # build core + launch app (needs ~/.xclaw/config.json)
+# Desktop app (Wails v3 — needs the wails3 CLI:
+#   go install github.com/wailsapp/wails/v3/cmd/wails3@latest)
+cd desktop && go build ./... && go vet ./...
+cd desktop/frontend && npm run build && npx svelte-check   # frontend build + typecheck
+zsh scripts/run-dev.sh                     # build core + `wails3 dev` (needs ~/.xclaw/config.json)
 zsh scripts/run-dev.sh --seed-config       # write a starter config first
+zsh scripts/run-dev.sh --preview           # UI preview: mock data, no daemon (XCLAW_PREVIEW)
 
-# Package a distributable XClaw.app (+ .zip/.dmg); ad-hoc signed by default
-zsh scripts/package-app.sh
+# Package a distributable XClaw.app (+ .zip); embeds xclawd, signs inside-out.
+# ad-hoc by default; pass the identity to Developer-sign, a profile to notarize.
+XCLAW_SIGN_IDENTITY="Apple Development: …" zsh scripts/package-desktop.sh
 ```
+
+The desktop GUI's own visual-iteration loop is **preview mode**: launch the built
+binary with `XCLAW_PREVIEW=1` (optional `XCLAW_PREVIEW_THEME=dark|light`,
+`XCLAW_PREVIEW_EDITOR=1`) — it seeds a mock roster + transcript and skips the
+daemon, so the watercolor UI can be screenshotted without a live bot.
 
 Go module path is `github.com/lml2468/xclaw/core` (Go 1.26). Tests need **no API
 key** — they run against recorded fixtures (`core/fixtures/`) and live CLI spawns

@@ -6,10 +6,14 @@
 core/xclawd
 core/.xclawd-dev
 
-# Swift
-app/.build/
-app/.swiftpm/
+# Swift (legacy app/, removed — kept ignores harmless if it returns)
 *.xcodeproj/xcuserdata/
+
+# Desktop (Wails) build artifacts; sources + generated bindings are tracked
+desktop/bin/
+desktop/frontend/node_modules/
+desktop/frontend/dist/
+.task/
 
 # Local databases / runtime state
 *.db
