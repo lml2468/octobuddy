@@ -31,9 +31,41 @@ socket:
 - **chmod 0600 (defense in depth).** The kernel enforces socket-connect perms on
   Linux, denying a different user `connect()` before the peer-cred layer runs.
 
-The trust boundary is therefore "same OS user as the daemon." Commands carry no
-per-command authentication beyond this; a body field is **never** an
-authorization claim (see the cron owner-gate below).
+The trust boundary from the peer-cred + chmod layers is "same OS user as the
+daemon." That is necessary but **not sufficient**: the daemon spawns the agent
+CLI as the *same uid*, so a prompt-injected agent (which has a `Bash` tool)
+could hand-craft NDJSON and dial the socket. The peer-cred check cannot tell the
+operator's GUI from the agent's CLI. A second layer closes that gap:
+
+- **Capability token (GUI-only).** At spawn the launcher (the GUI) mints a random
+  token and hands it to the daemon **out-of-band** — over the daemon's stdin, a
+  private pipe the launcher owns — so it never appears in an env var or argv
+  (both world-readable via `/proc/<pid>/`) and the spawned agent, which the daemon
+  launches with its own fresh stdin, never inherits the fd. The daemon holds it in
+  memory only (never logged, never written to `config.json`). A client proves it is
+  the GUI by presenting the token in an `auth` command (constant-time compared);
+  that marks the connection authorized for the **privileged** command set. The
+  token is required: a daemon with no token configured (bare CLI/dev) can
+  authenticate no one, so every privileged command is denied (fail closed).
+
+  - **Privileged (require auth):** `session.send`, `session.reset`,
+    `secret.inject`, `cron.create`, `cron.delete`, and the broadcast **event
+    stream** (it carries every session's live activity — cross-session
+    disclosure). These are operator/GUI→daemon operations with no sanctioned agent
+    path.
+  - **Open (no auth):** `health`, `bots.list`, `session.history`, `cron.list` —
+    read-only/health surface that leaks nothing an agent's own bot can't see.
+
+A body field is **never** an authorization claim (see the cron owner-gate below);
+authorization is the peer-cred uid + the capability token, never client-asserted
+data.
+
+> **Residual risk (tracked separately):** same-uid is a weak boundary — a
+> determined injected agent with `ptrace`/`/proc/<pid>/mem` access (where Yama
+> `ptrace_scope` permits) could still extract the in-memory token. The durable fix
+> is privilege separation: run the agent CLI under a dedicated lower-privileged
+> uid so the peer-cred gate becomes a real boundary and the token is defense in
+> depth. Out of scope here.
 
 ## Envelope
 
@@ -51,6 +83,7 @@ multi-bot (config) mode; it is ignored in single-bot mode.
 
 | command | body | response |
 |---|---|---|
+| `auth` | `{token}` | `{ok}` (handshake; marks the connection authorized for privileged commands — see Access control) |
 | `bots.list` | — | `[{id, connected, lastError}]` |
 | `health` | — | `{uptime, driver, bots, connections}` |
 | `session.send` | `{botId?, uid, text}` | `{ok}` (turn streamed via events) |

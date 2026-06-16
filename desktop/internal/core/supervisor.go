@@ -5,6 +5,8 @@
 package core
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
@@ -96,8 +98,21 @@ type Supervisor struct {
 	SocketPath string
 	ConfigPath string // when non-empty, run -config mode
 
-	mu  sync.Mutex
-	cmd *exec.Cmd
+	mu        sync.Mutex
+	cmd       *exec.Cmd
+	authToken string // capability token minted for the current daemon (MLT-37)
+}
+
+// Token returns the control-bus capability token for the currently running
+// daemon. The GUI presents it in an "auth" handshake right after dialing so the
+// daemon admits its privileged commands (cron.*, secret.inject, session.*). A
+// fresh token is minted on every Start/Restart, so callers must read it after a
+// (re)connect, never cache it across daemon restarts. Empty before the first
+// successful Start.
+func (s *Supervisor) Token() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.authToken
 }
 
 // Start spawns xclawd in control-bus mode and waits for the socket to appear.
@@ -108,21 +123,42 @@ func (s *Supervisor) Start() error {
 }
 
 func (s *Supervisor) startLocked() error {
-	args := []string{"-control", s.SocketPath, "-no-repl", "-exit-with-parent"}
-	if s.ConfigPath != "" {
-		args = append([]string{"-config", s.ConfigPath}, args...)
-	}
+	args := daemonArgs(s.SocketPath, s.ConfigPath)
 	// A stale socket from a crashed prior run would make the daemon's listen fail.
 	_ = os.Remove(s.SocketPath)
 
+	// Mint a fresh capability token and hand it to the daemon out-of-band: over a
+	// private pipe wired to the daemon's stdin (-control-auth-stdin), never an env
+	// var or argv (both world-readable via /proc on Linux). The daemon launches
+	// the agent CLI with its own stdin, so the spawned agent never inherits this
+	// fd and cannot read the token. Held in daemon memory only. (MLT-37)
+	token, err := randomToken()
+	if err != nil {
+		return fmt.Errorf("mint control token: %w", err)
+	}
+	tokenR, tokenW, err := os.Pipe()
+	if err != nil {
+		return fmt.Errorf("control token pipe: %w", err)
+	}
+
 	cmd := exec.Command(s.BinPath, args...)
+	cmd.Stdin = tokenR     // daemon reads the token as the first line of stdin
 	cmd.Stdout = os.Stderr // surface daemon logs in the app's stderr during dev
 	cmd.Stderr = os.Stderr
 	cmd.Env = envWithOctoBin() // put ~/.xclaw/bin on PATH so the agent can call octo-cli
 	if err := cmd.Start(); err != nil {
+		tokenR.Close()
+		tokenW.Close()
 		return fmt.Errorf("start xclawd: %w", err)
 	}
+	// The child holds its own dup of the read end; write the token and close both
+	// ends so the daemon sees a clean newline-terminated line then EOF. Never log it.
+	_ = tokenR.Close()
+	_, _ = tokenW.WriteString(token + "\n")
+	_ = tokenW.Close()
+
 	s.cmd = cmd
+	s.authToken = token
 
 	// Wait (briefly) for the daemon to bind the socket before clients dial.
 	deadline := time.Now().Add(5 * time.Second)
@@ -184,4 +220,25 @@ func isExec(path string) bool {
 		return true
 	}
 	return fi.Mode()&0o111 != 0
+}
+
+// randomToken returns a 256-bit cryptographically-random capability token as a
+// hex string. Used to mint the control-bus token handed to the daemon at spawn.
+func randomToken() (string, error) {
+	var b [32]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b[:]), nil
+}
+
+// daemonArgs builds the xclawd command line. The capability token is NEVER an
+// argument (it would be world-readable via /proc/<pid>/cmdline) — it is written
+// to the daemon's stdin instead, which -control-auth-stdin tells it to read.
+func daemonArgs(socketPath, configPath string) []string {
+	args := []string{"-control", socketPath, "-no-repl", "-exit-with-parent", "-control-auth-stdin"}
+	if configPath != "" {
+		args = append([]string{"-config", configPath}, args...)
+	}
+	return args
 }

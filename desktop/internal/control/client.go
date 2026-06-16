@@ -21,6 +21,7 @@ import (
 type (
 	Envelope            = wire.Envelope
 	Kind                = wire.Kind
+	AuthBody            = wire.AuthBody
 	SessionSendBody     = wire.SessionSendBody
 	SessionHistoryBody  = wire.SessionHistoryBody
 	SecretInjectBody    = wire.SecretInjectBody
@@ -44,6 +45,8 @@ const (
 	KindCommand  = wire.KindCommand
 	KindResponse = wire.KindResponse
 	KindEvent    = wire.KindEvent
+
+	CmdAuth = wire.CmdAuth
 )
 
 // Client is a connected control-bus session. Not safe to Dial twice; create a
