@@ -153,10 +153,21 @@ func makeHandler(ctx context.Context, deps handlerDeps) control.CommandHandler {
 			if t.cron == nil {
 				return nil, fmt.Errorf("cron is not enabled for this bot")
 			}
+			// The requester identity is the SERVER-resolved owner uid, never the
+			// body uid. cron reaches the bus via an agent-controlled CLI, so a
+			// body uid is a forgeable claim (a prompt-injected agent could assert
+			// the owner's uid); the resolved owner is trusted server state. An
+			// unregistered bot has no owner yet → reject.
+			owner := t.cron.OwnerUID()
+			if owner == "" {
+				return nil, fmt.Errorf("bot owner not resolved yet; cannot create scheduled tasks")
+			}
+			// DM-bound tasks (no channelId) bind to the owner's own session; group
+			// tasks bind to the named channel but still run as the owner.
 			coords := cron.SessionCoords{
 				ChannelID:   b.ChannelID,
 				ChannelType: cron.ChannelKind(channelTypeFor(b.ChannelType, b.ChannelID)),
-				FromUID:     b.UID,
+				FromUID:     owner,
 				FromName:    b.FromName,
 			}
 			task, err := t.cron.Create(cron.CreateParams{
@@ -164,7 +175,7 @@ func makeHandler(ctx context.Context, deps handlerDeps) control.CommandHandler {
 				Prompt:     b.Prompt,
 				Recurring:  b.Recurring,
 				Coords:     coords,
-				RequestUID: b.UID,
+				RequestUID: owner,
 			})
 			if err != nil {
 				return nil, err
@@ -205,7 +216,12 @@ func makeHandler(ctx context.Context, deps handlerDeps) control.CommandHandler {
 			if t.cron == nil {
 				return nil, fmt.Errorf("cron is not enabled for this bot")
 			}
-			if err := t.cron.Delete(b.ID, b.UID); err != nil {
+			// Gate on the verified server-resolved owner, not the body uid.
+			owner := t.cron.OwnerUID()
+			if owner == "" {
+				return nil, fmt.Errorf("bot owner not resolved yet; cannot delete scheduled tasks")
+			}
+			if err := t.cron.Delete(b.ID, owner); err != nil {
 				return nil, err
 			}
 			return control.OKBody{OK: true}, nil

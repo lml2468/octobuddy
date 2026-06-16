@@ -20,7 +20,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -262,15 +261,6 @@ func (m multiSink) OnReply(key, text string) {
 	for _, s := range m {
 		s.OnReply(key, text)
 	}
-}
-
-func mustListenUnix(path string) net.Listener {
-	_ = os.Remove(path) // clear a stale socket
-	ln, err := net.Listen("unix", path)
-	if err != nil {
-		fatal("listen %s: %v", path, err)
-	}
-	return ln
 }
 
 // makeCommandHandler builds the single-bot control-bus dispatcher. All command

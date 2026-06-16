@@ -83,6 +83,13 @@ func (m *Manager) owner() string {
 	return m.ownerUID
 }
 
+// OwnerUID returns the resolved owner uid ("" if not yet registered). The
+// control-bus handler uses this as the *verified* requester identity for
+// create/delete instead of a client-supplied uid, which is forgeable (the agent
+// reaches cron over the bus via an agent-controlled CLI, so a prompt injection
+// could otherwise assert the owner's uid). See core/cmd/xclawd/control.go.
+func (m *Manager) OwnerUID() string { return m.owner() }
+
 // CreateParams are the inputs to Create.
 type CreateParams struct {
 	Schedule  string
