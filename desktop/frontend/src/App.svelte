@@ -22,23 +22,25 @@
 <TrafficLights />
 <div class="shell">
   <Rail onedit={() => (showEditor = true)} />
-  <section class="list"><Conversations /></section>
-  <main class="chat">
-    <header class="chat-bar" style="--wails-draggable: drag;">
-      <span class="title">{store.currentSession?.title ?? "XClaw"}</span>
-      <span class="spacer"></span>
-      {#if store.currentBot}
-        <button class="icon" style="--wails-draggable: no-drag;" title="Clear conversation memory" onclick={() => store.reset()} aria-label="Clear memory">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m-9 0v14a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2V6"/></svg>
-        </button>
-        <button class="icon" style="--wails-draggable: no-drag;" title="Restart core" onclick={() => store.restartCore()} aria-label="Restart core">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>
-        </button>
-      {/if}
-    </header>
-    <Transcript onpick={pick} />
-    <Composer bind:this={composer} />
-  </main>
+  <div class="content">
+    <section class="list"><Conversations /></section>
+    <main class="chat">
+      <header class="chat-bar" style="--wails-draggable: drag;">
+        <span class="title">{store.currentSession?.title ?? "XClaw"}</span>
+        <span class="spacer"></span>
+        {#if store.currentBot}
+          <button class="icon" style="--wails-draggable: no-drag;" title="Clear conversation memory" onclick={() => store.reset()} aria-label="Clear memory">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m-9 0v14a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2V6"/></svg>
+          </button>
+          <button class="icon" style="--wails-draggable: no-drag;" title="Restart core" onclick={() => store.restartCore()} aria-label="Restart core">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>
+          </button>
+        {/if}
+      </header>
+      <Transcript onpick={pick} />
+      <Composer bind:this={composer} />
+    </main>
+  </div>
 </div>
 
 {#if showEditor}
@@ -46,11 +48,22 @@
 {/if}
 
 <style>
-  .shell { display: flex; height: 100vh; background: var(--chat); }
+  .shell { display: flex; height: 100vh; background: var(--rail); }
   /* Custom window controls for the frameless window — top-left over the rail. */
   :global(.lights) { position: fixed; top: 14px; left: 15px; z-index: 1000; }
-  .list { width: var(--list-w); flex: 0 0 var(--list-w); height: 100vh; border-right: 1px solid var(--hairline); overflow: hidden; }
-  .chat { flex: 1; min-width: 0; height: 100vh; display: flex; flex-direction: column; background: radial-gradient(130% 90% at 50% 0%, color-mix(in srgb, var(--surface) 22%, var(--chat)) 0%, var(--chat) 58%); }
+
+  /* Content panel: list + chat float in a rounded, bordered card inset from the
+     window edges, so the dark rail reads as a thin frame around it. */
+  .content {
+    flex: 1; min-width: 0; display: flex;
+    margin: 8px 8px 8px 6px;
+    border: 1px solid var(--panel-border);
+    border-radius: 11px;
+    overflow: hidden;
+    box-shadow: var(--elev-2);
+  }
+  .list { width: var(--list-w); flex: 0 0 var(--list-w); height: 100%; border-right: 1px solid var(--hairline); overflow: hidden; }
+  .chat { flex: 1; min-width: 0; height: 100%; display: flex; flex-direction: column; background: radial-gradient(130% 90% at 50% 0%, color-mix(in srgb, var(--surface) 22%, var(--chat)) 0%, var(--chat) 58%); }
 
   .chat-bar {
     height: var(--header-h); flex: 0 0 var(--header-h);
