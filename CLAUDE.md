@@ -90,6 +90,13 @@ Key invariants to preserve:
 - **Resume continuity without the SDK**: `store` maps `sessionKey → resume_id`;
   the gateway persists it after a turn and passes it as `Request.SessionID` next
   turn. 7-day TTL on sessions/messages/sandboxes.
+- **Skills** (`core/sandbox/skill.go`, ported from `skill-linker.ts`): each turn
+  symlinks operator skill bundles into the session sandbox's `.claude/skills/`
+  so the agent CLI discovers them. Sources are `[]SkillSource{Dir,Allow}` in
+  ascending precedence — the **global catalog** `~/.xclaw/skills/<name>/` filtered
+  by the bot's `Skills` allow-list (`gateway.WithSkillAllow`, from `Resolved.Skills`;
+  nil/empty = none), then the **per-bot dir** `~/.xclaw/<id>/skills` (unfiltered,
+  always links, shadows global by name). Managed from the desktop Skills window.
 - **ClaudeDriver headless invariants** (`core/agent/claude.go`): always spawns
   `claude -p --output-format stream-json --verbose --include-partial-messages --permission-mode bypassPermissions`.
   Bypass is mandatory — there is no terminal to answer approval prompts, so any
@@ -132,9 +139,10 @@ store, gateway, driver, group-context, Octo connector, each under `~/.xclaw/<id>
 - Each `bots[]` entry is `id` + `octoToken` and may override top-level
   `apiUrl`/`agent`/`rateLimit`/`context` defaults. Capability switches live under
   `agent` (`cron`, `toolProgress`); the group-gating lists (`mentionFreeGroups`,
-  `knownBotUids`, `allowedBotUids`, `botBlocklist`) plus `groupConfigDir` and
-  `onBehalfOf` are top-level defaults a bot may override — a per-bot value
-  REPLACES the default. `core/config.example.json` is the canonical field list.
+  `knownBotUids`, `allowedBotUids`, `botBlocklist`) plus `groupConfigDir`,
+  `onBehalfOf`, and `skills` (the per-bot skill allow-list, names from the global
+  `~/.xclaw/skills/` catalog) are top-level defaults a bot may override — a per-bot
+  value REPLACES the default. `core/config.example.json` is the canonical field list.
 - `core/config/` does slug + SSRF validation on URLs — keep that on any new
   config field that holds a URL. `groupConfigDir` files are injected UNSANITIZED
   as `[Group instructions]`, so config load rejects a dir at/under a bot's
@@ -162,14 +170,23 @@ logic, so swapping the GUI never touches `core/`.
   exposes command/config methods, and auto-reconnects on daemon crash.
   `internal/`: `control` (UDS/NDJSON client over `core/control/wire`), `core`
   (supervisor: resolve binary → spawn `-control … -exit-with-parent` → stop/restart),
-  `configstore` (read/write `~/.xclaw/config.json` + per-bot SOUL/AGENTS),
-  `secrets` (tokens in the OS credential store via go-keyring, zero cgo; injected
-  at runtime, **never** written to config.json).
+  `configstore` (read/write `~/.xclaw/config.json` + per-bot SOUL/AGENTS + skill
+  allow-list), `skills` (CRUD over the `~/.xclaw/skills/` catalog bundles, with
+  slug + path-traversal validation), `octocli` (bundle/install/upgrade the
+  octo-cli companion), `secrets` (tokens in the OS credential store via go-keyring,
+  zero cgo; injected at runtime, **never** written to config.json).
 - **Frontend** (`frontend/src`): `lib/store.svelte.ts` is the single reducer —
   it folds `xclaw:event` envelopes into bots/sessions/messages and owns the
   rAF typewriter/coalescing. Components in `lib/components/` (Rail · Conversations
-  · Transcript · Bubble · Composer · ConfigEditor · Avatar); tokens in
+  · Transcript · Bubble · Composer · ConfigEditor · SkillsPanel · Avatar); tokens in
   `lib/styles/theme.css`.
+- **Edit Bots / Manage Skills are sibling modals** (`ConfigEditor` · `SkillsPanel`),
+  both opened over the console from the rail gear menu (and tray) via
+  `xclaw:open-editor` / `xclaw:open-skills` events — same scrim + centered card +
+  header/✕ chrome (keep them visually consistent). SkillsPanel is a multi-file
+  bundle editor; ConfigEditor has the per-bot "Available skills" checklist.
+  NOTE: `window.confirm/alert` are no-ops in the Wails webview — use an in-app
+  dialog for any confirmation.
 - **Design direction (committed — do not re-pivot)**: clean WeChat/iMessage-grade
   chat UI. Dark bot-rail → conversation list → chat; green accent (`#07c160`),
   green selected rows + outgoing bubbles, square-rounded avatars, **Geist** (Sans
