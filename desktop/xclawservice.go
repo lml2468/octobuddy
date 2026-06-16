@@ -106,6 +106,7 @@ func (x *XClawService) connect() error {
 		x.reconnect()
 	}()
 
+	_, _ = client.Send(control.CmdAuth, control.AuthBody{Token: x.sup.Token()})
 	_, _ = client.Send("health", nil)
 	_, _ = client.Send("bots.list", nil)
 	// Inject secrets off the startup path: reading the OS credential store can

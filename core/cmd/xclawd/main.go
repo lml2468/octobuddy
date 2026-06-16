@@ -46,6 +46,7 @@ func main() {
 		octoToken   = flag.String("octo-token", "", "Octo bot token (bf_*); or set XCLAW_OCTO_TOKEN")
 		configPath  = flag.String("config", "", "load ~/.xclaw/config.json (or given path) and run all configured bots")
 		exitParent  = flag.Bool("exit-with-parent", false, "exit when the parent process dies (set by the GUI so the daemon never outlives the app)")
+		authStdin   = flag.Bool("control-auth-stdin", false, "read the control-bus capability token as the first line of stdin (set by the GUI; out-of-band, never an env/argv). Off = no token: privileged bus commands are denied")
 	)
 	flag.Parse()
 
@@ -54,7 +55,7 @@ func main() {
 	// `-config` with no value uses the default ~/.xclaw/config.json. `-control`
 	// additionally serves the bus so a GUI can manage all bots.
 	if configFlagSet() {
-		runConfigMode(*configPath, *controlSock, *exitParent)
+		runConfigMode(*configPath, *controlSock, *exitParent, *authStdin)
 		return
 	}
 
@@ -123,6 +124,7 @@ func main() {
 
 	if srv != nil {
 		srv.SetHandler(makeCommandHandler(ctx, gw, st, drv, sec, srv, started))
+		configureBusAuth(srv, *authStdin) // arm the capability-token gate before serving
 		ln := mustListenUnix(*controlSock)
 		defer ln.Close()
 		defer os.Remove(*controlSock)

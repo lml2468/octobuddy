@@ -21,6 +21,12 @@ const ProtocolVersion = 1
 // can't grow memory without bound.
 const MaxFrameBytes = 4 * 1024 * 1024
 
+// CmdAuth is the handshake command type a client sends to present its capability
+// token (AuthBody). The daemon handles it internally — never the command handler
+// — comparing the token in constant time and, on a match, marking the connection
+// authorized for the privileged command set.
+const CmdAuth = "auth"
+
 // Kind discriminates the three envelope categories.
 type Kind string
 
@@ -79,6 +85,15 @@ func Decode(line []byte) (Envelope, error) {
 // --- typed bodies (proto/README.md) ---
 
 // Commands (client → server)
+
+// AuthBody presents the GUI capability token (proto: auth). The server compares
+// it in constant time against the token it was minted with at spawn; a match
+// marks the connection authorized for the privileged command set. The token is
+// delivered to the GUI out-of-band (a private fd the spawned agent never sees),
+// held in daemon memory only, and is NEVER logged or persisted.
+type AuthBody struct {
+	Token string `json:"token"`
+}
 
 type SessionSendBody struct {
 	// BotID selects which bot to route to (multi-bot config mode). Empty = the

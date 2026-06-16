@@ -114,7 +114,7 @@ func (r *botRegistry) list() []control.BotInfo {
 // runConfigMode loads the single-file config, serves the control bus, and runs
 // every configured bot in its own isolated goroutine until SIGINT/SIGTERM (or,
 // when exitWithParent is set, until the launching process dies).
-func runConfigMode(path, controlSock string, exitWithParent bool) {
+func runConfigMode(path, controlSock string, exitWithParent bool, authStdin bool) {
 	bots, err := config.Load(path)
 	if err != nil {
 		fatal("config: %v", err)
@@ -140,6 +140,7 @@ func runConfigMode(path, controlSock string, exitWithParent bool) {
 		srv = control.NewServer(nil)
 		reg.srv = srv
 		srv.SetHandler(makeMultiBotHandler(ctx, reg, started))
+		configureBusAuth(srv, authStdin) // arm the capability-token gate before serving
 		ln := mustListenUnix(controlSock)
 		defer ln.Close()
 		defer os.Remove(controlSock)

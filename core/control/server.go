@@ -1,9 +1,11 @@
 package control
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -21,6 +23,14 @@ type Server struct {
 	mu      sync.Mutex
 	clients map[*client]struct{}
 	closed  bool
+
+	// authToken is the GUI capability token (empty = unset). When empty, no
+	// client can ever authenticate, so every privileged command is denied — the
+	// fail-closed default. privileged is the set of command types that require an
+	// authenticated connection. Both are configured once at startup via SetAuth,
+	// before Serve, and read under mu.
+	authToken  string
+	privileged map[string]bool
 }
 
 type client struct {
@@ -28,6 +38,10 @@ type client struct {
 	sendCh    chan []byte
 	done      chan struct{}
 	closeOnce sync.Once
+	// authed is set true once this connection presents the valid capability
+	// token. Atomic: written on the connection's handleConn goroutine (dispatch)
+	// and read by the Broadcast fan-out on the gateway goroutine.
+	authed atomic.Bool
 }
 
 const clientSendQueue = 256
@@ -98,6 +112,22 @@ func (s *Server) SetHandler(h CommandHandler) {
 	s.mu.Unlock()
 }
 
+// SetAuth configures the capability-token gate. token is the secret a client
+// must present via an "auth" command (constant-time compared); privileged is
+// the set of command types that require an authenticated connection. An empty
+// token means no client can ever authenticate, so every privileged command —
+// and the broadcast event stream — is denied (fail closed). Call before Serve.
+func (s *Server) SetAuth(token string, privileged []string) {
+	set := make(map[string]bool, len(privileged))
+	for _, p := range privileged {
+		set[p] = true
+	}
+	s.mu.Lock()
+	s.authToken = token
+	s.privileged = set
+	s.mu.Unlock()
+}
+
 // Serve accepts connections on l until it is closed. Blocks; run in a goroutine.
 func (s *Server) Serve(l net.Listener) error {
 	for {
@@ -165,11 +195,24 @@ func (s *Server) handleConn(c *client) {
 }
 
 func (s *Server) dispatch(c *client, env Envelope) {
+	if env.Type == CmdAuth {
+		s.authenticate(c, env)
+		return
+	}
 	s.mu.Lock()
 	h := s.handler
+	priv := s.privileged[env.Type]
 	s.mu.Unlock()
 	if h == nil {
 		s.respondErr(c, env.ID, "no handler")
+		return
+	}
+	// Capability gate: a privileged command on an unauthenticated connection is
+	// refused. This is the same-uid boundary the peer-cred check cannot draw —
+	// it distinguishes the operator's GUI (which holds the token) from the
+	// spawned agent's CLI (which does not). Read-only commands pass freely.
+	if priv && !c.authed.Load() {
+		s.respondErr(c, env.ID, "unauthorized: command requires the GUI capability token")
 		return
 	}
 	result, err := h(env.Type, env.Body)
@@ -183,6 +226,30 @@ func (s *Server) dispatch(c *client, env Envelope) {
 	})
 }
 
+// authenticate handles the "auth" handshake: it constant-time compares the
+// presented token against the configured one and, on a match, marks the
+// connection authorized. An unset (empty) token never authenticates. The token
+// is never logged; the rejection reason is intentionally generic.
+func (s *Server) authenticate(c *client, env Envelope) {
+	s.mu.Lock()
+	token := s.authToken
+	s.mu.Unlock()
+	var b AuthBody
+	if err := json.Unmarshal(env.Body, &b); err != nil {
+		s.respondErr(c, env.ID, "auth: invalid body")
+		return
+	}
+	if token == "" || subtle.ConstantTimeCompare([]byte(b.Token), []byte(token)) != 1 {
+		s.respondErr(c, env.ID, "auth: rejected")
+		return
+	}
+	c.authed.Store(true)
+	s.writeTo(c, Envelope{
+		Kind: KindResponse, ID: env.ID, Type: CmdAuth, TS: s.now().Unix(),
+		Body: mustJSON(OKBody{OK: true}),
+	})
+}
+
 func (s *Server) respondErr(c *client, id, msg string) {
 	s.writeTo(c, Envelope{
 		Kind: KindResponse, ID: id, Type: "error", TS: s.now().Unix(),
@@ -191,12 +258,18 @@ func (s *Server) respondErr(c *client, id, msg string) {
 }
 
 // Broadcast sends an event to all connected clients. Used by the gateway bridge.
+// When a capability token is configured, the event stream is operator-only: it
+// carries every session's live text/tool activity (cross-session disclosure), so
+// only authenticated connections (the GUI) receive it; an unauthenticated
+// same-uid peer (a spawned agent) gets nothing. With no token configured the
+// stream is open (legacy/dev + CLI observers).
 func (s *Server) Broadcast(eventType string, body any) {
 	s.mu.Lock()
 	if len(s.clients) == 0 {
 		s.mu.Unlock()
 		return // no client attached — skip the per-event marshal+encode entirely
 	}
+	gated := s.authToken != ""
 	cs := make([]*client, 0, len(s.clients))
 	for c := range s.clients {
 		cs = append(cs, c)
@@ -208,6 +281,9 @@ func (s *Server) Broadcast(eventType string, body any) {
 		return
 	}
 	for _, c := range cs {
+		if gated && !c.authed.Load() {
+			continue
+		}
 		c.enqueue(line)
 	}
 }

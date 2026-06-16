@@ -15,6 +15,7 @@ import "github.com/lml2468/xclaw/core/control/wire"
 const (
 	ProtocolVersion = wire.ProtocolVersion
 	MaxFrameBytes   = wire.MaxFrameBytes
+	CmdAuth         = wire.CmdAuth
 )
 
 // Kind and its values (re-exported from wire).
@@ -43,6 +44,7 @@ func Decode(line []byte) (Envelope, error) { return wire.Decode(line) }
 
 // Typed bodies (re-exported from wire).
 type (
+	AuthBody            = wire.AuthBody
 	SessionSendBody     = wire.SessionSendBody
 	SessionHistoryBody  = wire.SessionHistoryBody
 	SecretInjectBody    = wire.SecretInjectBody
