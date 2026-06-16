@@ -1,7 +1,7 @@
 # XClaw control-bus protocol
 
-The contract between the Go core (`xclawd`) and any client shell (the Swift
-macOS app, a web console, a CLI). It is intentionally language-neutral so each
+The contract between the Go core (`xclawd`) and any client shell (the Wails v3
+desktop app, a web console, a CLI). It is intentionally language-neutral so each
 side can implement it independently.
 
 ## Transport
@@ -9,8 +9,8 @@ side can implement it independently.
 - **v1:** newline-delimited JSON (NDJSON) over a Unix domain socket.
   - `xclawd` listens; clients connect.
   - Each line is one envelope. UTF-8. Max frame size enforced by the server.
-  - Rationale: trivial to implement in Swift (`Network`/`FileHandle`) and Go
-    (`bufio`), easy to debug (`socat`/`nc`), and battle-tested in Open Island's
+  - Rationale: trivial to implement in Go (`bufio`) and TypeScript, easy to
+    debug (`socat`/`nc`), and battle-tested in Open Island's
     bridge. Upgrade path to gRPC/protobuf-over-UDS if the schema grows.
 
 ## Envelope

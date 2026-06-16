@@ -1,101 +1,156 @@
-# XClaw
+<div align="center">
 
-A cross-platform agent gateway, structured as a monorepo.
+# 🐙 XClaw
 
-XClaw **drives coding agents by spawning their CLI and normalizing their output
-into one unified event stream** — replacing the Node-only `claude-agent-sdk`. The
-Go core compiles to a single static binary on every platform; native shells
-(starting with a macOS app) sit on top via a control bus.
+**A cross-platform agent gateway.** XClaw drives coding-agent CLIs — Claude
+first — by spawning them and normalizing their output into one unified event
+stream, with a clean, native-feeling desktop app on top. It replaces the
+Node-only `claude-agent-sdk` with a single static Go binary that runs anywhere.
 
-Phase 1 ships one driver (**Claude**) behind the `agent.Driver` abstraction;
-more agents (Codex, Gemini, …) re-enter as additional `Driver` implementations
-without touching the gateway.
+[![CI](https://github.com/lml2468/xclaw/actions/workflows/ci.yml/badge.svg)](https://github.com/lml2468/xclaw/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)
+![Platforms](https://img.shields.io/badge/platforms-macOS%20·%20Linux%20·%20Windows-555)
+![Built with Wails + Svelte](https://img.shields.io/badge/desktop-Wails%20v3%20%2B%20Svelte%205-d33847)
 
-## Repository layout
+<img src="docs/screenshot-chat.png" alt="XClaw desktop app — chat with a bot" width="820">
+
+</div>
+
+---
+
+## What is XClaw?
+
+A coding agent like Claude ships as a CLI. XClaw turns that CLI into a **service**:
+it spawns the agent, feeds it inbound messages from a chat platform, streams the
+agent's tokens/tool-calls back out as a normalized event stream, and persists the
+conversation so the agent resumes where it left off.
+
+Everything downstream of the `agent.Driver` abstraction depends only on a unified
+`AgentEvent` vocabulary — never on Claude specifics. **Adding a second agent
+(Codex, Gemini, …) means writing one new `Driver` and touching nothing else.**
+
+The whole thing is a Go workspace of three pieces that version together against
+one contract:
+
+| | | |
+|---|---|---|
+| **`core/`** | the `xclawd` daemon (the gateway) | Go, **single static binary, zero cgo**, cross-compiles to mac/linux/windows |
+| **`desktop/`** | the desktop app | Go + **Wails v3** backend, **Svelte 5 + TS** frontend — a thin control-bus client |
+| **`proto/`** | the control-bus contract | language-neutral NDJSON envelopes over a Unix socket, shared by both |
+
+## Highlights
+
+- **Agent-agnostic core** — the `agent.Driver` seam keeps the gateway, router,
+  store, and control bus free of any per-agent details.
+- **Multi-bot** — run many bots from one `~/.xclaw/config.json`, each in a fully
+  isolated stack (own store, gateway, sandbox, IM connector) under `~/.xclaw/<id>/`.
+- **Per-session sandboxing & resume** — every session gets a deterministic cwd +
+  auto-memory dir; the gateway maps `sessionKey → resume_id` so turns continue
+  across restarts (7-day TTL).
+- **Prompt-injection defense** — a non-overridable security prefix, a
+  current-message anchor, and a sanitized rolling group-context window guard every
+  group turn.
+- **Skills** — assign each bot a curated set of [Claude Code skills](docs/screenshot-skills.png)
+  from a shared catalog; they're linked into the session sandbox so the agent can
+  use them. Managed in-app.
+- **Batteries** — per-bot scheduled tasks (cron), operator group instructions,
+  on-behalf-of persona clones, opt-in tool-progress notices, and a bundled
+  `octo-cli` companion with one-click upgrade.
+- **Secrets stay out of config** — bot tokens live in the OS keychain
+  (go-keyring, zero cgo) and are injected at runtime, never written to disk.
+- **Polished desktop app** — a WeChat/iMessage-grade chat UI (token streaming,
+  Markdown + code blocks, a bot rail, in-app Edit Bots / Manage Skills) — pure
+  CSS/SVG, no native chrome.
+
+## Screenshots
+
+| Chat | Manage Skills |
+|---|---|
+| <img src="docs/screenshot-chat.png" alt="Chat" width="420"> | <img src="docs/screenshot-skills.png" alt="Manage Skills" width="420"> |
+
+## Architecture
 
 ```
-core/     Go core — the agent gateway daemon (`xclawd`).
-          driver abstraction, SQLite store, router, gateway. Single static
-          binary, zero cgo, cross-compiles to mac/linux/windows.
-            core/cmd/xclawd   daemon entry point
-            core/agent        Driver abstraction + Claude driver
-            core/store        SQLite persistence (sessions, messages, resume map)
-            core/router       per-session locking + sessionKey + rate limiting   (WIP)
-            core/gateway      handleMessage orchestration pipeline               (WIP)
-
-app/      Swift macOS app (SwiftPM package) — the native control plane / GUI.
-          Talks to xclawd over the control bus. Mirrors Open Island's
-          4-target structure. (scaffold)
-
-proto/    Control-bus contract shared by core and app: the NDJSON envelope
-          schema (events out of xclawd, commands in). Language-neutral.
-
-scripts/  Build / packaging (e.g. embedding the signed xclawd binary into the
-          .app bundle, notarization, DMG).
+┌─ desktop/ (Wails v3 + Svelte) ─┐        ┌─ core/ — xclawd daemon ─────────────┐
+│  spawns + supervises xclawd    │  UDS   │  router → gateway turn pipeline      │
+│  dials the control socket      │◀──────▶│  agent.Driver (Claude) → AgentEvents │
+│  folds xclaw:event → UI        │ NDJSON │  store (SQLite) · sandbox · safety    │
+└────────────────────────────────┘        │  im/octo connector (WuKongIM + REST) │
+            proto/ — one contract ─────────┘                                      
 ```
 
-## Why a monorepo
+Inbound message → **router** (mention gate · bot-loop guard · sessionKey · rate
+limit · per-session lock) → **store** (resume id) → **sandbox** (cwd + memory +
+skills) → **buildSystemPrompt** (security prefix + SOUL/AGENTS + roster) →
+**driver.Query** → stream `AgentEvent`s → assemble reply → persist + send.
 
-The Go core and the Swift shell evolve together against one contract (`proto/`).
-A monorepo keeps the daemon, the app, and their shared protocol versioned in
-lockstep — a control-bus change touches all three in a single commit.
+See [`CLAUDE.md`](CLAUDE.md) for the full pipeline, invariants, and security model.
 
-## Status
+## Quick start
 
-- ✅ `core/agent` driver abstraction: Claude driver (one-shot stream-json)
-  spawns the CLI and normalizes its output to a unified `AgentEvent` stream.
-- ✅ `core/store` SQLite persistence (sessions / messages / resume map, 7-day TTL).
-- ✅ `core/router` + `core/gateway` — cc-channel's gateway pipeline ported
-  (per-session lock, rate limiting, mention gate, resume continuity).
-- ✅ `core/control` + `app/XClawCore` — control bus live end-to-end: the Swift
-  client connects over the Unix socket, sends commands, and renders the agent
-  event stream broadcast by the Go core.
-- ✅ `app/XClawApp` — AppModel + CoreSupervisor + MenuBar/console GUI: the app
-  spawns & supervises `xclawd`, connects the bus, and manages multiple bots
-  (bot sidebar + per-bot sessions; `bots.list` + botId-tagged events).
-- ✅ `core/im/octo` — Octo IM connector: WuKongIM binary protocol (curve25519 DH
-  + MD5→AES-128-CBC, key derivation verified byte-identical to cc-channel) + REST;
-  wired into `xclawd` via `-octo-api`/`-octo-token`.
-- ✅ `core/safety` + `core/groupctx` — prompt-injection defense (SafeText
-  choke-point, security prefix, current-message anchor) and per-channel group
-  context window; wired into the gateway (group turns inject a sanitized
-  [Recent group messages] delta + frozen system prompt).
-- ✅ `core/config` — single-file config (~/.xclaw/config.json): shared defaults
-  + inline bots[], derived data dir, SOUL.md + AGENTS.md, slug + SSRF validation.
-  Loaded by `xclawd -config`, which runs every configured bot in its own isolated
-  stack (multi-bot).
-- ✅ packaging: `scripts/package-app.sh` builds a distributable `XClaw.app`
-  (release `xclawd` embedded in `Contents/Helpers/`) + `.zip` / `.dmg`; ad-hoc
-  by default, Developer ID + notarization when `XCLAW_SIGN_IDENTITY` /
-  `XCLAW_NOTARY_PROFILE` are set.
-- 🚧 cron (deferred); Keychain for tokens; Sparkle auto-update.
-
-## Build
+**Prerequisites:** Go 1.26+. For the desktop app, the
+[Wails v3 CLI](https://v3.wails.io): `go install github.com/wailsapp/wails/v3/cmd/wails3@latest`.
 
 ```bash
-# Go core
+# 1) Build & test the Go core
 cd core && go build ./... && go test ./...
 
-# cross-compile the daemon (zero cgo)
-cd core && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /tmp/xclawd ./cmd/xclawd
+# 2) Try the daemon directly — a REPL on stdin (type a message; /reset; Ctrl-D)
+go run ./cmd/xclawd
 
-# Swift app (once scaffolded)
-cd app && swift build
+# 3) Run the desktop app in dev (builds core + `wails3 dev`)
+zsh scripts/run-dev.sh --seed-config     # writes a starter ~/.xclaw/config.json
+zsh scripts/run-dev.sh --preview         # UI preview: mock data, no daemon
+
+# 4) Cross-compile the daemon anywhere (zero cgo)
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /tmp/xclawd ./cmd/xclawd
 ```
 
-## Package
+### Package the desktop app (macOS)
 
 ```bash
-# Build a distributable XClaw.app (+ .zip, + .dmg if create-dmg is installed).
-# Ad-hoc signed by default; outputs to ./output/.
-zsh scripts/package-app.sh
-
-# Signed + notarized for distribution:
-XCLAW_SIGN_IDENTITY="Developer ID Application: …" \
-XCLAW_NOTARY_PROFILE="my-notary-profile" \
-XCLAW_UNIVERSAL=true \
-  zsh scripts/package-app.sh
+# Builds XClaw.app (+ .zip), embeds the signed xclawd + octo-cli inside-out.
+# Ad-hoc by default; pass an identity to Developer-sign, a profile to notarize.
+XCLAW_SIGN_IDENTITY="Apple Development: …" zsh scripts/package-desktop.sh
 ```
 
-The release `xclawd` is embedded in `XClaw.app/Contents/Helpers/`; the app
-resolves it there at runtime (no external daemon needed).
+Windows/Linux GUIs build on their own OS (`cd desktop && wails3 task package`);
+the daemon already cross-compiles for all three.
+
+## Configuration
+
+A single `~/.xclaw/config.json` configures every bot — see the fully-commented
+[`core/config.example.json`](core/config.example.json). Shared top-level
+`apiUrl`/`agent`/`rateLimit`/`context` defaults, a `bots[]` array where each entry
+overrides them, optional group-gating lists, per-bot `skills`, and `onBehalfOf`
+persona clones. A bot's persona/behavior lives in `SOUL.md` + `AGENTS.md` under
+`~/.xclaw/<id>/`, not in config. Tokens are **never** stored here — the desktop app
+keeps them in the OS keychain. Everything is editable in-app (gear → Edit Bots /
+Manage Skills).
+
+## Project layout
+
+```
+core/      Go gateway daemon (xclawd): agent driver, router, gateway pipeline,
+           SQLite store, sandbox, safety, config, cron, im/octo connector.
+desktop/   Wails v3 app: Go bridge (supervisor · control client · configstore ·
+           skills · octocli · secrets) + Svelte 5 frontend (lib/components, store).
+proto/     The control-bus contract (NDJSON envelope schema). See proto/README.md.
+scripts/   run-dev.sh · package-desktop.sh (cross-compile + embed + sign).
+```
+
+## Contributing
+
+Issues and PRs welcome. Please read [`CONTRIBUTING.md`](CONTRIBUTING.md) and the
+[`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md). CI runs `gofmt`, `go vet`, and the full
+test suite (no API key needed — tests run against recorded fixtures).
+
+## Security
+
+XClaw handles untrusted group-chat text and prompt-injection surfaces. Please
+report vulnerabilities privately per [`SECURITY.md`](SECURITY.md).
+
+## License
+
+[MIT](LICENSE) © XClaw contributors.

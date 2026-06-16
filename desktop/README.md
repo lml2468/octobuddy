@@ -1,59 +1,67 @@
-# Welcome to Your New Wails3 Project!
+# XClaw desktop (`desktop/`)
 
-Congratulations on generating your Wails3 application! This README will guide you through the next steps to get your project up and running.
+The XClaw desktop app — a **Wails v3** (Go backend) + **Svelte 5 / TypeScript**
+frontend. It is a thin **control-bus client**: it never talks to Claude or the IM
+directly. It spawns and supervises the `xclawd` daemon (`../core`), dials its
+control socket, and folds the daemon's event stream into a clean WeChat/iMessage-grade
+chat UI. Swapping the GUI never touches `core/`.
 
-## Getting Started
+Module: `github.com/lml2468/xclaw/desktop`. It pulls `core` in via a local
+`replace` in the repo's `go.work`.
 
-1. Navigate to your project directory in the terminal.
+## Develop
 
-2. To run your application in development mode, use the following command:
+Needs the Wails v3 CLI:
 
-   ```
-   wails3 dev
-   ```
+```bash
+go install github.com/wailsapp/wails/v3/cmd/wails3@latest
+```
 
-   This will start your application and enable hot-reloading for both frontend and backend changes.
+```bash
+# From the repo root — builds core + runs `wails3 dev` (needs ~/.xclaw/config.json):
+zsh scripts/run-dev.sh
+zsh scripts/run-dev.sh --seed-config     # write a starter config first
+zsh scripts/run-dev.sh --preview         # UI preview: mock data, no daemon
 
-3. To build your application for production, use:
+# Frontend build + typecheck
+cd desktop/frontend && npm run build && npx svelte-check
 
-   ```
-   wails3 build
-   ```
+# After changing Go binding signatures, regenerate the TS bindings:
+cd desktop && wails3 generate bindings -ts -d frontend/bindings
+```
 
-   This will create a production-ready executable in the `build` directory.
+**UI preview mode** (`XCLAW_PREVIEW=1`, with `XCLAW_PREVIEW_THEME=dark|light`,
+`XCLAW_PREVIEW_EMPTY=1`, `?editor=1` / `?skills=1`) seeds mock data and skips the
+daemon, so the UI can be screenshotted and geometry-asserted in headless Chrome
+without a live bot.
 
-## Exploring Wails3 Features
+## Layout
 
-Now that you have your project set up, it's time to explore the features that Wails3 offers:
+```
+main.go            app + frameless window + system tray + single-instance
+xclawservice.go    Wails-bound bridge: spawn xclawd, dial UDS, forward
+                   xclaw:event, expose command/config/skills methods
+internal/
+  control          UDS/NDJSON client over core/control/wire
+  core             supervisor: resolve binary → spawn → stop/restart
+  configstore      ~/.xclaw/config.json + per-bot SOUL/AGENTS + skill allow-list
+  skills           CRUD over the ~/.xclaw/skills/ catalog bundles
+  octocli          bundle/install/upgrade the octo-cli companion
+  secrets          tokens in the OS credential store (go-keyring, zero cgo)
+frontend/src
+  lib/store.svelte.ts    single reducer: folds xclaw:event into the view model
+  lib/components/        Rail · Conversations · Transcript · Bubble · Composer ·
+                         ConfigEditor · SkillsPanel · Avatar
+  lib/styles/theme.css   design tokens
+```
 
-1. **Check out the examples**: The best way to learn is by example. Visit the `examples` directory in the `v3/examples` directory to see various sample applications.
+## Packaging
 
-2. **Run an example**: To run any of the examples, navigate to the example's directory and use:
+`../scripts/package-desktop.sh` cross-compiles `xclawd` (mac universal + win/linux),
+fetches + bundles the latest `octo-cli`, embeds both in `Contents/Helpers/`, and
+signs inside-out (ad-hoc by default; Developer-signs + notarizes when
+`XCLAW_SIGN_IDENTITY` / `XCLAW_NOTARY_PROFILE` are set).
 
-   ```
-   go run .
-   ```
-
-   Note: Some examples may be under development during the alpha phase.
-
-3. **Explore the documentation**: Visit the [Wails3 documentation](https://v3.wails.io/) for in-depth guides and API references.
-
-4. **Join the community**: Have questions or want to share your progress? Join the [Wails Discord](https://discord.gg/JDdSxwjhGf) or visit the [Wails discussions on GitHub](https://github.com/wailsapp/wails/discussions).
-
-## Project Structure
-
-Take a moment to familiarize yourself with your project structure:
-
-- `frontend/`: Contains your frontend code (HTML, CSS, JavaScript/TypeScript)
-- `main.go`: The entry point of your Go backend
-- `app.go`: Define your application structure and methods here
-- `wails.json`: Configuration file for your Wails project
-
-## Next Steps
-
-1. Modify the frontend in the `frontend/` directory to create your desired UI.
-2. Add backend functionality in `main.go`.
-3. Use `wails3 dev` to see your changes in real-time.
-4. When ready, build your application with `wails3 build`.
-
-Happy coding with Wails3! If you encounter any issues or have questions, don't hesitate to consult the documentation or reach out to the Wails community.
+See [`../CLAUDE.md`](../CLAUDE.md) for the committed design direction and the
+macOS gotchas (traffic-light clearance, keychain injection, `window.confirm`
+being a no-op in the webview).

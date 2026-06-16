@@ -3,8 +3,8 @@
 The XClaw gateway daemon, written in Go. It **drives coding agents by spawning
 their CLI and normalizing their output into one unified event stream** —
 replacing the Node-only `claude-agent-sdk`. Single static binary, zero cgo,
-cross-compiles everywhere. Native shells (the Swift macOS app in `../app`) sit on
-top via the control bus (`../proto`).
+cross-compiles everywhere. Native shells (the Wails v3 desktop app in `../desktop`)
+sit on top via the control bus (`../proto`).
 
 Phase 1 ships a single driver — **Claude** — behind the `agent.Driver`
 abstraction. The abstraction is the point: a second agent (Codex, Gemini, …)
