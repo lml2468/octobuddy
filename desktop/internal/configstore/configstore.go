@@ -29,6 +29,9 @@ type BotConfig struct {
 	Env            map[string]string `json:"env"`
 	Soul           string            `json:"soul"`
 	Agents         string            `json:"agents"`
+	// Skills is the bot's allow-list of global skill names (managed in the
+	// Skills window, selected per bot in the editor).
+	Skills []string `json:"skills"`
 }
 
 // Dir is ~/.xclaw.
@@ -111,6 +114,15 @@ func Load() ([]BotConfig, error) {
 		bc.Agents = readBotFile(b.ID, "AGENTS.md")
 		bc.OctoToken = secrets.Get(b.ID, secrets.OctoToken)
 		bc.GatewayToken = secrets.Get(b.ID, secrets.GatewayToken)
+		// Skill allow-list: per-bot replaces the top-level default. Default to an
+		// empty slice (not nil) so the editor checklist binds cleanly.
+		bc.Skills = b.Skills
+		if bc.Skills == nil {
+			bc.Skills = f.Skills
+		}
+		if bc.Skills == nil {
+			bc.Skills = []string{}
+		}
 		out = append(out, bc)
 	}
 	return out, nil
@@ -195,6 +207,9 @@ func Save(bots []BotConfig, removedIDs []string) error {
 		} else {
 			entry.Agent = &ag
 		}
+		// Persist the per-bot skill allow-list (empty → omitempty drops it → the
+		// bot inherits the top-level default / no global skills).
+		entry.Skills = b.Skills
 		entries = append(entries, entry)
 	}
 	f.Bots = entries

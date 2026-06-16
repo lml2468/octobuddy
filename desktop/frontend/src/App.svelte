@@ -8,6 +8,11 @@
   import Composer from "./lib/components/Composer.svelte";
   import ConfigEditor from "./lib/components/ConfigEditor.svelte";
   import TrafficLights from "./lib/components/TrafficLights.svelte";
+  import SkillsPanel from "./lib/components/SkillsPanel.svelte";
+
+  // The Skills window loads the same SPA with ?view=skills and renders only the
+  // skills manager (its own window opened from the tray).
+  const skillsView = new URLSearchParams(location.search).get("view") === "skills";
 
   let composer: Composer;
   let showEditor = $state(new URLSearchParams(location.search).has("editor"));
@@ -19,6 +24,9 @@
   function pick(prompt: string) { composer?.setDraft(prompt); }
 </script>
 
+{#if skillsView}
+  <SkillsPanel />
+{:else}
 <TrafficLights />
 <div class="shell">
   <Rail onedit={() => (showEditor = true)} />
@@ -45,6 +53,7 @@
 
 {#if showEditor}
   <ConfigEditor onclose={() => (showEditor = false)} />
+{/if}
 {/if}
 
 <style>

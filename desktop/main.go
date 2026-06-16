@@ -19,6 +19,7 @@ func init() {
 }
 
 const consoleWindow = "console"
+const skillsWindow = "skills"
 
 var (
 	app     *application.App
@@ -109,6 +110,41 @@ func openConsole() {
 	w.Focus()
 }
 
+// openSkills shows the Skills manager in its own (standard, non-frameless)
+// window, loading the SPA with ?view=skills.
+func openSkills() {
+	if app == nil {
+		return
+	}
+	if w, ok := app.Window.GetByName(skillsWindow); ok {
+		w.Show()
+		w.Focus()
+		return
+	}
+	w := app.Window.NewWithOptions(application.WebviewWindowOptions{
+		Name:      skillsWindow,
+		Title:     "XClaw Skills",
+		Width:     920,
+		Height:    640,
+		MinWidth:  720,
+		MinHeight: 480,
+		URL:       skillsURL(),
+	})
+	w.Show()
+	w.Focus()
+}
+
+func skillsURL() string {
+	u := "/?view=skills"
+	if preview {
+		u += "&preview=1"
+		if t := os.Getenv("XCLAW_PREVIEW_THEME"); t != "" {
+			u += "&theme=" + t
+		}
+	}
+	return u
+}
+
 // setupSystemTray adds the menu-bar octopus with quick actions + a status line.
 func setupSystemTray() {
 	tray := app.SystemTray.New()
@@ -121,6 +157,7 @@ func setupSystemTray() {
 		openConsole()
 		app.Event.Emit("xclaw:open-editor")
 	})
+	menu.Add("Manage Skills…").OnClick(func(*application.Context) { openSkills() })
 	menu.AddSeparator()
 	menu.Add("Restart Core").OnClick(func(*application.Context) {
 		if bridge != nil {

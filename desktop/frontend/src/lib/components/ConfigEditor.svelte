@@ -17,6 +17,18 @@
   // Bot ids present when this editor opened — the basis for an EXPLICIT removal
   // list on save (so the daemon never infers deletions from a set-difference).
   let loadedIds: string[] = [];
+  // Global skill catalog (for the per-bot available-skills checklist).
+  let allSkills = $state<{ name: string; description: string }[]>([]);
+
+  function skillOn(name: string): boolean {
+    return (current?.skills ?? []).includes(name);
+  }
+  function toggleSkill(name: string) {
+    if (!current) return;
+    const set = new Set(current.skills ?? []);
+    set.has(name) ? set.delete(name) : set.add(name);
+    current.skills = [...set];
+  }
 
   $effect(() => {
     // Rebuild env rows when the selected bot changes.
@@ -30,15 +42,17 @@
   async function load() {
     if (new URLSearchParams(location.search).has("preview")) {
       bots = [
-        new BotConfig({ id: "main", apiUrl: "https://im.example.com/api", model: "claude-opus-4-8", gatewayBaseUrl: "https://gw.example/v1", env: { OCTO_BOT_ID: "main-7f3a" }, soul: "You are Atlas, the team's ops copilot.", agents: "Confirm before destructive actions." }),
+        new BotConfig({ id: "main", apiUrl: "https://im.example.com/api", model: "claude-opus-4-8", gatewayBaseUrl: "https://gw.example/v1", env: { OCTO_BOT_ID: "main-7f3a" }, soul: "You are Atlas, the team's ops copilot.", agents: "Confirm before destructive actions.", skills: ["pdf-tools"] }),
         new BotConfig({ id: "research", apiUrl: "https://im.example.com/api" }),
       ];
+      allSkills = [{ name: "pdf-tools", description: "Extract text and fill PDF forms." }, { name: "octo-broadcast", description: "Announce to every channel." }];
       sel = 0;
       return;
     }
     try {
       bots = (await XClawService.LoadConfig()) ?? [];
       loadedIds = bots.map((b) => b.id);
+      try { allSkills = ((await XClawService.SkillsList()) ?? []) as any; } catch { allSkills = []; }
       if (bots.length === 0) addBot();
       sel = 0;
     } catch (e: any) {
@@ -126,6 +140,21 @@
             <button class="add sm" onclick={() => (envRows = [...envRows, { k: "", v: "" }])}>+ Add var</button>
           </div>
 
+          <div class="skills">
+            <span class="lbl">Available skills</span>
+            {#if allSkills.length === 0}
+              <small>No skills in the library yet — add some from the tray's “Manage Skills…”.</small>
+            {:else}
+              {#each allSkills as s (s.name)}
+                <label class="skrow">
+                  <input type="checkbox" checked={skillOn(s.name)} onchange={() => toggleSkill(s.name)} />
+                  <span class="sknm">{s.name}</span>
+                  <span class="skds">{s.description}</span>
+                </label>
+              {/each}
+            {/if}
+          </div>
+
           <label>SOUL.md <textarea bind:value={current.soul} rows="3" placeholder="Who this bot is — identity, voice, role"></textarea></label>
           <label>AGENTS.md <textarea bind:value={current.agents} rows="3" placeholder="How it should behave — norms, do's and don'ts"></textarea></label>
 
@@ -167,6 +196,13 @@
 
   .env { display: flex; flex-direction: column; gap: 6px; }
   .lbl { font-size: 12px; color: var(--ink-soft); }
+  .skills { display: flex; flex-direction: column; gap: 5px; }
+  .skills small { color: var(--ink-faint); font-size: 11px; }
+  .skrow { display: flex; flex-direction: row; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 5px; }
+  .skrow:hover { background: color-mix(in srgb, var(--ink) 4%, transparent); }
+  .skrow input { accent-color: var(--accent); margin: 0; flex: 0 0 auto; }
+  .skrow .sknm { font-family: var(--mono); font-size: 12px; color: var(--ink); flex: 0 0 auto; }
+  .skrow .skds { font-size: 11px; color: var(--ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .envrow { display: flex; align-items: center; gap: 6px; }
   .envrow .k { width: 160px; font-family: var(--mono); font-size: 12px; }
   .envrow .v { flex: 1; }

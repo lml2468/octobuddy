@@ -255,6 +255,7 @@ func runBot(ctx context.Context, cfg config.Resolved, reg *botRegistry, srv *con
 		WithModel(cfg.Agent.Model).
 		WithCommandInfo(cfg.RateLimit.MaxPerMinute, cfg.Context.MaxContextChars).
 		WithSandbox(cfg.CwdBase, cfg.MemoryBase, cfg.SkillsDir, cfg.GlobalSkillsDir).
+		WithSkillAllow(cfg.Skills).
 		WithMediaAuth(connector.MediaAuth())
 	connector.SetGateway(gw)
 

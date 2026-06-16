@@ -21,6 +21,9 @@ import * as configstore$0 from "./internal/configstore/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
 import * as control$0 from "./internal/control/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as skills$0 from "./internal/skills/models.js";
 
 /**
  * BotsList requests the bot roster.
@@ -106,6 +109,62 @@ export function Send(botID: string, uid: string, text: string): $CancellableProm
     return $Call.ByID(519019940, botID, uid, text);
 }
 
+/**
+ * SkillCreate scaffolds a new skill (starter SKILL.md).
+ */
+export function SkillCreate(name: string): $CancellablePromise<void> {
+    return $Call.ByID(1435339055, name);
+}
+
+/**
+ * SkillDelete removes a skill bundle entirely.
+ */
+export function SkillDelete(name: string): $CancellablePromise<void> {
+    return $Call.ByID(1356761844, name);
+}
+
+/**
+ * SkillDeleteFile removes a file from a skill bundle.
+ */
+export function SkillDeleteFile(name: string, rel: string): $CancellablePromise<void> {
+    return $Call.ByID(1212423266, name, rel);
+}
+
+/**
+ * SkillFiles lists the relative file paths in a skill bundle.
+ */
+export function SkillFiles(name: string): $CancellablePromise<string[]> {
+    return $Call.ByID(152150974, name).then(($result: any) => {
+        return $$createType2($result);
+    });
+}
+
+/**
+ * SkillRead returns one file's contents from a skill bundle.
+ */
+export function SkillRead(name: string, rel: string): $CancellablePromise<string> {
+    return $Call.ByID(3388404043, name, rel);
+}
+
+/**
+ * SkillWrite creates/overwrites a file in a skill bundle.
+ */
+export function SkillWrite(name: string, rel: string, content: string): $CancellablePromise<void> {
+    return $Call.ByID(2812285130, name, rel, content);
+}
+
+/**
+ * SkillsList returns every skill in the global catalog.
+ */
+export function SkillsList(): $CancellablePromise<skills$0.SkillInfo[]> {
+    return $Call.ByID(1013037060).then(($result: any) => {
+        return $$createType4($result);
+    });
+}
+
 // Private type creation functions
 const $$createType0 = configstore$0.BotConfig.createFrom;
 const $$createType1 = $Create.Array($$createType0);
+const $$createType2 = $Create.Array($Create.Any);
+const $$createType3 = skills$0.SkillInfo.createFrom;
+const $$createType4 = $Create.Array($$createType3);

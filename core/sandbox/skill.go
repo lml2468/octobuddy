@@ -7,6 +7,15 @@ import (
 	"strings"
 )
 
+// SkillSource is one directory of operator skills to link, with an optional
+// allow-list. Allow == nil links every skill dir found; a non-nil Allow (even
+// empty) links only the named skills — used to scope the global catalog to a
+// bot's selected skills.
+type SkillSource struct {
+	Dir   string
+	Allow []string
+}
+
 // LinkSkillsIntoSandbox symlinks operator-owned skill directories into a
 // session's sandbox at <sandboxDir>/.claude/skills/<name>, so the agent CLI
 // (which discovers project-scope skills under the cwd) finds them. Ported from
@@ -14,22 +23,30 @@ import (
 //
 // sources is in ascending precedence — [globalSkillsDir, perBotSkillsDir] — so a
 // per-bot skill shadows a global one of the same name (later source wins). Each
-// direct child directory of a source is one skill, linked individually.
+// direct child directory of a source is one skill, linked individually; a
+// source's Allow list (when non-nil) restricts which of its skills are linked.
 //
 // Best-effort: every error is logged and skipped, never returned (the error in
 // the signature is reserved for a future stricter mode; today it is always nil).
 // A missing skill only degrades capability; it must not break the turn.
-func LinkSkillsIntoSandbox(sandboxDir string, sources []string) error {
+func LinkSkillsIntoSandbox(sandboxDir string, sources []SkillSource) error {
 	skillsRoot := filepath.Join(sandboxDir, ".claude", "skills")
 
 	// Collect desired links: skillName → absolute source path. Later sources
 	// overwrite earlier ones (per-bot shadows global).
 	desired := map[string]string{}
 	for _, src := range sources {
-		if src == "" {
+		if src.Dir == "" {
 			continue
 		}
-		entries, err := os.ReadDir(src)
+		var allow map[string]bool
+		if src.Allow != nil {
+			allow = make(map[string]bool, len(src.Allow))
+			for _, n := range src.Allow {
+				allow[n] = true
+			}
+		}
+		entries, err := os.ReadDir(src.Dir)
 		if err != nil {
 			continue // missing / unreadable source — skip silently
 		}
@@ -38,7 +55,10 @@ func LinkSkillsIntoSandbox(sandboxDir string, sources []string) error {
 			if strings.HasPrefix(name, ".") {
 				continue // skip dotfiles
 			}
-			full := filepath.Join(src, name)
+			if allow != nil && !allow[name] {
+				continue // not in this source's allow-list
+			}
+			full := filepath.Join(src.Dir, name)
 			info, err := os.Lstat(full)
 			if err != nil {
 				continue

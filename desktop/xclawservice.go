@@ -15,6 +15,7 @@ import (
 	"github.com/lml2468/xclaw/desktop/internal/control"
 	"github.com/lml2468/xclaw/desktop/internal/core"
 	"github.com/lml2468/xclaw/desktop/internal/secrets"
+	"github.com/lml2468/xclaw/desktop/internal/skills"
 )
 
 // EventStream is the single Wails event name the backend uses to push every
@@ -243,6 +244,31 @@ func (x *XClawService) LoadConfig() ([]configstore.BotConfig, error) {
 func (x *XClawService) SaveConfig(bots []configstore.BotConfig, removedIDs []string) error {
 	return configstore.Save(bots, removedIDs)
 }
+
+// --- skills library (~/.xclaw/skills) for the Skills window ---
+
+// SkillsList returns every skill in the global catalog.
+func (x *XClawService) SkillsList() ([]skills.SkillInfo, error) { return skills.List() }
+
+// SkillFiles lists the relative file paths in a skill bundle.
+func (x *XClawService) SkillFiles(name string) ([]string, error) { return skills.Files(name) }
+
+// SkillRead returns one file's contents from a skill bundle.
+func (x *XClawService) SkillRead(name, rel string) (string, error) { return skills.ReadFile(name, rel) }
+
+// SkillWrite creates/overwrites a file in a skill bundle.
+func (x *XClawService) SkillWrite(name, rel, content string) error {
+	return skills.WriteFile(name, rel, content)
+}
+
+// SkillDeleteFile removes a file from a skill bundle.
+func (x *XClawService) SkillDeleteFile(name, rel string) error { return skills.DeleteFile(name, rel) }
+
+// SkillCreate scaffolds a new skill (starter SKILL.md).
+func (x *XClawService) SkillCreate(name string) error { return skills.Create(name) }
+
+// SkillDelete removes a skill bundle entirely.
+func (x *XClawService) SkillDelete(name string) error { return skills.Delete(name) }
 
 // RestartCore restarts the daemon and reconnects (applies config changes). It
 // bumps the epoch first so any in-flight crash-reconnect loop bails instead of

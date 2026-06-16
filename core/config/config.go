@@ -89,6 +89,12 @@ type BotEntry struct {
 	KnownBotUids      []string `json:"knownBotUids,omitempty"`
 	AllowedBotUids    []string `json:"allowedBotUids,omitempty"`
 	BotBlocklist      []string `json:"botBlocklist,omitempty"`
+
+	// Skills is the bot's allow-list of GLOBAL skill names (dirs under
+	// ~/.xclaw/skills) to expose to the agent. Per-bot REPLACES the top-level
+	// default (override ?? base). nil/empty = no global skills for this bot;
+	// per-bot dir skills (~/.xclaw/<id>/skills) are always linked regardless.
+	Skills []string `json:"skills,omitempty"`
 }
 
 // File is the on-disk shape of the single ~/.xclaw/config.json. The top-level
@@ -106,6 +112,10 @@ type File struct {
 	KnownBotUids      []string `json:"knownBotUids,omitempty"`
 	AllowedBotUids    []string `json:"allowedBotUids,omitempty"`
 	BotBlocklist      []string `json:"botBlocklist,omitempty"`
+
+	// Skills is the top-level default allow-list of global skill names (a bots[]
+	// entry may override it).
+	Skills []string `json:"skills,omitempty"`
 
 	Bots []BotEntry `json:"bots,omitempty"`
 }
@@ -125,6 +135,10 @@ type Resolved struct {
 	KnownBotUids      []string // uids known to be bots, for the loop guard (G14)
 	AllowedBotUids    []string // bot-looking uids exempt from the loop guard (G14)
 	BotBlocklist      []string // uids whose DMs are silently dropped
+
+	// Skills is the effective allow-list of global skill names linked into this
+	// bot's session sandboxes (per-bot ?? top-level). nil/empty = none.
+	Skills []string
 
 	// SystemPrompt is the operator-trusted persona/behavior prompt, assembled
 	// from SOUL.md + AGENTS.md in the bot dir (not from config).
@@ -259,6 +273,9 @@ func resolveBots(global File, baseDir string) ([]Resolved, error) {
 		r.KnownBotUids = firstNonNil(bot.KnownBotUids, global.KnownBotUids)
 		r.AllowedBotUids = firstNonNil(bot.AllowedBotUids, global.AllowedBotUids)
 		r.BotBlocklist = firstNonNil(bot.BotBlocklist, global.BotBlocklist)
+
+		// Skill allow-list: per-bot REPLACES top-level when non-nil.
+		r.Skills = firstNonNil(bot.Skills, global.Skills)
 
 		// System prompt: SOUL.md (identity) + AGENTS.md (behavior), file-based.
 		r.SystemPrompt = soul(botRoot)

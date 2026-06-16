@@ -20,6 +20,12 @@ export class BotConfig {
     "soul": string;
     "agents": string;
 
+    /**
+     * Skills is the bot's allow-list of global skill names (managed in the
+     * Skills window, selected per bot in the editor).
+     */
+    "skills": string[];
+
     /** Creates a new BotConfig instance. */
     constructor($$source: Partial<BotConfig> = {}) {
         if (!("id" in $$source)) {
@@ -49,6 +55,9 @@ export class BotConfig {
         if (!("agents" in $$source)) {
             this["agents"] = "";
         }
+        if (!("skills" in $$source)) {
+            this["skills"] = [];
+        }
 
         Object.assign(this, $$source);
     }
@@ -58,9 +67,13 @@ export class BotConfig {
      */
     static createFrom($$source: any = {}): BotConfig {
         const $$createField6_0 = $$createType0;
+        const $$createField9_0 = $$createType1;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("env" in $$parsedSource) {
             $$parsedSource["env"] = $$createField6_0($$parsedSource["env"]);
+        }
+        if ("skills" in $$parsedSource) {
+            $$parsedSource["skills"] = $$createField9_0($$parsedSource["skills"]);
         }
         return new BotConfig($$parsedSource as Partial<BotConfig>);
     }
@@ -68,3 +81,4 @@ export class BotConfig {
 
 // Private type creation functions
 const $$createType0 = $Create.Map($Create.Any, $Create.Any);
+const $$createType1 = $Create.Array($Create.Any);

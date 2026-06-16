@@ -73,6 +73,9 @@ type Gateway struct {
 	// turn runs in cwdBase/<hash>, with auto-memory under memoryBase/<hash> and
 	// operator skills symlinked in. Empty cwdBase = no isolation (inherit proc).
 	cwdBase, memoryBase, skillsDir, globalSkillsDir string
+	// globalSkillAllow scopes which global-catalog skills link into this bot's
+	// sandboxes (nil = none). Per-bot dir skills always link.
+	globalSkillAllow []string
 	// mediaAuth, when set, supplies the Authorization header for an inbound-media
 	// download URL (scoped to the IM's apiUrl host). Set via WithMediaAuth by the
 	// IM connector; keeps the gateway IM-agnostic (it never embeds a token).
@@ -182,6 +185,13 @@ func (g *Gateway) WithSandbox(cwdBase, memoryBase, skillsDir, globalSkillsDir st
 	g.memoryBase = memoryBase
 	g.skillsDir = skillsDir
 	g.globalSkillsDir = globalSkillsDir
+	return g
+}
+
+// WithSkillAllow sets the allow-list of global-catalog skill names exposed to
+// this bot (nil/empty = none). Per-bot dir skills are always linked.
+func (g *Gateway) WithSkillAllow(names []string) *Gateway {
+	g.globalSkillAllow = names
 	return g
 }
 
@@ -373,7 +383,11 @@ func (g *Gateway) runTurn(ctx context.Context, sessionKey string, msg router.Inb
 		}
 		cwd = resolved
 		// Best-effort: a missing skill only degrades capability, never breaks the turn.
-		_ = sandbox.LinkSkillsIntoSandbox(cwd, []string{g.globalSkillsDir, g.skillsDir})
+		// Global catalog is scoped to this bot's allow-list; per-bot dir skills always link.
+		_ = sandbox.LinkSkillsIntoSandbox(cwd, []sandbox.SkillSource{
+			{Dir: g.globalSkillsDir, Allow: g.globalSkillAllow},
+			{Dir: g.skillsDir},
+		})
 		if g.memoryBase != "" {
 			memDir = sandbox.ResolveMemoryDir(g.memoryBase, sctx)
 		}
