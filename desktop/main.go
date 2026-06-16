@@ -133,6 +133,10 @@ func setupSystemTray() {
 		openConsole()
 		app.Event.Emit("xclaw:open-skills")
 	})
+	menu.Add("Manage Workflows…").OnClick(func(*application.Context) {
+		openConsole()
+		app.Event.Emit("xclaw:open-workflows")
+	})
 	menu.AddSeparator()
 	menu.Add("Restart Core").OnClick(func(*application.Context) {
 		if bridge != nil {

@@ -24,6 +24,9 @@ import * as control$0 from "./internal/control/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
 import * as skills$0 from "./internal/skills/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as workflows$0 from "./internal/workflows/models.js";
 
 /**
  * BotsList requests the bot roster.
@@ -162,9 +165,48 @@ export function SkillsList(): $CancellablePromise<skills$0.SkillInfo[]> {
     });
 }
 
+/**
+ * WorkflowCreate scaffolds a new workflow.
+ */
+export function WorkflowCreate(name: string): $CancellablePromise<void> {
+    return $Call.ByID(867881607, name);
+}
+
+/**
+ * WorkflowDelete removes a workflow.
+ */
+export function WorkflowDelete(name: string): $CancellablePromise<void> {
+    return $Call.ByID(1678805052, name);
+}
+
+/**
+ * WorkflowRead returns a workflow's script source.
+ */
+export function WorkflowRead(name: string): $CancellablePromise<string> {
+    return $Call.ByID(555421379, name);
+}
+
+/**
+ * WorkflowWrite creates/overwrites a workflow's script.
+ */
+export function WorkflowWrite(name: string, content: string): $CancellablePromise<void> {
+    return $Call.ByID(2925081922, name, content);
+}
+
+/**
+ * WorkflowsList returns every workflow in the global catalog.
+ */
+export function WorkflowsList(): $CancellablePromise<workflows$0.Info[]> {
+    return $Call.ByID(2169000428).then(($result: any) => {
+        return $$createType6($result);
+    });
+}
+
 // Private type creation functions
 const $$createType0 = configstore$0.BotConfig.createFrom;
 const $$createType1 = $Create.Array($$createType0);
 const $$createType2 = $Create.Array($Create.Any);
 const $$createType3 = skills$0.SkillInfo.createFrom;
 const $$createType4 = $Create.Array($$createType3);
+const $$createType5 = workflows$0.Info.createFrom;
+const $$createType6 = $Create.Array($$createType5);

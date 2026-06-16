@@ -19,6 +19,7 @@
   let loadedIds: string[] = [];
   // Global skill catalog (for the per-bot available-skills checklist).
   let allSkills = $state<{ name: string; description: string }[]>([]);
+  let allWorkflows = $state<{ name: string; description: string }[]>([]);
 
   function skillOn(name: string): boolean {
     return (current?.skills ?? []).includes(name);
@@ -28,6 +29,15 @@
     const set = new Set(current.skills ?? []);
     set.has(name) ? set.delete(name) : set.add(name);
     current.skills = [...set];
+  }
+  function workflowOn(name: string): boolean {
+    return (current?.workflows ?? []).includes(name);
+  }
+  function toggleWorkflow(name: string) {
+    if (!current) return;
+    const set = new Set(current.workflows ?? []);
+    set.has(name) ? set.delete(name) : set.add(name);
+    current.workflows = [...set];
   }
 
   $effect(() => {
@@ -46,6 +56,7 @@
         new BotConfig({ id: "research", apiUrl: "https://im.example.com/api" }),
       ];
       allSkills = [{ name: "pdf-tools", description: "Extract text and fill PDF forms." }, { name: "octo-broadcast", description: "Announce to every channel." }];
+      allWorkflows = [{ name: "review-changes", description: "Multi-dimension diff review." }, { name: "deep-audit", description: "Exhaustive audit pass." }];
       sel = 0;
       return;
     }
@@ -53,6 +64,7 @@
       bots = (await XClawService.LoadConfig()) ?? [];
       loadedIds = bots.map((b) => b.id);
       try { allSkills = ((await XClawService.SkillsList()) ?? []) as any; } catch { allSkills = []; }
+      try { allWorkflows = ((await XClawService.WorkflowsList()) ?? []) as any; } catch { allWorkflows = []; }
       if (bots.length === 0) addBot();
       sel = 0;
     } catch (e: any) {
@@ -150,6 +162,21 @@
                   <input type="checkbox" checked={skillOn(s.name)} onchange={() => toggleSkill(s.name)} />
                   <span class="sknm">{s.name}</span>
                   <span class="skds">{s.description}</span>
+                </label>
+              {/each}
+            {/if}
+          </div>
+
+          <div class="skills">
+            <span class="lbl">Available workflows</span>
+            {#if allWorkflows.length === 0}
+              <small>No workflows in the library yet — add some from “Manage Workflows…”.</small>
+            {:else}
+              {#each allWorkflows as w (w.name)}
+                <label class="skrow">
+                  <input type="checkbox" checked={workflowOn(w.name)} onchange={() => toggleWorkflow(w.name)} />
+                  <span class="sknm">{w.name}</span>
+                  <span class="skds">{w.description}</span>
                 </label>
               {/each}
             {/if}

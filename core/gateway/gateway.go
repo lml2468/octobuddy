@@ -76,6 +76,9 @@ type Gateway struct {
 	// globalSkillAllow scopes which global-catalog skills link into this bot's
 	// sandboxes (nil = none). Per-bot dir skills always link.
 	globalSkillAllow []string
+	// Workflow catalog dirs + per-bot allow-list (same model as skills).
+	workflowsDir, globalWorkflowsDir string
+	globalWorkflowAllow              []string
 	// mediaAuth, when set, supplies the Authorization header for an inbound-media
 	// download URL (scoped to the IM's apiUrl host). Set via WithMediaAuth by the
 	// IM connector; keeps the gateway IM-agnostic (it never embeds a token).
@@ -192,6 +195,16 @@ func (g *Gateway) WithSandbox(cwdBase, memoryBase, skillsDir, globalSkillsDir st
 // this bot (nil/empty = none). Per-bot dir skills are always linked.
 func (g *Gateway) WithSkillAllow(names []string) *Gateway {
 	g.globalSkillAllow = names
+	return g
+}
+
+// WithWorkflows configures the workflow catalog dirs and the per-bot allow-list
+// of global workflow names exposed to this bot (nil/empty = none). Per-bot dir
+// workflows always link.
+func (g *Gateway) WithWorkflows(workflowsDir, globalWorkflowsDir string, allow []string) *Gateway {
+	g.workflowsDir = workflowsDir
+	g.globalWorkflowsDir = globalWorkflowsDir
+	g.globalWorkflowAllow = allow
 	return g
 }
 
@@ -387,6 +400,12 @@ func (g *Gateway) runTurn(ctx context.Context, sessionKey string, msg router.Inb
 		_ = sandbox.LinkSkillsIntoSandbox(cwd, []sandbox.SkillSource{
 			{Dir: g.globalSkillsDir, Allow: g.globalSkillAllow},
 			{Dir: g.skillsDir},
+		})
+		// Same for workflows (.claude/workflows): global catalog scoped to the
+		// bot's allow-list, plus the always-linked per-bot dir.
+		_ = sandbox.LinkWorkflowsIntoSandbox(cwd, []sandbox.SkillSource{
+			{Dir: g.globalWorkflowsDir, Allow: g.globalWorkflowAllow},
+			{Dir: g.workflowsDir},
 		})
 		if g.memoryBase != "" {
 			memDir = sandbox.ResolveMemoryDir(g.memoryBase, sctx)

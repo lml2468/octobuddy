@@ -173,6 +173,13 @@ func runBot(ctx context.Context, cfg config.Resolved, reg *botRegistry, srv *con
 	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
 		return fmt.Errorf("bot %s: mkdir data: %w", cfg.BotID, err)
 	}
+	// Isolated per-bot CLAUDE_CONFIG_DIR (unless inheriting the operator's
+	// ~/.claude). Created here so the agent's config root exists before it spawns.
+	if cfg.ClaudeConfigDir != "" && !cfg.Agent.InheritUserConfig {
+		if err := os.MkdirAll(cfg.ClaudeConfigDir, 0o700); err != nil {
+			return fmt.Errorf("bot %s: mkdir claude config dir: %w", cfg.BotID, err)
+		}
+	}
 	st, err := store.Open(filepath.Join(cfg.DataDir, "xclaw.db"))
 	if err != nil {
 		return fmt.Errorf("bot %s: store: %w", cfg.BotID, err)
@@ -256,6 +263,7 @@ func runBot(ctx context.Context, cfg config.Resolved, reg *botRegistry, srv *con
 		WithCommandInfo(cfg.RateLimit.MaxPerMinute, cfg.Context.MaxContextChars).
 		WithSandbox(cfg.CwdBase, cfg.MemoryBase, cfg.SkillsDir, cfg.GlobalSkillsDir).
 		WithSkillAllow(cfg.Skills).
+		WithWorkflows(cfg.WorkflowsDir, cfg.GlobalWorkflowsDir, cfg.Workflows).
 		WithMediaAuth(connector.MediaAuth())
 	connector.SetGateway(gw)
 

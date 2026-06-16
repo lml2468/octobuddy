@@ -9,7 +9,9 @@
     "_comment_cron": "Set cron=true to enable per-bot scheduled tasks (#115): owner-gated cron.create/list/delete over the control bus, fired through the gateway. Off by default.",
     "cron": false,
     "_comment_toolProgress": "Opt-in: when true, the bot mirrors each tool it runs to the channel as a brief '🔧 Running <tool>(<params>)…' notice (deduped, capped at 10/turn). Off by default.",
-    "toolProgress": false
+    "toolProgress": false,
+    "_comment_inheritUserConfig": "When true, the agent inherits the operator's ~/.claude (user-scope skills + installed plugins). OFF by default: each bot gets an isolated CLAUDE_CONFIG_DIR (~/.xclaw/<id>/claude) so operator plugins/user-skills don't leak into every bot. Built-in CLI skills still load; the per-bot catalog comes from skills/workflows below. Set true only for a trusted single-operator deployment.",
+    "inheritUserConfig": false
   },
   "rateLimit": { "maxPerMinute": 5 },
   "context": { "maxContextChars": 6000 },
@@ -22,6 +24,8 @@
   "botBlocklist": [],
   "_comment_skills": "Optional allow-list of skill names from the global catalog at ~/.xclaw/skills/<name>/ (each a Claude Code SKILL.md bundle). When set, ONLY the named skills are linked into the bot's session sandbox (.claude/skills) for the agent to use; omitted/empty = no global skills. Top-level default; a bots[] entry may override it (the per-bot value REPLACES the default). Per-bot dir skills under ~/.xclaw/<id>/skills always link regardless. Manage the catalog and per-bot selection in the desktop app (gear → Manage Skills / Edit Bots).",
   "skills": [],
+  "_comment_workflows": "Same model as skills, for workflows: names from the global catalog at ~/.xclaw/workflows/<name>.js (each a workflow script the agent's Workflow tool runs by name). Linked into the sandbox's .claude/workflows. Top-level default; per-bot REPLACES it. Manage via the desktop app (gear → Manage Workflows / Edit Bots).",
+  "workflows": [],
   "bots": [
     {
       "id": "my-bot",
@@ -36,7 +40,9 @@
       },
       "context": { "maxContextChars": 8000 },
       "_comment_skills": "This bot may use only these catalog skills (overrides the top-level default).",
-      "skills": ["pdf-tools"]
+      "skills": ["pdf-tools"],
+      "_comment_workflows": "This bot may run only these catalog workflows.",
+      "workflows": ["review-changes"]
     },
     {
       "id": "admin-clone",

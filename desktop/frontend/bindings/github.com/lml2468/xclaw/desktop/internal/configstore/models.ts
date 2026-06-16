@@ -26,6 +26,11 @@ export class BotConfig {
      */
     "skills": string[];
 
+    /**
+     * Workflows is the bot's allow-list of global workflow names.
+     */
+    "workflows": string[];
+
     /** Creates a new BotConfig instance. */
     constructor($$source: Partial<BotConfig> = {}) {
         if (!("id" in $$source)) {
@@ -58,6 +63,9 @@ export class BotConfig {
         if (!("skills" in $$source)) {
             this["skills"] = [];
         }
+        if (!("workflows" in $$source)) {
+            this["workflows"] = [];
+        }
 
         Object.assign(this, $$source);
     }
@@ -68,12 +76,16 @@ export class BotConfig {
     static createFrom($$source: any = {}): BotConfig {
         const $$createField6_0 = $$createType0;
         const $$createField9_0 = $$createType1;
+        const $$createField10_0 = $$createType1;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("env" in $$parsedSource) {
             $$parsedSource["env"] = $$createField6_0($$parsedSource["env"]);
         }
         if ("skills" in $$parsedSource) {
             $$parsedSource["skills"] = $$createField9_0($$parsedSource["skills"]);
+        }
+        if ("workflows" in $$parsedSource) {
+            $$parsedSource["workflows"] = $$createField10_0($$parsedSource["workflows"]);
         }
         return new BotConfig($$parsedSource as Partial<BotConfig>);
     }
