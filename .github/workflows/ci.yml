@@ -45,6 +45,11 @@ jobs:
       - name: test (race + coverage)
         run: go test -race -coverprofile=coverage.out ./...
 
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          "$(go env GOPATH)/bin/govulncheck" ./...
+
   cross-compile:
     name: Cross-compile (zero cgo)
     runs-on: ubuntu-latest
@@ -72,17 +77,59 @@ jobs:
           GOARCH: ${{ matrix.target.goarch }}
         run: go build -o /dev/null ./cmd/xclawd
 
-  app:
-    name: Swift app
-    runs-on: macos-15
-    defaults:
-      run:
-        working-directory: app
+  desktop:
+    name: Desktop (Wails) + frontend
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Toolchain
-        run: swift --version
-      - name: swift build
-        run: swift build
-      - name: swift test
-        run: swift test
+
+      # Wails v3 on Linux links against GTK3 + WebKit2GTK 4.1 via cgo.
+      - name: Install Wails Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: desktop/go.mod
+          cache-dependency-path: desktop/go.sum
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: desktop/frontend/package-lock.json
+
+      # Frontend must be built first: desktop/main.go embeds frontend/dist via
+      # //go:embed, so the Go build fails if the bundle is absent.
+      - name: Frontend install
+        working-directory: desktop/frontend
+        run: npm ci
+
+      - name: Frontend build
+        working-directory: desktop/frontend
+        run: npm run build
+
+      - name: Frontend svelte-check
+        working-directory: desktop/frontend
+        run: npx svelte-check --tsconfig ./tsconfig.json
+
+      - name: Desktop go vet
+        working-directory: desktop
+        env:
+          CGO_ENABLED: "1"
+        run: go vet ./...
+
+      - name: Desktop build
+        working-directory: desktop
+        env:
+          CGO_ENABLED: "1"
+        run: go build ./...
+
+      - name: Desktop test
+        working-directory: desktop
+        env:
+          CGO_ENABLED: "1"
+        run: go test ./...
