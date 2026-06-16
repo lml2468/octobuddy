@@ -4,8 +4,44 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"fmt"
+	"strings"
 	"testing"
 )
+
+func TestVerifyChecksum(t *testing.T) {
+	archive := []byte("octo-cli archive bytes")
+	name := "octo-cli_0.6.0_darwin_arm64.tar.gz"
+	good := sha256hex(archive)
+	sums := []byte(fmt.Sprintf("%s  %s\nfeed00  other.tar.gz\n", good, name))
+
+	t.Run("match passes", func(t *testing.T) {
+		if err := verifyChecksum(sums, archive, name); err != nil {
+			t.Fatalf("verifyChecksum: %v", err)
+		}
+	})
+	t.Run("case-insensitive hex passes", func(t *testing.T) {
+		up := []byte(fmt.Sprintf("%s  %s\n", strings.ToUpper(good), name))
+		if err := verifyChecksum(up, archive, name); err != nil {
+			t.Fatalf("verifyChecksum (uppercase): %v", err)
+		}
+	})
+	t.Run("missing entry fails closed", func(t *testing.T) {
+		if err := verifyChecksum([]byte("feed00  other.tar.gz\n"), archive, name); err == nil {
+			t.Fatal("expected error when checksums.txt has no entry for the asset")
+		}
+	})
+	t.Run("empty sums fails closed", func(t *testing.T) {
+		if err := verifyChecksum(nil, archive, name); err == nil {
+			t.Fatal("expected error when checksums.txt is empty")
+		}
+	})
+	t.Run("mismatch fails", func(t *testing.T) {
+		if err := verifyChecksum(sums, []byte("tampered"), name); err == nil {
+			t.Fatal("expected error on checksum mismatch")
+		}
+	})
+}
 
 func TestCompareVersions(t *testing.T) {
 	cases := []struct {
