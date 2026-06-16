@@ -10,9 +10,28 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 )
+
+// envWithOctoBin returns the process environment with ~/.xclaw/bin prepended to
+// PATH, so the daemon's spawned agent can invoke the octo-cli companion binary.
+func envWithOctoBin() []string {
+	env := os.Environ()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return env
+	}
+	bin := filepath.Join(home, ".xclaw", "bin")
+	for i, kv := range env {
+		if strings.HasPrefix(kv, "PATH=") {
+			env[i] = "PATH=" + bin + string(os.PathListSeparator) + strings.TrimPrefix(kv, "PATH=")
+			return env
+		}
+	}
+	return append(env, "PATH="+bin)
+}
 
 // SocketPath returns the control-bus socket path for this user. Kept short to
 // stay under the ~104-byte sockaddr_un limit. On Windows, AF_UNIX still wants a
@@ -99,6 +118,7 @@ func (s *Supervisor) startLocked() error {
 	cmd := exec.Command(s.BinPath, args...)
 	cmd.Stdout = os.Stderr // surface daemon logs in the app's stderr during dev
 	cmd.Stderr = os.Stderr
+	cmd.Env = envWithOctoBin() // put ~/.xclaw/bin on PATH so the agent can call octo-cli
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start xclawd: %w", err)
 	}

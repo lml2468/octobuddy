@@ -1,13 +1,16 @@
 package main
 
 import (
+	"context"
 	"embed"
 	"log"
 	"os"
+	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 
 	"github.com/lml2468/xclaw/desktop/internal/control"
+	"github.com/lml2468/xclaw/desktop/internal/octocli"
 )
 
 //go:embed all:frontend/dist
@@ -34,6 +37,11 @@ func main() {
 	if !preview {
 		bridge = NewXClawService()
 		services = append(services, application.NewService(bridge))
+		// Install the bundled octo-cli baseline into ~/.xclaw/bin before the
+		// daemon (and its agent) spawn, so it's on the agent's PATH from turn one.
+		if err := octocli.EnsureInstalled(); err != nil {
+			log.Printf("xclaw: octo-cli install skipped: %v", err)
+		}
 	}
 
 	app = application.New(application.Options{
@@ -131,9 +139,38 @@ func setupSystemTray() {
 			go bridge.RestartCore()
 		}
 	})
+
+	// octo-cli companion: show the installed version + a one-click upgrade.
+	menu.AddSeparator()
+	octoInfo := menu.Add(octoInfoLabel())
+	octoInfo.SetEnabled(false)
+	menu.Add("Update octo-cli").OnClick(func(*application.Context) {
+		go func() {
+			octoInfo.SetLabel("Updating octo-cli…")
+			ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+			defer cancel()
+			ver, err := octocli.Upgrade(ctx)
+			if err != nil {
+				log.Printf("xclaw: octo-cli update failed: %v", err)
+				octoInfo.SetLabel("octo-cli — update failed")
+				return
+			}
+			log.Printf("xclaw: octo-cli updated to %s", ver)
+			octoInfo.SetLabel("octo-cli " + ver)
+		}()
+	})
+
 	menu.AddSeparator()
 	menu.Add("Quit XClaw").OnClick(func(*application.Context) { app.Quit() })
 	tray.SetMenu(menu)
+}
+
+// octoInfoLabel is the (disabled) tray row showing the installed octo-cli version.
+func octoInfoLabel() string {
+	if v := octocli.InstalledVersion(); v != "" {
+		return "octo-cli " + v
+	}
+	return "octo-cli — not installed"
 }
 
 func fileExists(path string) bool {
