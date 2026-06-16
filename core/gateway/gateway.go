@@ -354,7 +354,11 @@ func (g *Gateway) runTurn(ctx context.Context, sessionKey string, msg router.Inb
 		}
 		b.WriteString(safety.CurrentMessageAnchor)
 		b.WriteString("\n")
-		b.WriteString(msg.Text)
+		// Defense-in-depth: the current-message body is untrusted. Escape role
+		// labels / section markers so a crafted body cannot forge prompt
+		// structure below the real anchor (e.g. a second [Current message …]
+		// anchor or a fake [Recent group messages] header).
+		b.WriteString(safety.SafeBody(msg.Text).String())
 		prompt = b.String()
 	}
 

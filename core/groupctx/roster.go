@@ -3,6 +3,8 @@ package groupctx
 import (
 	"fmt"
 	"strings"
+
+	"github.com/lml2468/xclaw/core/safety"
 )
 
 // MentionFormatHint is the single source of truth for the structured-mention
@@ -46,11 +48,14 @@ func (g *GroupContext) MemberListPrefix(channelID string) string {
 		var b strings.Builder
 		b.WriteString("[Group Members]\n")
 		for _, m := range members {
-			fmt.Fprintf(&b, "  %s (%s)\n", m.Name, m.UID)
+			// Name is sanitized at storage; UID is not, so escape it here too —
+			// a hostile uid with brackets/line breaks could otherwise forge
+			// structure inside this operator-trusted roster block.
+			fmt.Fprintf(&b, "  %s (%s)\n", m.Name, safety.SanitizeDisplayName(m.UID, ""))
 		}
 		b.WriteString("\n")
 		b.WriteString(MentionFormatHint)
-		fmt.Fprintf(&b, "\n(e.g. @[%s:%s]).\n\n", members[0].UID, members[0].Name)
+		fmt.Fprintf(&b, "\n(e.g. @[%s:%s]).\n\n", safety.SanitizeDisplayName(members[0].UID, ""), members[0].Name)
 		return b.String()
 	}
 
