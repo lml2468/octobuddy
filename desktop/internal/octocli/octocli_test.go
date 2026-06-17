@@ -58,7 +58,7 @@ func TestExtractTarGz(t *testing.T) {
 		data []byte
 	}{
 		{"LICENSE", []byte("Apache-2.0")},
-		{"octo-cli", want},
+		{binName(), want}, // per-OS name (…/octo-cli or octo-cli.exe) so the lookup matches on Windows too
 	} {
 		_ = tw.WriteHeader(&tar.Header{Name: f.name, Mode: 0o755, Size: int64(len(f.data))})
 		_, _ = tw.Write(f.data)
