@@ -45,6 +45,13 @@ jobs:
       - name: test (race + coverage)
         run: go test -race -coverprofile=coverage.out ./...
 
+      - name: govulncheck
+        run: |
+          # Pinned (not @latest) so the gate is reproducible: a new advisory or a
+          # new tool release can't flip a green commit red with no code change.
+          go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+          "$(go env GOPATH)/bin/govulncheck" ./...
+
   cross-compile:
     name: Cross-compile (zero cgo)
     runs-on: ubuntu-latest
@@ -72,17 +79,78 @@ jobs:
           GOARCH: ${{ matrix.target.goarch }}
         run: go build -o /dev/null ./cmd/xclawd
 
-  app:
-    name: Swift app
-    runs-on: macos-15
+  desktop:
+    name: Desktop (Wails) — ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux + macOS link the webview natively via cgo, so -race works.
+          - { os: ubuntu-latest, cgo: "1", race: "-race" }
+          - { os: macos-15, cgo: "1", race: "-race" }
+          # Wails on Windows uses the pure-Go WebView2 binding (no C compiler);
+          # -race needs cgo, so the Windows leg runs the suite without it.
+          - { os: windows-latest, cgo: "0", race: "" }
+    env:
+      CGO_ENABLED: ${{ matrix.cgo }}
     defaults:
       run:
-        working-directory: app
+        # bash on all three runners (Git Bash on Windows) so the gofmt / npm
+        # steps behave identically regardless of the default shell.
+        shell: bash
     steps:
       - uses: actions/checkout@v4
-      - name: Toolchain
-        run: swift --version
-      - name: swift build
-        run: swift build
-      - name: swift test
-        run: swift test
+
+      # Wails v3 (alpha) on Linux defaults to GTK4 + webkitgtk-6.0 (the GTK3 /
+      # webkit2gtk-4.1 packages are only the optional legacy set).
+      - name: Install Wails Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgtk-4-dev \
+            libwebkitgtk-6.0-dev
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: desktop/go.mod
+          cache-dependency-path: desktop/go.sum
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: desktop/frontend/package-lock.json
+
+      # Frontend must be built first: desktop/main.go embeds frontend/dist via
+      # //go:embed, so the Go compile fails if the bundle is absent.
+      - name: Frontend build + check
+        working-directory: desktop/frontend
+        run: |
+          npm ci
+          npm run build
+          npm run check
+
+      # gofmt output is OS-independent, so the gate runs once (on Linux).
+      - name: gofmt
+        if: runner.os == 'Linux'
+        working-directory: desktop
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "::error::These files are not gofmt-clean:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go vet
+        working-directory: desktop
+        run: go vet ./...
+
+      # go test compiles every package (subsuming a build-only step) and runs the
+      # desktop suite — path-traversal, secret-handling and config round-trip
+      # guards that were not exercised in CI before.
+      - name: go test
+        working-directory: desktop
+        run: go test ${{ matrix.race }} ./...
