@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -130,9 +131,12 @@ func TestCleanupExpired(t *testing.T) {
 // connections, so if FK enforcement isn't set on every pooled connection the
 // ON DELETE CASCADE on messages silently no-ops on whatever connection happens
 // to run the session DELETE — orphaning message rows that then never expire.
-// This forces CleanupExpired onto a *different* pooled connection than the one
-// that wrote the rows, proving the cascade fires regardless of which connection
-// the pool hands out.
+// By pinning one connection out of a widened pool it steers CleanupExpired's
+// DELETE toward a different connection than the one that wrote the rows. This is
+// best-effort, not guaranteed (database/sql may still hand the idle writer back);
+// what makes it a reliable guard is that pre-fix the writes spread across
+// FK-off connections, so the cascade was overwhelmingly likely to no-op and
+// leave an orphan that fails the assertion below.
 func TestCleanupExpiredCascadesAcrossPooledConnections(t *testing.T) {
 	s := openTemp(t)
 	// Allow the pool to hold more than one connection so we can pin one open
@@ -150,7 +154,8 @@ func TestCleanupExpiredCascadesAcrossPooledConnections(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	// Pin a connection out of the pool so the next statement must use another.
+	// Pin a connection out of the pool so the next statement is steered onto
+	// another (best-effort — see the doc comment).
 	pinned, err := s.db.Conn(ctx)
 	if err != nil {
 		t.Fatalf("pin conn: %v", err)
@@ -187,5 +192,53 @@ func TestDSN(t *testing.T) {
 	}
 	if got := dsn("file:/tmp/x.db?cache=shared"); got != "file:/tmp/x.db?cache=shared&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)" {
 		t.Fatalf("uri path dsn wrong: %q", got)
+	}
+}
+
+// TestPragmasApplyPerPooledConnection proves the DSN pragmas are actually
+// replayed on a freshly-handed-out pooled connection, not merely present in the
+// DSN string (TestDSN's scope). A connection is pinned so the assertions run on
+// a second, distinct connection — closing the "every connection, not just the
+// pool's first" invariant for all three pragmas, not only foreign_keys.
+func TestPragmasApplyPerPooledConnection(t *testing.T) {
+	s := openTemp(t)
+	s.db.SetMaxOpenConns(3)
+	ctx := context.Background()
+
+	pinned, err := s.db.Conn(ctx)
+	if err != nil {
+		t.Fatalf("pin conn: %v", err)
+	}
+	defer pinned.Close()
+	if err := pinned.PingContext(ctx); err != nil {
+		t.Fatalf("ping pinned: %v", err)
+	}
+
+	// Pinned is still checked out, so this is a different physical connection.
+	other, err := s.db.Conn(ctx)
+	if err != nil {
+		t.Fatalf("second conn: %v", err)
+	}
+	defer other.Close()
+
+	var busyTimeout, foreignKeys int
+	var journalMode string
+	if err := other.QueryRowContext(ctx, `PRAGMA busy_timeout`).Scan(&busyTimeout); err != nil {
+		t.Fatalf("busy_timeout: %v", err)
+	}
+	if err := other.QueryRowContext(ctx, `PRAGMA foreign_keys`).Scan(&foreignKeys); err != nil {
+		t.Fatalf("foreign_keys: %v", err)
+	}
+	if err := other.QueryRowContext(ctx, `PRAGMA journal_mode`).Scan(&journalMode); err != nil {
+		t.Fatalf("journal_mode: %v", err)
+	}
+	if busyTimeout != 5000 {
+		t.Errorf("busy_timeout = %d, want 5000 (per-connection pragma not replayed)", busyTimeout)
+	}
+	if foreignKeys != 1 {
+		t.Errorf("foreign_keys = %d, want 1", foreignKeys)
+	}
+	if !strings.EqualFold(journalMode, "wal") {
+		t.Errorf("journal_mode = %q, want wal", journalMode)
 	}
 }
