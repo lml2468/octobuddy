@@ -96,10 +96,25 @@ jobs:
           npm run build
           npm run check
 
+      - name: gofmt
+        working-directory: desktop
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "::error::These files are not gofmt-clean:"
+            echo "$unformatted"
+            exit 1
+          fi
+
       - name: go vet
         working-directory: desktop
         run: go vet ./...
 
-      - name: go build
+      # go test compiles every package (subsuming a build-only step) and runs the
+      # desktop suite — path-traversal, secret-handling and config round-trip
+      # guards that were not exercised in CI before. Must follow the frontend
+      # build: main.go embeds frontend/dist via //go:embed, so the Go compile
+      # fails without it. macOS enables cgo by default, which -race requires.
+      - name: go test (race)
         working-directory: desktop
-        run: go build ./...
+        run: go test -race ./...
