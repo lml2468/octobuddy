@@ -321,12 +321,14 @@ func isTextual(mime string, data []byte) bool {
 
 // kindOf is the single source of truth for how the UI renders a file, so the
 // frontend consumes one field instead of re-deriving from mime/encoding. textual
-// is isTextual's result (utf8 vs base64). Order matters: markdown and svg both
+// is isTextual's result (utf8 vs base64). Order matters: markdown/html and svg
 // satisfy a broader bucket, so check the specific kinds first.
 func kindOf(mime string, textual bool) string {
 	switch {
 	case mime == "text/markdown":
 		return "markdown"
+	case mime == "text/html":
+		return "html"
 	case mime == "application/pdf":
 		return "pdf"
 	case !textual && strings.HasPrefix(mime, "image/"):

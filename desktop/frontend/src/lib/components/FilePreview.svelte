@@ -18,6 +18,8 @@
       content: `package main\n\nimport "fmt"\n\n// greet returns a greeting for name.\nfunc greet(name string) string {\n\treturn fmt.Sprintf("hello, %s", name)\n}\n\nfunc main() {\n\tfor i := 0; i < 3; i++ {\n\t\tfmt.Println(greet("world"), i)\n\t}\n}\n` } as FileContent,
     "notes.md": { path: "notes.md", encoding: "utf8", mime: "text/markdown", kind: "markdown", truncated: false, size: 180,
       content: "# Notes\n\nThe proto contract is an **NDJSON** envelope over a Unix socket.\n\n- events out\n- commands in\n\n```go\nfunc main() {\n\tapp.Run()\n}\n```\n" } as FileContent,
+    "page.html": { path: "page.html", encoding: "utf8", mime: "text/html", kind: "html", truncated: false, size: 240,
+      content: "<!doctype html><html><head><style>body{font-family:system-ui;padding:24px;color:#222}h1{color:#07c160}</style></head><body><h1>XClaw HTML preview</h1><p>Rendered in a <strong>sandboxed</strong> iframe.</p><ul><li>one</li><li>two</li></ul></body></html>" } as FileContent,
     "diagram.png": { path: "diagram.png", encoding: "base64", mime: "image/png", kind: "image", truncated: false, size: 95,
       // 1×1 transparent PNG.
       content: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==" } as FileContent,
@@ -59,6 +61,7 @@
   // — the single source of truth, so we never re-derive from mime/encoding here.
   const kind = $derived(file?.kind ?? "");
   const isMarkdown = $derived(kind === "markdown");
+  const isHtml = $derived(kind === "html");
   const isImage = $derived(kind === "image");
   const isPdf = $derived(kind === "pdf");
   const isText = $derived(kind === "text");
@@ -66,15 +69,19 @@
 
   const mdHtml = $derived(isMarkdown && file ? renderMarkdown(file.content) : "");
   // Code view: line-number gutter + token-highlighted source over one trimmed copy.
-  const trimmed = $derived(isText && file ? file.content.replace(/\n$/, "") : "");
+  // Also used for the Raw view of markdown/html.
+  const trimmed = $derived((isText || isHtml) && file ? file.content.replace(/\n$/, "") : "");
   // Only the line *count* is needed (for the gutter); avoid allocating a full
   // array of line strings for large files.
-  const lineCount = $derived(trimmed ? trimmed.split("\n").length : 0);
-  const codeHtml = $derived(trimmed ? highlight(trimmed) : "");
-  const rawHtml = $derived(isMarkdown && file && mdMode === "raw" ? highlight(file.content) : "");
+  const lineCount = $derived(isText && trimmed ? trimmed.split("\n").length : 0);
+  const codeHtml = $derived(isText && trimmed ? highlight(trimmed) : "");
+  // Raw (source) view for markdown and html shares the highlighter.
+  const rawHtml = $derived(
+    mdMode === "raw" && file && (isMarkdown || isHtml) ? highlight(file.content) : "",
+  );
 
   // Copy-all is meaningful only for textual content.
-  const canCopy = $derived(isText || isMarkdown);
+  const canCopy = $derived(isText || isMarkdown || isHtml);
   function copyAll() {
     if (!file) return;
     navigator.clipboard?.writeText(file.content);
@@ -82,16 +89,22 @@
     setTimeout(() => (copied = false), 1200);
   }
 
-  // PDFs render in an <iframe>. A multi-megabyte base64 data-URL is fragile in
-  // the macOS WKWebView (size limits), so decode to a Blob and hand the iframe a
-  // short object URL instead. Revoke the previous URL whenever it changes so the
-  // decoded bytes aren't retained for the component's lifetime.
+  // PDFs and rendered HTML render in an <iframe> via a Blob object URL (revoked on
+  // change so bytes aren't retained). HTML is agent-written and untrusted, so its
+  // iframe is sandboxed (see template) — no scripts, no same-origin access.
   let pdfUrl = $state("");
   $effect(() => {
     if (!(isPdf && file && !file.truncated)) { pdfUrl = ""; return; }
     const bytes = Uint8Array.from(atob(file.content), (c) => c.charCodeAt(0));
     const url = URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
     pdfUrl = url;
+    return () => URL.revokeObjectURL(url);
+  });
+  let htmlUrl = $state("");
+  $effect(() => {
+    if (!(isHtml && file && mdMode === "rendered")) { htmlUrl = ""; return; }
+    const url = URL.createObjectURL(new Blob([file.content], { type: "text/html" }));
+    htmlUrl = url;
     return () => URL.revokeObjectURL(url);
   });
 
@@ -114,7 +127,7 @@
     {#if file}<span class="meta">{fmtSize(file.size)}{#if file.truncated} · truncated{/if}</span>{/if}
     <span class="spacer"></span>
 
-    {#if isMarkdown}
+    {#if isMarkdown || isHtml}
       <div class="seg">
         <button class:on={mdMode === "rendered"} onclick={() => (mdMode = "rendered")}>Rendered</button>
         <button class:on={mdMode === "raw"} onclick={() => (mdMode = "raw")}>Raw</button>
@@ -151,6 +164,14 @@
       {#if mdMode === "rendered"}
         <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
         <div class="md" onclick={onMarkdownCopyClick}>{@html mdHtml}</div>
+      {:else}
+        <pre class="code raw"><code>{@html rawHtml}</code></pre>
+      {/if}
+    {:else if isHtml}
+      {#if mdMode === "rendered"}
+        <!-- Agent-written HTML is untrusted: sandboxed iframe (no scripts, no
+             same-origin) renders it as a page without script execution. -->
+        {#if htmlUrl}<iframe class="html" title={path} sandbox="" src={htmlUrl}></iframe>{/if}
       {:else}
         <pre class="code raw"><code>{@html rawHtml}</code></pre>
       {/if}
@@ -232,6 +253,8 @@
 
   /* PDF. */
   .pdf { flex: 1 1 0; width: 100%; height: 100%; border: none; background: var(--chat); }
+  /* Rendered HTML: white canvas (pages assume a default page background). */
+  .html { flex: 1 1 0; width: 100%; height: 100%; border: none; background: #fff; }
 
   /* Rendered markdown — mirror Bubble's .md styles. */
   .md { flex: 1 1 0; min-height: 0; overflow: auto; padding: 22px var(--gutter, 28px); max-width: 820px; width: 100%; margin: 0 auto; color: var(--ink); font-size: 14px; line-height: 1.6; }

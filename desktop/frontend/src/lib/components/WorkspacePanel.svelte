@@ -25,6 +25,7 @@
         { name: "main.go", path: "src/main.go", isDir: false, children: null },
       ] },
       { name: "notes.md", path: "notes.md", isDir: false, children: null },
+      { name: "page.html", path: "page.html", isDir: false, children: null },
       { name: "diagram.png", path: "diagram.png", isDir: false, children: null },
       { name: "report.pdf", path: "report.pdf", isDir: false, children: null },
     ],

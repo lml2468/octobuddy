@@ -182,6 +182,7 @@ func TestFileKindClassification(t *testing.T) {
 		want    string
 	}{
 		{"text/markdown", true, "markdown"},
+		{"text/html", true, "html"},
 		{"application/pdf", false, "pdf"},
 		{"image/png", false, "image"},
 		{"image/svg+xml", true, "text"}, // svg is utf8 → text, not image
