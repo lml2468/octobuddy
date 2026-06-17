@@ -21,15 +21,13 @@ import (
 	"github.com/lml2468/xclaw/core/im/octo"
 	"github.com/lml2468/xclaw/core/persona"
 	"github.com/lml2468/xclaw/core/router"
-	"github.com/lml2468/xclaw/core/sandbox"
 	"github.com/lml2468/xclaw/core/store"
 )
 
 // Reaper cadence for a running bot. reapInterval is how often the sweep runs;
 // routerReapIdle is how long a session's lock / rate-limit buckets must sit
-// untouched before they're evicted (well under the store's 7-day TTL, but far
-// longer than the rate-limit window so an evicted bucket is always fully
-// refilled).
+// untouched before they're evicted (far longer than the rate-limit window so an
+// evicted bucket is always fully refilled).
 const (
 	reapInterval   = time.Hour
 	routerReapIdle = time.Hour
@@ -194,15 +192,10 @@ func runBot(ctx context.Context, cfg config.Resolved, reg *botRegistry, srv *con
 		BotBlocklist:      cfg.BotBlocklist,
 	})
 
-	// Periodic reaper: enforce the session/sandbox TTLs and bound the router's
-	// per-session maps over the daemon's lifetime (a one-shot startup sweep would
-	// let everything accumulate). Runs once now, then on a ticker until ctx done.
+	// Periodic reaper: bound the router's per-session lock / rate-limit maps over
+	// the daemon's lifetime (idle entries are evicted; sessions/messages/sandboxes
+	// themselves are NOT expired — they persist). Runs once now, then on a ticker.
 	reap := func() {
-		if n, _ := st.CleanupExpired(store.DefaultTTL); n > 0 {
-			fmt.Fprintf(os.Stderr, "[%s] swept %d expired session(s)\n", cfg.BotID, n)
-		}
-		// Reclaim per-session cwd sandboxes idle past the TTL (memory lives outside, untouched).
-		sandbox.CleanupExpiredCwds(cfg.CwdBase, sandbox.DefaultCwdTTL)
 		rt.Reap(routerReapIdle)
 	}
 	reap()

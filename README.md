@@ -47,7 +47,7 @@ one contract:
   isolated stack (own store, gateway, sandbox, IM connector) under `~/.xclaw/<id>/`.
 - **Per-session sandboxing & resume** — every session gets a deterministic cwd +
   auto-memory dir; the gateway maps `sessionKey → resume_id` so turns continue
-  across restarts (7-day TTL).
+  across restarts (sessions persist).
 - **Prompt-injection defense** — a non-overridable security prefix, a
   current-message anchor, and a sanitized rolling group-context window guard every
   group turn.

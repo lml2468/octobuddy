@@ -89,10 +89,12 @@ Key invariants to preserve:
   paths; isolation across spaces is "one bot per space, separate cwdBase".
 - **Resume continuity without the SDK**: `store` maps `sessionKey → resume_id`;
   the gateway persists it after a turn and passes it as `Request.SessionID` next
-  turn. 7-day TTL on sessions/messages/sandboxes. **Self-healing**: if a turn
-  fails because the resume id is unknown (driver emits `AgentEvent.ResumeInvalid`
-  — e.g. the session predates a config-dir change), the gateway swallows the
-  doomed attempt, clears the mapping, and retries the turn fresh.
+  turn. Sessions/messages/sandboxes are **persistent** (no TTL reclamation; the
+  daemon's periodic reaper only evicts idle in-memory router lock/rate-limit
+  buckets). **Self-healing**: if a turn fails because the resume id is unknown
+  (driver emits `AgentEvent.ResumeInvalid` — e.g. the session predates a
+  config-dir change), the gateway swallows the doomed attempt, clears the
+  mapping, and retries the turn fresh.
 - **Skills & workflows** (`core/sandbox/skill.go`, ported from `skill-linker.ts`):
   each turn symlinks operator assets into the session sandbox's `.claude/` so the
   agent CLI discovers them — `LinkSkillsIntoSandbox` (skill dirs → `.claude/skills/`)

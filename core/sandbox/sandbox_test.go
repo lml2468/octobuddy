@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"testing"
-	"time"
 )
 
 var hexName = regexp.MustCompile(`^[0-9a-f]{16}$`)
@@ -28,7 +27,7 @@ func TestHashDeterministicAndKindScoped(t *testing.T) {
 	}
 }
 
-func TestResolveSessionCwdIdempotentWithMarker(t *testing.T) {
+func TestResolveSessionCwdIdempotent(t *testing.T) {
 	base := t.TempDir()
 	ctx := SessionCtx{Kind: KindDM, SessionKey: "u1"}
 
@@ -43,22 +42,11 @@ func TestResolveSessionCwdIdempotentWithMarker(t *testing.T) {
 	if st, err := os.Stat(dir); err != nil || !st.IsDir() {
 		t.Fatalf("sandbox dir not created: %v", err)
 	}
-	marker := filepath.Join(base, registryDirName, hashKey(ctx.partitionKey()))
-	if _, err := os.Stat(marker); err != nil {
-		t.Fatalf("registry marker missing: %v", err)
-	}
-
-	// Idempotent + mtime refresh: backdate, resolve again, mtime advances.
-	old := time.Now().Add(-48 * time.Hour)
-	if err := os.Chtimes(dir, old, old); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := ResolveSessionCwd(base, ctx); err != nil {
-		t.Fatalf("second resolve: %v", err)
-	}
-	st, _ := os.Stat(dir)
-	if !st.ModTime().After(old.Add(time.Hour)) {
-		t.Fatal("mtime not refreshed on re-resolve")
+	// Idempotent: a second resolve returns the same dir without error (sandboxes
+	// are persistent — no TTL reclamation, no marker).
+	dir2, err := ResolveSessionCwd(base, ctx)
+	if err != nil || dir2 != dir {
+		t.Fatalf("second resolve = (%q, %v), want (%q, nil)", dir2, err, dir)
 	}
 }
 
@@ -81,57 +69,4 @@ func TestResolveMemoryDirIsPure(t *testing.T) {
 	if filepath.Base(cwd) != filepath.Base(mem) {
 		t.Fatalf("cwd and memory must share the hash: %q vs %q", filepath.Base(cwd), filepath.Base(mem))
 	}
-}
-
-func TestCleanupExpiredCwds(t *testing.T) {
-	base := t.TempDir()
-	keep, _ := ResolveSessionCwd(base, SessionCtx{Kind: KindDM, SessionKey: "fresh"})
-	drop, _ := ResolveSessionCwd(base, SessionCtx{Kind: KindDM, SessionKey: "stale"})
-
-	// Backdate "drop" past the TTL (dir + its registry marker mtime not relevant;
-	// only the dir mtime gates deletion).
-	old := time.Now().Add(-10 * 24 * time.Hour)
-	if err := os.Chtimes(drop, old, old); err != nil {
-		t.Fatal(err)
-	}
-
-	CleanupExpiredCwds(base, 7*24*time.Hour)
-
-	if _, err := os.Stat(drop); !os.IsNotExist(err) {
-		t.Fatal("stale sandbox should have been swept")
-	}
-	if _, err := os.Stat(filepath.Join(base, registryDirName, filepath.Base(drop))); !os.IsNotExist(err) {
-		t.Fatal("stale marker should have been removed too")
-	}
-	if _, err := os.Stat(keep); err != nil {
-		t.Fatal("fresh sandbox must survive")
-	}
-}
-
-func TestCleanupRegistryGuard(t *testing.T) {
-	base := t.TempDir()
-	// A 16-hex dir we did NOT create (no marker) — must never be swept, any age.
-	foreign := filepath.Join(base, "0123456789abcdef")
-	if err := os.MkdirAll(foreign, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	old := time.Now().Add(-100 * 24 * time.Hour)
-	_ = os.Chtimes(foreign, old, old)
-	// A non-hex dir — also never touched.
-	other := filepath.Join(base, "not-a-session")
-	_ = os.MkdirAll(other, 0o755)
-	_ = os.Chtimes(other, old, old)
-
-	CleanupExpiredCwds(base, time.Hour)
-
-	if _, err := os.Stat(foreign); err != nil {
-		t.Fatal("foreign hex dir without marker must not be deleted (P0-3)")
-	}
-	if _, err := os.Stat(other); err != nil {
-		t.Fatal("non-hex dir must never be touched")
-	}
-}
-
-func TestCleanupMissingBaseNoPanic(t *testing.T) {
-	CleanupExpiredCwds(filepath.Join(t.TempDir(), "nope"), time.Hour) // must not panic
 }
