@@ -10,11 +10,13 @@
   import TrafficLights from "./lib/components/TrafficLights.svelte";
   import SkillsPanel from "./lib/components/SkillsPanel.svelte";
   import WorkflowsPanel from "./lib/components/WorkflowsPanel.svelte";
+  import WorkspacePanel from "./lib/components/WorkspacePanel.svelte";
 
   let composer: Composer;
   let showEditor = $state(new URLSearchParams(location.search).has("editor"));
   let showSkills = $state(new URLSearchParams(location.search).has("skills"));
   let showWorkflows = $state(new URLSearchParams(location.search).has("workflows"));
+  let showFiles = $state(new URLSearchParams(location.search).has("files"));
 
   // Tray / gear menu open these as modals over the console (guarded: the Wails
   // runtime is absent in a plain browser, e.g. the headless UI-audit harness).
@@ -35,6 +37,9 @@
         <span class="title">{store.currentSession?.title ?? "XClaw"}</span>
         <span class="spacer"></span>
         {#if store.currentBot}
+          <button class="icon" class:on={showFiles} style="--wails-draggable: no-drag;" title="Workspace files" onclick={() => (showFiles = !showFiles)} aria-label="Toggle workspace" aria-pressed={showFiles}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></svg>
+          </button>
           <button class="icon" style="--wails-draggable: no-drag;" title="Clear conversation memory" onclick={() => store.reset()} aria-label="Clear memory">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m-9 0v14a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2V6"/></svg>
           </button>
@@ -46,6 +51,11 @@
       <Transcript onpick={pick} />
       <Composer bind:this={composer} />
     </main>
+    {#if showFiles && store.currentSession}
+      <aside class="files">
+        <WorkspacePanel botId={store.selectedBotId} sessionKey={store.selectedKey} onclose={() => (showFiles = false)} />
+      </aside>
+    {/if}
   </div>
 </div>
 
@@ -76,6 +86,10 @@
   }
   .list { width: var(--list-w); flex: 0 0 var(--list-w); height: 100%; border-right: 1px solid var(--hairline); overflow: hidden; }
   .chat { flex: 1; min-width: 0; height: 100%; display: flex; flex-direction: column; background: radial-gradient(130% 90% at 50% 0%, color-mix(in srgb, var(--surface) 22%, var(--chat)) 0%, var(--chat) 58%); }
+  /* Workspace sidebar: third column inside the rounded content card (no own
+     radius/overflow — it lives inside .content's clip). Left hairline mirrors
+     the list's right hairline; .chat is flex:1 so it shrinks (push/split). */
+  .files { width: 320px; flex: 0 0 320px; height: 100%; border-left: 1px solid var(--hairline); background: var(--surface); overflow: hidden; display: flex; flex-direction: column; }
 
   .chat-bar {
     height: var(--header-h); flex: 0 0 var(--header-h);
@@ -92,4 +106,5 @@
     transition: background 0.14s ease, color 0.14s ease;
   }
   .icon:hover { background: color-mix(in srgb, var(--ink) 7%, transparent); color: var(--accent); }
+  .icon.on { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); }
 </style>

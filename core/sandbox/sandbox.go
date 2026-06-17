@@ -58,12 +58,19 @@ func (c SessionCtx) partitionKey() string {
 	return string(c.Kind) + ":" + c.SessionKey
 }
 
+// SessionDirName returns the deterministic 16-hex directory name for a session's
+// sandbox (the leaf under cwdBase). PURE — does NOT touch the filesystem, so a
+// read-only browser can compute a session's workspace path without
+// materializing an empty sandbox.
+func SessionDirName(ctx SessionCtx) string {
+	return hashKey(ctx.partitionKey())
+}
+
 // ResolveSessionCwd ensures the per-session cwd exists under cwdBase and returns
 // its absolute path. Idempotent — safe to call on every turn. Sandboxes are
 // persistent (no TTL reclamation).
 func ResolveSessionCwd(cwdBase string, ctx SessionCtx) (string, error) {
-	name := hashKey(ctx.partitionKey())
-	dir := filepath.Join(cwdBase, name)
+	dir := filepath.Join(cwdBase, SessionDirName(ctx))
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", fmt.Errorf("sandbox: mkdir %s: %w", dir, err)
 	}
@@ -75,5 +82,5 @@ func ResolveSessionCwd(cwdBase string, ctx SessionCtx) (string, error) {
 // memoryBase lives OUTSIDE cwdBase. Uses the same partition key as the cwd
 // sandbox so memory tracks the session exactly (group=shared, DM=private).
 func ResolveMemoryDir(memoryBase string, ctx SessionCtx) string {
-	return filepath.Join(memoryBase, hashKey(ctx.partitionKey()))
+	return filepath.Join(memoryBase, SessionDirName(ctx))
 }

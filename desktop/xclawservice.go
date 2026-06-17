@@ -17,6 +17,7 @@ import (
 	"github.com/lml2468/xclaw/desktop/internal/secrets"
 	"github.com/lml2468/xclaw/desktop/internal/skills"
 	"github.com/lml2468/xclaw/desktop/internal/workflows"
+	"github.com/lml2468/xclaw/desktop/internal/workspace"
 )
 
 // EventStream is the single Wails event name the backend uses to push every
@@ -290,6 +291,18 @@ func (x *XClawService) WorkflowCreate(name string) error { return workflows.Crea
 
 // WorkflowDelete removes a workflow.
 func (x *XClawService) WorkflowDelete(name string) error { return workflows.Delete(name) }
+
+// WorkspaceTree returns the file tree of a session's sandbox workspace
+// (read-only). Returns an empty tree when no turn has created the sandbox yet.
+func (x *XClawService) WorkspaceTree(botID, sessionKey string) (*workspace.Node, error) {
+	return workspace.Tree(botID, sessionKey)
+}
+
+// WorkspaceFile returns one workspace file's contents for inline preview
+// (utf8 text or base64 for images/binaries), bounded and traversal-safe.
+func (x *XClawService) WorkspaceFile(botID, sessionKey, relPath string) (workspace.FileContent, error) {
+	return workspace.File(botID, sessionKey, relPath)
+}
 
 // RestartCore restarts the daemon and reconnects (applies config changes). It
 // bumps the epoch first so any in-flight crash-reconnect loop bails instead of

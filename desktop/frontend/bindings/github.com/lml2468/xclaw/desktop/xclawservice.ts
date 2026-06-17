@@ -27,6 +27,9 @@ import * as skills$0 from "./internal/skills/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
 import * as workflows$0 from "./internal/workflows/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as workspace$0 from "./internal/workspace/models.js";
 
 /**
  * BotsList requests the bot roster.
@@ -202,6 +205,26 @@ export function WorkflowsList(): $CancellablePromise<workflows$0.Info[]> {
     });
 }
 
+/**
+ * WorkspaceFile returns one workspace file's contents for inline preview
+ * (utf8 text or base64 for images/binaries), bounded and traversal-safe.
+ */
+export function WorkspaceFile(botID: string, sessionKey: string, relPath: string): $CancellablePromise<workspace$0.FileContent> {
+    return $Call.ByID(2447146625, botID, sessionKey, relPath).then(($result: any) => {
+        return $$createType7($result);
+    });
+}
+
+/**
+ * WorkspaceTree returns the file tree of a session's sandbox workspace
+ * (read-only). Returns an empty tree when no turn has created the sandbox yet.
+ */
+export function WorkspaceTree(botID: string, sessionKey: string): $CancellablePromise<workspace$0.Node | null> {
+    return $Call.ByID(710539635, botID, sessionKey).then(($result: any) => {
+        return $$createType9($result);
+    });
+}
+
 // Private type creation functions
 const $$createType0 = configstore$0.BotConfig.createFrom;
 const $$createType1 = $Create.Array($$createType0);
@@ -210,3 +233,6 @@ const $$createType3 = skills$0.SkillInfo.createFrom;
 const $$createType4 = $Create.Array($$createType3);
 const $$createType5 = workflows$0.Info.createFrom;
 const $$createType6 = $Create.Array($$createType5);
+const $$createType7 = workspace$0.FileContent.createFrom;
+const $$createType8 = workspace$0.Node.createFrom;
+const $$createType9 = $Create.Nullable($$createType8);

@@ -27,6 +27,28 @@ func TestHashDeterministicAndKindScoped(t *testing.T) {
 	}
 }
 
+func TestSessionDirNameIsPureAndMatchesResolve(t *testing.T) {
+	base := t.TempDir()
+	ctx := SessionCtx{Kind: KindDM, SessionKey: "u1"}
+
+	name := SessionDirName(ctx)
+	if !hexName.MatchString(name) {
+		t.Fatalf("SessionDirName not 16-hex: %q", name)
+	}
+	// Pure: computing the name must NOT create anything on disk.
+	if _, err := os.Stat(filepath.Join(base, name)); !os.IsNotExist(err) {
+		t.Fatalf("SessionDirName must not touch the filesystem; stat err = %v", err)
+	}
+	// It is exactly the leaf ResolveSessionCwd uses.
+	dir, err := ResolveSessionCwd(base, ctx)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if filepath.Base(dir) != name {
+		t.Fatalf("SessionDirName %q != ResolveSessionCwd leaf %q", name, filepath.Base(dir))
+	}
+}
+
 func TestResolveSessionCwdIdempotent(t *testing.T) {
 	base := t.TempDir()
 	ctx := SessionCtx{Kind: KindDM, SessionKey: "u1"}

@@ -10,18 +10,21 @@ import { Create as $Create } from "@wailsio/runtime";
 import * as json$0 from "../../../../../../encoding/json/models.js";
 
 /**
- * CronCreateBody registers a scheduled task (proto: cron.create). Owner-gated:
- * uid must be the bot owner. The created task BINDS to the channel coords given
- * here (where the fired prompt runs and replies). Either channelId (group) or
- * uid (DM) identifies the bound session.
+ * CronCreateBody registers a scheduled task (proto: cron.create). Owner-gated on
+ * the SERVER-resolved owner uid, not on any field here — the body uid is not an
+ * authorization claim (it is forgeable; the agent reaches cron over an
+ * agent-controlled CLI). The created task BINDS to the channel coords given
+ * here: a channelId (group) targets that channel; omitting it targets the
+ * owner's DM. The fired prompt always runs as the owner.
  */
 export class CronCreateBody {
     "botId"?: string;
 
     /**
-     * UID is the requesting user (owner-gate) AND the DM peer for DM tasks.
+     * UID is accepted for proto compatibility but IGNORED for authorization and
+     * for DM binding (the resolved owner is used for both). Deprecated.
      */
-    "uid": string;
+    "uid"?: string;
 
     /**
      * Schedule is a 5-field cron expr ("0 9 * * 1-5") or one-shot ISO datetime.
@@ -40,7 +43,7 @@ export class CronCreateBody {
 
     /**
      * ChannelID + ChannelType bind a GROUP task. Omit (or type 1) for a DM task,
-     * which binds to UID. ChannelType: 1 = DM, 2 = Group.
+     * which binds to the resolved owner. ChannelType: 1 = DM, 2 = Group.
      */
     "channelId"?: string;
     "channelType"?: number;
@@ -48,9 +51,6 @@ export class CronCreateBody {
 
     /** Creates a new CronCreateBody instance. */
     constructor($$source: Partial<CronCreateBody> = {}) {
-        if (!("uid" in $$source)) {
-            this["uid"] = "";
-        }
         if (!("schedule" in $$source)) {
             this["schedule"] = "";
         }

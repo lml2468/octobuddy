@@ -206,7 +206,15 @@ logic, so swapping the GUI never touches `core/`.
   it folds `xclaw:event` envelopes into bots/sessions/messages and owns the
   rAF typewriter/coalescing. Components in `lib/components/` (Rail · Conversations
   · Transcript · Bubble · Composer · ConfigEditor · SkillsPanel · WorkflowsPanel ·
-  Avatar); tokens in `lib/styles/theme.css`.
+  WorkspacePanel · Avatar); tokens in `lib/styles/theme.css`.
+- **Workspace sidebar** (`WorkspacePanel`): a chat-header toggle button opens an
+  inline (NOT modal — no scrim) right-hand column inside `.content`, showing the
+  selected session's sandbox file tree + read-only file preview. Backend reads the
+  filesystem directly via two Wails methods (`WorkspaceTree`/`WorkspaceFile` →
+  `desktop/internal/workspace`); since the frontend doesn't carry the channel kind,
+  the package resolves the cwd by trying both `dm`/`group` hashes
+  (`sandbox.SessionDirName`) and using whichever dir exists. Read-only + sandboxed:
+  never follows symlinks, skips `.claude/`, caps depth/entries/file-size.
 - **Edit Bots / Manage Skills / Manage Workflows are sibling modals**
   (`ConfigEditor` · `SkillsPanel` · `WorkflowsPanel`), all opened over the console
   from the rail gear menu (and tray) via `xclaw:open-editor` / `-skills` /
