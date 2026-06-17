@@ -362,12 +362,21 @@ class Store {
     if (!botId) return;
     for (const r of rows) {
       if (!r?.key) continue;
+      const existed = this.sessions.some((x) => x.botId === botId && x.key === r.key);
       const s = this.ensureSession(botId, r.key);
-      s.lastActivity = (r.updatedAt ?? 0) * 1000;
+      // Don't clobber a live session's recency: a turn in flight sets lastActivity
+      // to Date.now(); the persisted updatedAt is older, so only seed it for
+      // sessions we just created (or take the max), or an active chat would drop
+      // down the list mid-turn.
+      const persisted = (r.updatedAt ?? 0) * 1000;
+      s.lastActivity = existed ? Math.max(s.lastActivity, persisted) : persisted;
       s.preview = r.preview ?? "";
     }
-    // If a session is selected but its history hasn't loaded, fetch it now that we
-    // know it exists (covers the first roster arriving after connect).
+    // First roster after connect: if nothing is selected yet, open the newest.
+    if (this.selectedKey == null) {
+      const first = this.botSessions[0];
+      if (first) this.selectedKey = first.key;
+    }
     if (this.selectedKey) this.loadHistory(this.selectedKey);
   }
 }

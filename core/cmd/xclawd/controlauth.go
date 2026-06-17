@@ -25,12 +25,14 @@ import (
 // with NO scoping check, so a prompt-injected same-uid agent could read any
 // session's stored plaintext history or enumerate the owner's scheduled prompts
 // across any bot — the at-rest twin of the cross-session event stream that is
-// gated in Server.Broadcast. sessionKeys are low-entropy (DM = uid, group =
-// channelId) and an injected agent already sees peer uids / channel ids, so
-// targeting is trivial; leaving these open defeats the cross-session boundary
-// this gate establishes. The GUI is the only sanctioned caller and it
-// authenticates before issuing them (the auth send precedes all other sends on
-// its FIFO connection), so gating does not break it.
+// gated in Server.Broadcast. sessions.list is privileged for the same reason: it
+// enumerates EVERY persisted session for a bot with a message preview, an even
+// broader cross-session disclosure than a single session.history read.
+// sessionKeys are low-entropy (DM = uid, group = channelId) and an injected agent
+// already sees peer uids / channel ids, so targeting is trivial; leaving these
+// open defeats the cross-session boundary this gate establishes. The GUI is the
+// only sanctioned caller and it authenticates before issuing them (the auth send
+// precedes all other sends on its FIFO connection), so gating does not break it.
 //
 // Open commands (health, bots.list) stay open: low-value daemon/roster metadata
 // the agent's own config already implies, with no cross-session disclosure.
@@ -39,6 +41,7 @@ var privilegedControlCommands = []string{
 	"session.reset",
 	"secret.inject",
 	"session.history",
+	"sessions.list",
 	"cron.create",
 	"cron.list",
 	"cron.delete",
