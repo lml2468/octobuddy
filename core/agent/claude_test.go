@@ -18,7 +18,7 @@ const (
 	lineThink   = `{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","text":"let me think"}]},"session_id":"ea4de374"}`
 	lineToolUse = `{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash","input":{"command":"ls -la","description":"list"}}]},"session_id":"ea4de374"}`
 	lineToolRes = `{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"file1\nfile2"}]},"session_id":"ea4de374"}`
-	lineResult  = `{"type":"result","subtype":"success","is_error":false,"result":"done","total_cost_usd":0.01,"usage":{"input_tokens":1200,"output_tokens":45},"session_id":"ea4de374"}`
+	lineResult  = `{"type":"result","subtype":"success","is_error":false,"result":"done","total_cost_usd":0.01,"usage":{"input_tokens":1200,"output_tokens":45,"cache_read_input_tokens":300},"session_id":"ea4de374"}`
 	lineErrRes  = `{"type":"result","subtype":"error_max_turns","is_error":true,"result":"hit max turns","session_id":"ea4de374"}`
 	lineGarbage = `node: warning something on stderr`
 )
@@ -74,167 +74,6 @@ func TestParseToolUse(t *testing.T) {
 	}
 }
 
-func TestParseTextDeltaIsPartial(t *testing.T) {
-	evs := parseClaudeLine(`{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hel"}}}`)
-	if len(evs) != 1 || evs[0].Kind != KindTextDelta || evs[0].Text != "hel" || !evs[0].Partial {
-		t.Fatalf("want partial text delta, got %+v", evs)
-	}
-}
-
-func TestParseThinkingDeltaIsPartial(t *testing.T) {
-	evs := parseClaudeLine(`{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"hmm"}}}`)
-	if len(evs) != 1 || evs[0].Kind != KindThinking || evs[0].Text != "hmm" || !evs[0].Partial {
-		t.Fatalf("want partial thinking delta, got %+v", evs)
-	}
-}
-
-// assembleDeltas runs raw stream-json lines through parseClaudeLine + blockDedup
-// (the live driver's reader pipeline) and returns the text the gateway would
-// assemble — i.e. the emitted KindTextDelta texts, in order.
-func assembleDeltas(lines []string) []string {
-	var dd blockDedup
-	var texts []string
-	for _, l := range lines {
-		for _, ev := range dd.filter(parseClaudeLine(l)) {
-			if ev.Kind == KindTextDelta {
-				texts = append(texts, ev.Text)
-			}
-		}
-	}
-	return texts
-}
-
-// TestDedupMultiBlockTurnNoDuplication replays a real text → tool_use → text
-// turn (captured from `claude … --include-partial-messages`): each text block
-// streams a partial delta and then a complete block. The complete blocks must be
-// dropped so the assembled reply is the streamed text exactly once.
-func TestDedupMultiBlockTurnNoDuplication(t *testing.T) {
-	lines := []string{
-		`{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"text"}}}`,
-		`{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"before"}}}`,
-		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"before"}]}}`,
-		`{"type":"stream_event","event":{"type":"content_block_stop","index":0}}`,
-		`{"type":"stream_event","event":{"type":"content_block_start","index":1,"content_block":{"type":"tool_use"}}}`,
-		`{"type":"stream_event","event":{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta"}}}`,
-		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash","input":{"command":"echo hi"}}]}}`,
-		`{"type":"stream_event","event":{"type":"content_block_stop","index":1}}`,
-		`{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"hi"}]}}`,
-		`{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"text"}}}`,
-		`{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"after"}}}`,
-		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"after"}]}}`,
-		`{"type":"result","subtype":"success","is_error":false,"result":"after"}`,
-	}
-	got := assembleDeltas(lines)
-	want := []string{"before", "after"}
-	if len(got) != len(want) {
-		t.Fatalf("assembled deltas = %v, want %v", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("at %d: got %q want %q (full=%v)", i, got[i], want[i], got)
-		}
-	}
-}
-
-// TestDedupCombinedAssistantLineNoDuplication is the precise regression for the
-// one-shot bug: a single assistant line carrying [text, tool_use, text] after
-// both text blocks already streamed partials. The old one-shot bool reset itself
-// after dropping the first complete block, so the second leaked through as a
-// duplicate. Per-block state (no self-reset) drops both.
-func TestDedupCombinedAssistantLineNoDuplication(t *testing.T) {
-	lines := []string{
-		`{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"text"}}}`,
-		`{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"AAA"}}}`,
-		`{"type":"stream_event","event":{"type":"content_block_start","index":1,"content_block":{"type":"tool_use"}}}`,
-		`{"type":"stream_event","event":{"type":"content_block_start","index":2,"content_block":{"type":"text"}}}`,
-		`{"type":"stream_event","event":{"type":"content_block_delta","index":2,"delta":{"type":"text_delta","text":"BBB"}}}`,
-		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"AAA"},{"type":"tool_use","name":"Bash","input":{}},{"type":"text","text":"BBB"}]}}`,
-	}
-	got := assembleDeltas(lines)
-	want := []string{"AAA", "BBB"}
-	if len(got) != len(want) {
-		t.Fatalf("assembled deltas = %v, want %v (a duplicate means the complete block leaked through)", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("at %d: got %q want %q (full=%v)", i, got[i], want[i], got)
-		}
-	}
-}
-
-// TestDedupCompleteBlockFallbackWhenNoPartials covers partials-disabled: with no
-// streamed deltas, the complete blocks ARE the reply and must pass through.
-func TestDedupCompleteBlockFallbackWhenNoPartials(t *testing.T) {
-	lines := []string{
-		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"one"}]}}`,
-		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash","input":{}}]}}`,
-		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"two"}]}}`,
-	}
-	got := assembleDeltas(lines)
-	want := []string{"one", "two"}
-	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
-		t.Fatalf("fallback assembled = %v, want %v", got, want)
-	}
-}
-
-// assembleThinking is assembleDeltas's sibling for the thinking channel: it
-// returns the KindThinking texts the reader pipeline emits, in order.
-func assembleThinking(lines []string) []string {
-	var dd blockDedup
-	var texts []string
-	for _, l := range lines {
-		for _, ev := range dd.filter(parseClaudeLine(l)) {
-			if ev.Kind == KindThinking {
-				texts = append(texts, ev.Text)
-			}
-		}
-	}
-	return texts
-}
-
-// TestDedupMultiBlockThinkingNoDuplication is the thinking-channel mirror of the
-// text dedup tests: a turn with two thinking blocks, each streaming a partial
-// thinking_delta and then a complete thinking block. The per-block dedup must
-// drop both complete blocks so reasoning text isn't doubled in the transcript.
-func TestDedupMultiBlockThinkingNoDuplication(t *testing.T) {
-	lines := []string{
-		`{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"thinking"}}}`,
-		`{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"first"}}}`,
-		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","text":"first"}]}}`,
-		`{"type":"stream_event","event":{"type":"content_block_stop","index":0}}`,
-		`{"type":"stream_event","event":{"type":"content_block_start","index":1,"content_block":{"type":"thinking"}}}`,
-		`{"type":"stream_event","event":{"type":"content_block_delta","index":1,"delta":{"type":"thinking_delta","thinking":"second"}}}`,
-		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","text":"second"}]}}`,
-	}
-	got := assembleThinking(lines)
-	want := []string{"first", "second"}
-	if len(got) != len(want) {
-		t.Fatalf("assembled thinking = %v, want %v (a duplicate means the complete thinking block leaked through)", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("at %d: got %q want %q (full=%v)", i, got[i], want[i], got)
-		}
-	}
-}
-
-func TestParseNonDeltaStreamEventIgnored(t *testing.T) {
-	// content_block_stop / message_start carry no text and reset nothing.
-	if evs := parseClaudeLine(`{"type":"stream_event","event":{"type":"content_block_stop","index":0}}`); len(evs) != 0 {
-		t.Fatalf("non-delta stream_event should be ignored, got %+v", evs)
-	}
-	if evs := parseClaudeLine(`{"type":"stream_event","event":{"type":"message_start"}}`); len(evs) != 0 {
-		t.Fatalf("message_start should be ignored, got %+v", evs)
-	}
-}
-
-func TestParseContentBlockStartIsResetSentinel(t *testing.T) {
-	evs := parseClaudeLine(`{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"text"}}}`)
-	if len(evs) != 1 || evs[0].Kind != kindBlockStart {
-		t.Fatalf("content_block_start should yield the dedup-reset sentinel, got %+v", evs)
-	}
-}
-
 func TestParseToolResult(t *testing.T) {
 	evs := parseClaudeLine(lineToolRes)
 	if len(evs) != 1 || evs[0].Kind != KindToolResult {
@@ -247,8 +86,61 @@ func TestParseResultSuccessCarriesUsage(t *testing.T) {
 	if len(evs) != 1 || evs[0].Kind != KindTurnDone {
 		t.Fatalf("want turn_done, got %+v", evs)
 	}
-	if evs[0].Usage == nil || evs[0].Usage.OutputTokens != 45 {
-		t.Fatalf("usage not extracted: %+v", evs[0].Usage)
+	u := evs[0].Usage
+	if u == nil || u.OutputTokens != 45 {
+		t.Fatalf("usage not extracted: %+v", u)
+	}
+	if u.InputTokens != 1200 {
+		t.Fatalf("input tokens not extracted: %+v", u)
+	}
+	if u.CachedInputTokens != 300 {
+		t.Fatalf("cached input tokens not extracted: %+v", u)
+	}
+	if u.CostUSD != 0.01 {
+		t.Fatalf("cost not extracted: %+v", u)
+	}
+}
+
+// TestParseResultTransientErrorIsTagged covers an upstream rate-limit surfacing
+// as a result is_error: it must yield a terminal [error, turn_done] where the
+// error is flagged Transient so the gateway can reply "服务繁忙".
+func TestParseResultTransientErrorIsTagged(t *testing.T) {
+	line := `{"type":"result","subtype":"error","is_error":true,"result":"Claude usage limit reached, resets at 3pm (PST)","session_id":"x"}`
+	evs := parseClaudeLine(line)
+	if len(evs) != 2 || evs[0].Kind != KindError || evs[1].Kind != KindTurnDone {
+		t.Fatalf("want [error, turn_done], got %+v", evs)
+	}
+	if evs[0].Recoverable {
+		t.Fatalf("a result error is terminal, not recoverable")
+	}
+	if !evs[0].Transient {
+		t.Fatalf("usage-limit result error must be tagged transient: %+v", evs[0])
+	}
+	if evs[0].RetryHint != "3pm (PST)" {
+		t.Fatalf("retry hint = %q, want %q", evs[0].RetryHint, "3pm (PST)")
+	}
+}
+
+// TestParseApiRetryRateLimitIsTransient covers an api_retry on HTTP 429 being
+// tagged transient (so an eventual terminal failure reads as capacity).
+func TestParseApiRetryRateLimitIsTransient(t *testing.T) {
+	line := `{"type":"system","subtype":"api_retry","attempt":2,"error_status":429,"error":"rate_limit_error","session_id":"x"}`
+	evs := parseClaudeLine(line)
+	if len(evs) != 1 || evs[0].Kind != KindError || !evs[0].Recoverable {
+		t.Fatalf("want recoverable error, got %+v", evs)
+	}
+	if !evs[0].Transient {
+		t.Fatalf("429 api_retry must be tagged transient: %+v", evs[0])
+	}
+}
+
+// TestParseStreamEventDegradesToSystem documents the post-partials behaviour:
+// stream-json with no --include-partial-messages never emits stream_event lines,
+// but if one arrives it degrades to a harmless system event (not dropped).
+func TestParseStreamEventDegradesToSystem(t *testing.T) {
+	evs := parseClaudeLine(`{"type":"stream_event","event":{"type":"content_block_delta"}}`)
+	if len(evs) != 1 || evs[0].Kind != KindSystem {
+		t.Fatalf("stream_event should degrade to system, got %+v", evs)
 	}
 }
 

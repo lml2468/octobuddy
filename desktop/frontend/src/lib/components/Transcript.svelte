@@ -11,7 +11,9 @@
 
   const session = $derived(store.currentSession);
   const messages = $derived(session?.messages ?? []);
-  const tick = $derived(messages.length + (messages.at(-1)?.text.length ?? 0));
+  // Bump on new messages, growing text, AND turn state so the view tracks the
+  // working spinner appearing/disappearing too.
+  const tick = $derived(messages.length + (messages.at(-1)?.text.length ?? 0) + (session?.awaiting ? 1 : 0));
 
   function onScroll() {
     if (!scroller) return;
@@ -41,13 +43,17 @@
         <Bubble message={m} />
       {/each}
       {#if session?.awaiting}
+        <!-- The answer streams into the status box (process), not here. The chat
+             shows a working indicator until the final answer lands at turn end. -->
         <div class="row">
           <Avatar octopus size={36} />
           <div class="typing"><span></span><span></span><span></span></div>
         </div>
       {/if}
       {#if session && session.outputTokens > 0}
-        <div class="tokens">{session.inputTokens} in · {session.outputTokens} out</div>
+        <div class="tokens">
+          {session.inputTokens} in · {session.outputTokens} out{#if session.cachedInputTokens > 0} · {session.cachedInputTokens} cached{/if}{#if session.costUsd > 0} · ${session.costUsd.toFixed(4)}{/if}
+        </div>
       {/if}
     {/if}
   </div>

@@ -286,6 +286,10 @@ const (
 	// max_turns) or the agent process fails. Like the timeout path, the partial
 	// reply is not persisted and the resume id is not advanced.
 	errorReply = "⚠️ 出错了，请稍后重试。"
+	// busyReply is sent when a turn fails on an upstream rate-limit / overload /
+	// usage-cap condition (KindError with Transient set). Distinct from the
+	// generic errorReply so the user knows it's a capacity issue, not a bug.
+	busyReply = "⏳ 服务繁忙，请稍后重试。"
 )
 
 // Observe caches a non-triggering group message into the group context so it
@@ -454,6 +458,8 @@ func (g *Gateway) runTurn(ctx context.Context, sessionKey string, msg router.Inb
 	var reply strings.Builder
 	var newResume string
 	var termErr string
+	var termTransient bool
+	var termHint string
 	resume := resumeID
 	for attempt := 0; ; attempt++ {
 		events, err := g.driver.Query(turnCtx, agent.Request{
@@ -471,6 +477,8 @@ func (g *Gateway) runTurn(ctx context.Context, sessionKey string, msg router.Inb
 		reply.Reset()
 		newResume = ""
 		termErr = ""
+		termTransient = false
+		termHint = ""
 		resumeBad := false
 		for ev := range events {
 			// A stale resume id (session not found, e.g. after the agent's config
@@ -500,6 +508,8 @@ func (g *Gateway) runTurn(ctx context.Context, sessionKey string, msg router.Inb
 				// errors are swallowed above via resumeBad before reaching here.)
 				if !ev.Recoverable {
 					termErr = ev.Err
+					termTransient = ev.Transient
+					termHint = ev.RetryHint
 				}
 			}
 		}
@@ -526,8 +536,19 @@ func (g *Gateway) runTurn(ctx context.Context, sessionKey string, msg router.Inb
 	// Terminal agent error: treat like the timeout path. Do NOT persist the
 	// partial reply as the assistant turn and do NOT advance the resume id —
 	// otherwise an errored turn silently commits a truncated answer and skips
-	// forward, corrupting continuity. Signal the user and release the lock.
+	// forward, corrupting continuity. Signal the user and release the lock. An
+	// upstream rate-limit / overload gets a distinct "服务繁忙" reply (with the
+	// reset window when the agent reported one) so it reads as capacity, not a bug.
 	if termErr != "" {
+		if termTransient {
+			fmt.Fprintf(os.Stderr, "[gateway] transient upstream error (session=%s): %s\n", sessionKey, termErr)
+			reply := busyReply
+			if termHint != "" {
+				reply = busyReply + "（" + termHint + " 后恢复）"
+			}
+			g.sink.OnReply(sessionKey, reply)
+			return nil
+		}
 		fmt.Fprintf(os.Stderr, "[gateway] terminal agent error (session=%s): %s\n", sessionKey, termErr)
 		g.sink.OnReply(sessionKey, errorReply)
 		return nil

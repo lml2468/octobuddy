@@ -112,13 +112,24 @@ Key invariants to preserve:
   built-in skills still load, and the per-bot catalog comes from the sandbox.
   Opt out with `agent.inheritUserConfig: true` (trusted single-operator only).
 - **ClaudeDriver headless invariants** (`core/agent/claude.go`): always spawns
-  `claude -p --output-format stream-json --verbose --include-partial-messages --permission-mode bypassPermissions`.
-  Bypass is mandatory — there is no terminal to answer approval prompts, so any
-  other mode hangs the turn; it also grants every tool, so no `--allowedTools` is
-  passed (claude 2.1+ rejects `*` in allow rules). `--include-partial-messages`
-  gives token-level streaming: the driver parses `stream_event` deltas and
-  suppresses the duplicate complete block. Tool/permission policy is
-  intentionally NOT in `agent.Request`; it is a fixed claude-only invariant.
+  `claude -p - --output-format stream-json --verbose --permission-mode bypassPermissions`,
+  feeding the prompt on **stdin** (`-p -`, not an argv element, so a large prompt
+  can't hit ARG_MAX — and never inherits the daemon's fd 0, which carries the
+  control-bus cap token; MLT-40). Bypass is mandatory — there is no terminal to
+  answer approval prompts, so any other mode hangs the turn; it also grants every
+  tool, so no `--allowedTools` is passed (claude 2.1+ rejects `*` in allow rules).
+  Output is **plain stream-json** (one event per complete content block) — the
+  driver does NOT request `--include-partial-messages`, so there is no token-level
+  delta path or dedup. `--append-system-prompt` is re-sent every turn including
+  resumes: it does NOT persist across `--resume`, so skipping it would drop the
+  non-overridable `SecurityPrefix` + SOUL (its tokens are a prompt-cache hit
+  anyway). The `result` line populates `TokenUsage` with cached-input tokens
+  (`cache_read_input_tokens`) and `CostUSD` (`total_cost_usd`). Upstream
+  rate-limit / overload / usage-cap conditions (HTTP 429/503/529, "usage limit
+  reached", …) are classified as `AgentEvent.Transient` (`core/agent/classify.go`)
+  with a reset-window `RetryHint`; the gateway replies `busyReply` ("服务繁忙") for
+  a transient terminal error instead of the generic errorReply. Tool/permission
+  policy is intentionally NOT in `agent.Request`; it is a fixed claude-only invariant.
 - **Feature modules layered on the pipeline** (each cites its TS source in its
   package doc): `core/cron/` — per-bot scheduled tasks, owner-gated
   `cron.create/list/delete` over the control bus; `core/groupmd/` — operator

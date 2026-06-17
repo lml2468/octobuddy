@@ -200,10 +200,12 @@ type SessionToolBody struct {
 }
 
 type SessionUsageBody struct {
-	BotID        string `json:"botId,omitempty"`
-	SessionKey   string `json:"sessionKey"`
-	InputTokens  int    `json:"inputTokens"`
-	OutputTokens int    `json:"outputTokens"`
+	BotID             string  `json:"botId,omitempty"`
+	SessionKey        string  `json:"sessionKey"`
+	InputTokens       int     `json:"inputTokens"`
+	OutputTokens      int     `json:"outputTokens"`
+	CachedInputTokens int     `json:"cachedInputTokens,omitempty"`
+	CostUSD           float64 `json:"costUsd,omitempty"`
 }
 
 type SessionReplyBody struct {

@@ -40,13 +40,9 @@ type AgentEvent struct {
 	Kind EventKind `json:"kind"`
 
 	// Text carries assistant/thinking text for KindTextDelta / KindThinking.
+	// The driver emits one event per complete content block (plain stream-json,
+	// no token-level partials), so consumers append text without de-duplication.
 	Text string `json:"text,omitempty"`
-
-	// Partial is true for incrementally-streamed text/thinking deltas (from
-	// --include-partial-messages). The driver streams these live and suppresses
-	// the duplicate complete block, so consumers append deltas without
-	// double-counting.
-	Partial bool `json:"-"`
 
 	// SessionID is set on KindSessionStarted (used to resume next turn).
 	SessionID string `json:"session_id,omitempty"`
@@ -66,6 +62,14 @@ type AgentEvent struct {
 	// changed). The gateway clears the resume mapping and retries fresh.
 	// Internal control signal — not serialized.
 	ResumeInvalid bool `json:"-"`
+	// Transient marks a KindError caused by an upstream rate-limit / overload /
+	// usage-cap condition (HTTP 429/503/529, "overloaded", "usage limit
+	// reached", …) rather than a bug in the turn. The gateway surfaces a
+	// distinct "服务繁忙" reply for these so the user knows to retry later.
+	// RetryHint carries the human-readable reset window the agent reported
+	// ("resets at 3pm"), when one was present. Internal — not serialized.
+	Transient bool   `json:"-"`
+	RetryHint string `json:"-"`
 
 	// Raw holds the original line for debugging / forward-compat.
 	Raw string `json:"-"`
@@ -75,6 +79,12 @@ type AgentEvent struct {
 type TokenUsage struct {
 	InputTokens  int `json:"input_tokens"`
 	OutputTokens int `json:"output_tokens"`
+	// CachedInputTokens is the portion of InputTokens served from the prompt
+	// cache (claude's cache_read_input_tokens). Zero when unreported.
+	CachedInputTokens int `json:"cached_input_tokens,omitempty"`
+	// CostUSD is the agent-reported turn cost (claude's total_cost_usd). Zero
+	// when unreported (e.g. subscription auth that omits cost).
+	CostUSD float64 `json:"cost_usd,omitempty"`
 }
 
 // Request is the agent-agnostic ask. Drivers map these onto their CLI flags.

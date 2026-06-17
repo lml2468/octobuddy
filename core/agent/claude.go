@@ -15,11 +15,15 @@ import (
 
 // ClaudeDriver drives Claude Code headlessly via:
 //
-//	claude -p <prompt> --output-format stream-json --verbose [--resume <id>] ...
+//	claude -p - --output-format stream-json --verbose [--resume <id>] ...
 //
-// and normalizes its line-delimited JSON ("stream-json") into AgentEvents.
-// This is the concrete proof that the CLI can replace claude-agent-sdk: the
-// SDK itself merely spawns this same CLI.
+// with the prompt fed on stdin, and normalizes its line-delimited JSON
+// ("stream-json") into AgentEvents. This is the concrete proof that the CLI can
+// replace claude-agent-sdk: the SDK itself merely spawns this same CLI.
+//
+// Output is plain stream-json (one event per complete content block); the driver
+// does NOT request --include-partial-messages, so there are no token-level
+// deltas to de-duplicate.
 type ClaudeDriver struct {
 	// Bin is the claude executable (default "claude" on PATH).
 	Bin string
@@ -48,7 +52,9 @@ func (d *ClaudeDriver) Capabilities() Capabilities {
 }
 
 func (d *ClaudeDriver) buildArgs(req Request) []string {
-	args := []string{"-p", req.Prompt, "--output-format", "stream-json", "--verbose", "--include-partial-messages"}
+	// The prompt is fed on stdin (`-p -`) rather than as an argv element, so a
+	// large prompt (group backfill + inlined file content) can't hit ARG_MAX.
+	args := []string{"-p", "-", "--output-format", "stream-json", "--verbose"}
 	// Headless gateway invariant (claude-only, fixed): bypass interactive
 	// approval — there is no terminal to answer prompts, so any other permission
 	// mode would hang the turn forever. bypassPermissions grants every tool, so
@@ -61,6 +67,10 @@ func (d *ClaudeDriver) buildArgs(req Request) []string {
 	if req.Model != "" {
 		args = append(args, "--model", req.Model)
 	}
+	// --append-system-prompt is re-sent every turn (including resumes): it does
+	// NOT persist across --resume, so dropping it on a resumed turn would silently
+	// lose the non-overridable SecurityPrefix + SOUL identity. Its tokens are a
+	// prompt-cache hit, so re-sending is cheap.
 	if req.SystemAppend != "" {
 		args = append(args, "--append-system-prompt", req.SystemAppend)
 	}
@@ -81,6 +91,11 @@ func (d *ClaudeDriver) Query(ctx context.Context, req Request) (<-chan AgentEven
 	if req.Cwd != "" {
 		cmd.Dir = req.Cwd
 	}
+	// Feed the prompt on stdin (matches `-p -`). This is a private in-memory
+	// reader holding ONLY the prompt — never os.Stdin, which on the daemon
+	// carries the control-bus capability token (MLT-40). os/exec copies it to the
+	// child in a goroutine and closes the pipe at EOF.
+	cmd.Stdin = strings.NewReader(req.Prompt)
 	extraEnv := d.Env
 	if d.EnvFn != nil {
 		extraEnv = d.EnvFn()
@@ -154,6 +169,12 @@ func (d *ClaudeDriver) Query(ctx context.Context, req Request) (<-chan AgentEven
 				emit(AgentEvent{Kind: KindError, Err: line, Recoverable: true, ResumeInvalid: true, Raw: line})
 				continue
 			}
+			// Upstream rate-limit / overload printed on stderr: tag it transient so
+			// the gateway can reply "服务繁忙" instead of a generic error.
+			if isTransientUpstream(line) {
+				emit(AgentEvent{Kind: KindError, Err: line, Recoverable: true, Transient: true, RetryHint: retryHint(line), Raw: line})
+				continue
+			}
 			emit(AgentEvent{Kind: KindError, Err: line, Recoverable: true, Raw: line})
 		}
 	}()
@@ -163,13 +184,12 @@ func (d *ClaudeDriver) Query(ctx context.Context, req Request) (<-chan AgentEven
 		sc := bufio.NewScanner(stdout)
 		// stream-json lines can be large (tool inputs with file contents).
 		sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
-		var dedup blockDedup
 		for sc.Scan() {
 			line := strings.TrimSpace(sc.Text())
 			if line == "" {
 				continue
 			}
-			for _, ev := range dedup.filter(parseClaudeLine(line)) {
+			for _, ev := range parseClaudeLine(line) {
 				if ev.Kind == KindTurnDone {
 					sawTurnDone.Store(true)
 				}
@@ -198,58 +218,6 @@ func (d *ClaudeDriver) Query(ctx context.Context, req Request) (<-chan AgentEven
 	return out, nil
 }
 
-// kindBlockStart is an internal sentinel parseClaudeLine emits for a
-// content_block_start stream event. It never reaches the gateway — blockDedup
-// consumes it to reset per-block dedup state and drops it from the stream.
-const kindBlockStart EventKind = "_block_start"
-
-// blockDedup suppresses the complete text/thinking block that duplicates the
-// partial deltas already streamed under --include-partial-messages. claude emits
-// live text/thinking deltas AND, when that content block finalizes, a complete
-// block carrying the same text. We stream the deltas and drop the duplicate
-// complete block — but fall back to the complete block when no deltas streamed
-// (e.g. partials disabled).
-//
-// State is per content block, reset on content_block_start: claude emits one
-// assistant line per block, right after that block's deltas, so a multi-block
-// turn (text → tool_use → text) must dedup each block independently. A one-shot
-// flag would let the second text block leak through as a duplicate.
-type blockDedup struct {
-	streamedText     bool
-	streamedThinking bool
-}
-
-// filter returns the events to emit for one parsed line, updating dedup state.
-func (d *blockDedup) filter(evs []AgentEvent) []AgentEvent {
-	out := make([]AgentEvent, 0, len(evs))
-	for _, ev := range evs {
-		switch {
-		case ev.Kind == kindBlockStart:
-			// New content block: forget whether the previous one streamed.
-			d.streamedText, d.streamedThinking = false, false
-		case ev.Kind == KindTextDelta && ev.Partial:
-			d.streamedText = true
-			out = append(out, ev)
-		case ev.Kind == KindTextDelta:
-			if d.streamedText { // already streamed live; drop the complete dup
-				continue
-			}
-			out = append(out, ev)
-		case ev.Kind == KindThinking && ev.Partial:
-			d.streamedThinking = true
-			out = append(out, ev)
-		case ev.Kind == KindThinking:
-			if d.streamedThinking {
-				continue
-			}
-			out = append(out, ev)
-		default:
-			out = append(out, ev)
-		}
-	}
-	return out
-}
-
 // --- stream-json line shapes (only the fields we consume) ---
 
 type claudeLine struct {
@@ -271,20 +239,6 @@ type claudeLine struct {
 	// system/api_retry
 	Error       string `json:"error"`
 	ErrorStatus int    `json:"error_status"`
-
-	// stream_event (--include-partial-messages): incremental token deltas.
-	Event *claudeStreamEvent `json:"event"`
-}
-
-// claudeStreamEvent is the Anthropic streaming event wrapped in a stream-json
-// line of type "stream_event". Only content_block_delta carries token text.
-type claudeStreamEvent struct {
-	Type  string `json:"type"` // content_block_delta | content_block_start | message_* | ...
-	Delta *struct {
-		Type     string `json:"type"`     // text_delta | thinking_delta | input_json_delta
-		Text     string `json:"text"`     // text_delta
-		Thinking string `json:"thinking"` // thinking_delta
-	} `json:"delta"`
 }
 
 type claudeMessage struct {
@@ -301,8 +255,9 @@ type claudeBlock struct {
 }
 
 type claudeRawUsage struct {
-	InputTokens  int `json:"input_tokens"`
-	OutputTokens int `json:"output_tokens"`
+	InputTokens          int `json:"input_tokens"`
+	OutputTokens         int `json:"output_tokens"`
+	CacheReadInputTokens int `json:"cache_read_input_tokens"`
 }
 
 // parseClaudeLine normalizes one stream-json line into zero or more AgentEvents.
@@ -316,46 +271,21 @@ func parseClaudeLine(line string) []AgentEvent {
 	}
 
 	switch cl.Type {
-	case "stream_event":
-		// Token-level streaming (--include-partial-messages): content_block_delta
-		// carries incremental text/thinking. content_block_start resets per-block
-		// dedup state (emitted as an internal sentinel, consumed by blockDedup).
-		// Other stream events (message_start, content_block_stop, input_json_delta,
-		// …) are ignored — the complete assistant message still arrives for tool_use
-		// and as the dedup fallback.
-		if cl.Event == nil {
-			return nil
-		}
-		if cl.Event.Type == "content_block_start" {
-			return []AgentEvent{{Kind: kindBlockStart, Raw: line}}
-		}
-		if cl.Event.Type != "content_block_delta" || cl.Event.Delta == nil {
-			return nil
-		}
-		switch cl.Event.Delta.Type {
-		case "text_delta":
-			if cl.Event.Delta.Text != "" {
-				return []AgentEvent{{Kind: KindTextDelta, Text: cl.Event.Delta.Text, Partial: true, Raw: line}}
-			}
-		case "thinking_delta":
-			if cl.Event.Delta.Thinking != "" {
-				return []AgentEvent{{Kind: KindThinking, Text: cl.Event.Delta.Thinking, Partial: true, Raw: line}}
-			}
-		}
-		return nil
-
 	case "system":
 		switch cl.Subtype {
 		case "init":
 			// First line of a run: carries the session id to persist for resume.
 			return []AgentEvent{{Kind: KindSessionStarted, SessionID: cl.SessionID, Raw: line}}
 		case "api_retry":
-			return []AgentEvent{{
-				Kind:        KindError,
-				Err:         fmt.Sprintf("api_retry status=%d: %s", cl.ErrorStatus, cl.Error),
-				Recoverable: true,
-				Raw:         line,
-			}}
+			// claude is retrying upstream; classify rate-limit/overload as transient
+			// so a terminal failure after exhausted retries reads as "服务繁忙".
+			msg := fmt.Sprintf("api_retry status=%d: %s", cl.ErrorStatus, cl.Error)
+			ev := AgentEvent{Kind: KindError, Err: msg, Recoverable: true, Raw: line}
+			if cl.ErrorStatus == 429 || cl.ErrorStatus == 503 || cl.ErrorStatus == 529 || isTransientUpstream(cl.Error) {
+				ev.Transient = true
+				ev.RetryHint = retryHint(cl.Error)
+			}
+			return []AgentEvent{ev}
 		default:
 			// hook_started / hook_response / other informational system lines.
 			return []AgentEvent{{Kind: KindSystem, Text: cl.Subtype, Raw: line}}
@@ -403,15 +333,27 @@ func parseClaudeLine(line string) []AgentEvent {
 	case "result":
 		ev := AgentEvent{Kind: KindTurnDone, Raw: line}
 		if cl.Usage != nil {
-			ev.Usage = &TokenUsage{InputTokens: cl.Usage.InputTokens, OutputTokens: cl.Usage.OutputTokens}
+			ev.Usage = &TokenUsage{
+				InputTokens:       cl.Usage.InputTokens,
+				OutputTokens:      cl.Usage.OutputTokens,
+				CachedInputTokens: cl.Usage.CacheReadInputTokens,
+				CostUSD:           cl.TotalCost,
+			}
+		} else if cl.TotalCost != 0 {
+			ev.Usage = &TokenUsage{CostUSD: cl.TotalCost}
 		}
 		if cl.IsError {
-			return []AgentEvent{{
+			errEv := AgentEvent{
 				Kind:        KindError,
 				Err:         fmt.Sprintf("result error (subtype=%s): %s", cl.Subtype, cl.Result),
 				Recoverable: false,
 				Raw:         line,
-			}, ev}
+			}
+			if isTransientUpstream(cl.Result) || isTransientUpstream(cl.Subtype) {
+				errEv.Transient = true
+				errEv.RetryHint = retryHint(cl.Result)
+			}
+			return []AgentEvent{errEv, ev}
 		}
 		return []AgentEvent{ev}
 

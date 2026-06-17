@@ -114,42 +114,9 @@ exit 3
 	}
 }
 
-func TestPartialDeltasSuppressCompleteDuplicate(t *testing.T) {
-	// With --include-partial-messages, claude streams live text deltas, then a
-	// final complete assistant block carrying the same full text. The driver must
-	// stream the deltas and DROP the duplicate complete block (no double text).
-	bin := writeFakeBin(t, `
-echo '{"type":"system","subtype":"init","session_id":"s1"}'
-echo '{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hel"}}}'
-echo '{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"lo"}}}'
-echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hello"}]}}'
-echo '{"type":"result","subtype":"success","is_error":false,"result":"hello","usage":{"input_tokens":1,"output_tokens":1}}'
-`)
-	ch, err := NewClaudeDriver(bin).Query(context.Background(), Request{Prompt: "x"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var text string
-	var completeTextEvents int
-	for ev := range ch {
-		if ev.Kind == KindTextDelta {
-			text += ev.Text
-			if !ev.Partial {
-				completeTextEvents++
-			}
-		}
-	}
-	if text != "hello" {
-		t.Fatalf("streamed text = %q, want %q (no duplication)", text, "hello")
-	}
-	if completeTextEvents != 0 {
-		t.Fatalf("complete assistant text must be suppressed when deltas streamed; got %d", completeTextEvents)
-	}
-}
-
-func TestCompleteTextEmittedWhenNoDeltas(t *testing.T) {
-	// Fallback: with no partial deltas (e.g. partials disabled), the complete
-	// assistant text must still be emitted.
+func TestCompleteTextEmitted(t *testing.T) {
+	// Plain stream-json (no --include-partial-messages): the complete assistant
+	// text block is the reply and must be emitted.
 	bin := writeFakeBin(t, `
 echo '{"type":"system","subtype":"init","session_id":"s1"}'
 echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"plain"}]}}'
@@ -169,25 +136,46 @@ echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text
 	}
 }
 
-// TestAgentStdinIsNotTokenPipe locks the control-bus capability-token boundary
-// at the agent hop (MLT-40, hardening follow-up from the MLT-38 review of PR
-// #63). The daemon receives its cap token on fd 0 — a private pipe — but the
-// agent CLI it spawns must NEVER inherit that fd. The guarantee rests entirely
-// on claude.go leaving cmd.Stdin nil, so os/exec wires the child's fd 0 to
-// /dev/null. The concrete regression this catches is a change that set
-// cmd.Stdin = os.Stdin: the sentinel below flows through os.Stdin, so the leak
-// becomes observable. (A change wiring cmd.Stdin to a *different* token-holding
-// reader — a dup'd fd, a bytes.Reader — wouldn't be caught here; it'd leave this
-// process's fd 0 empty and the test would still pass. We assert the realistic
-// copy-paste regression, not every conceivable inheriting source.)
+// TestPromptFedOnStdin asserts the driver passes the prompt via stdin (`-p -`),
+// not as an argv element. The fake agent echoes its fd-0 contents on stderr,
+// which the driver surfaces as a recoverable error event.
+func TestPromptFedOnStdin(t *testing.T) {
+	bin := writeFakeBin(t, `
+data=$(cat)
+echo '{"type":"system","subtype":"init","session_id":"s1"}'
+printf 'STDIN:[%s]\n' "$data" 1>&2
+`)
+	ch, err := NewClaudeDriver(bin).Query(context.Background(), Request{Prompt: "hello-prompt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var report string
+	for ev := range ch {
+		if strings.HasPrefix(ev.Err, "STDIN:") {
+			report = ev.Err
+		}
+	}
+	if report != "STDIN:[hello-prompt]" {
+		t.Fatalf("prompt not fed on stdin; agent saw %q", report)
+	}
+}
+
+// TestAgentStdinIsPromptNotTokenPipe locks the control-bus capability-token
+// boundary at the agent hop (MLT-40, hardening follow-up from the MLT-38 review
+// of PR #63). The daemon receives its cap token on fd 0 — a private pipe — but
+// the agent CLI it spawns must NEVER inherit that fd. The driver now feeds the
+// PROMPT on the child's fd 0 (`-p -`) via a private strings.Reader, so the
+// guarantee is: the child sees exactly the prompt and nothing of this process's
+// os.Stdin. The concrete regression this catches is a change that set
+// cmd.Stdin = os.Stdin (or left it inheriting): the sentinel token below flows
+// through os.Stdin, so a leak becomes observable.
 //
 // We stand in for the daemon by feeding a sentinel token onto this process's
-// os.Stdin, then spawn the driver and assert the fake agent reads EOF (empty)
-// from its fd 0 — i.e. it saw /dev/null, not the token pipe. (exec uses
-// /dev/null for a nil Stdin regardless of os.Stdin, so the substitution only
-// makes the buggy os.Stdin path detectable rather than a silent pass.)
-func TestAgentStdinIsNotTokenPipe(t *testing.T) {
+// os.Stdin, then spawn the driver with a distinct prompt and assert the fake
+// agent reads back the PROMPT (not the token) from its fd 0.
+func TestAgentStdinIsPromptNotTokenPipe(t *testing.T) {
 	const token = "XCLAW-CAP-TOKEN-sentinel-do-not-leak-7f3a9c"
+	const prompt = "the-real-prompt-payload"
 
 	r, w, err := os.Pipe()
 	if err != nil {
@@ -195,7 +183,7 @@ func TestAgentStdinIsNotTokenPipe(t *testing.T) {
 	}
 	// Pre-fill the pipe with the token (well under the 64 KiB pipe buffer, so
 	// the writes never block without a reader). A buggy child that inherited
-	// fd 0 would then read the token rather than hang — a clear failure.
+	// fd 0 would then read the token rather than the prompt — a clear failure.
 	for i := 0; i < 256; i++ {
 		if _, err := w.WriteString(token + "\n"); err != nil {
 			t.Fatalf("seed token pipe: %v", err)
@@ -210,16 +198,16 @@ func TestAgentStdinIsNotTokenPipe(t *testing.T) {
 		r.Close()
 	})
 
-	// Fake agent CLI: read up to 256 bytes from its fd 0, report what it saw on
-	// stderr (which the driver surfaces as a recoverable-error event), then emit
-	// a valid stream-json init line so the turn terminates cleanly.
+	// Fake agent CLI: read its fd 0, report what it saw on stderr (which the
+	// driver surfaces as a recoverable-error event), then emit a valid
+	// stream-json init line so the turn terminates cleanly.
 	bin := writeFakeBin(t, `
-data=$(head -c 256)
+data=$(cat)
 echo '{"type":"system","subtype":"init","session_id":"s1"}'
 printf 'STDIN0:[%s]\n' "$data" 1>&2
 `)
 
-	ch, err := NewClaudeDriver(bin).Query(context.Background(), Request{Prompt: "x"})
+	ch, err := NewClaudeDriver(bin).Query(context.Background(), Request{Prompt: prompt})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -237,7 +225,7 @@ printf 'STDIN0:[%s]\n' "$data" 1>&2
 	if strings.Contains(report, token) {
 		t.Fatalf("agent fd 0 leaked the daemon capability token: %q", report)
 	}
-	if report != "STDIN0:[]" {
-		t.Fatalf("agent fd 0 must be /dev/null (empty); got %q", report)
+	if report != "STDIN0:["+prompt+"]" {
+		t.Fatalf("agent fd 0 must carry exactly the prompt; got %q", report)
 	}
 }

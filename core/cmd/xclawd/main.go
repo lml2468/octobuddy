@@ -214,7 +214,14 @@ func (s *stdoutSink) OnEvent(sessionKey string, ev agent.AgentEvent) {
 		fmt.Printf("  [result]  (tool returned)\n")
 	case agent.KindTurnDone:
 		if ev.Usage != nil {
-			fmt.Printf("  [done]    in=%d out=%d tokens\n", ev.Usage.InputTokens, ev.Usage.OutputTokens)
+			line := fmt.Sprintf("  [done]    in=%d out=%d tokens", ev.Usage.InputTokens, ev.Usage.OutputTokens)
+			if ev.Usage.CachedInputTokens > 0 {
+				line += fmt.Sprintf(" (cached=%d)", ev.Usage.CachedInputTokens)
+			}
+			if ev.Usage.CostUSD > 0 {
+				line += fmt.Sprintf(" cost=$%.4f", ev.Usage.CostUSD)
+			}
+			fmt.Println(line)
 		} else {
 			fmt.Printf("  [done]\n")
 		}

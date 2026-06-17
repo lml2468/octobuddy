@@ -38,6 +38,7 @@ func (s *EventSink) OnEvent(sessionKey string, ev agent.AgentEvent) {
 			s.srv.Broadcast("session.usage", SessionUsageBody{
 				BotID: s.botID, SessionKey: sessionKey,
 				InputTokens: ev.Usage.InputTokens, OutputTokens: ev.Usage.OutputTokens,
+				CachedInputTokens: ev.Usage.CachedInputTokens, CostUSD: ev.Usage.CostUSD,
 			})
 		}
 		s.srv.Broadcast("session.activity", SessionActivityBody{BotID: s.botID, SessionKey: sessionKey, Kind: "turnDone"})

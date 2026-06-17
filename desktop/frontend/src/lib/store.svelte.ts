@@ -18,14 +18,44 @@ export interface Message {
   streaming: boolean;
 }
 
+// ProcStep is one process item shown in the status box: a tool call, a thinking
+// marker, or a completed narration block (intermediate prose the agent wrote
+// before a tool call). None of these are the final answer — they are process.
+export interface ProcStep {
+  id: string;
+  kind: "tool" | "thinking" | "text";
+  text: string;
+}
+
+// ProcState is the live, in-flight process for a session's current turn.
+//
+// The backend gives us no "this is the final answer" flag — every prose chunk is
+// an identical session.text delta, and the only structural signal that a text
+// block ended is a session.tool event (or turn end). So we treat each text block
+// as PROCESS until proven final: deltas accumulate in `live`; when a tool arrives
+// it flushes `live` into a completed narration step. Whatever remains in `live`
+// at session.reply is the block after the last tool = the final answer, which
+// drops into the chat. Nothing in this state is the final answer — it is cleared
+// on session.reply, so the status box only ever shows process.
+export interface ProcState {
+  steps: ProcStep[];   // completed process items this turn (tools, thinking, flushed narration)
+  live: string;        // current text block, still accumulating (NOT rendered; buffer only)
+  active: boolean;     // a turn is in flight
+}
+
+const emptyProc = (): ProcState => ({ steps: [], live: "", active: false });
+
 export interface Session {
   botId: string;
   key: string;        // sessionKey (the console session is keyed on CONSOLE_UID)
   title: string;
   messages: Message[];
   awaiting: boolean;  // a turn is in flight (show typing indicator)
+  proc: ProcState;    // live process info for the status box (not in the transcript)
   inputTokens: number;
   outputTokens: number;
+  cachedInputTokens: number;
+  costUsd: number;
   lastActivity: number;
 }
 
@@ -91,13 +121,23 @@ class Store {
     }
     const s: Session = {
       botId: "main", key: "console", title: "Console", awaiting: true,
-      inputTokens: 1450, outputTokens: 92, lastActivity: Date.now(), messages: [
+      proc: {
+        active: true,
+        // Process for the in-flight turn: a narration block, a thinking marker,
+        // and tool calls. The answer-in-progress sits in `live` (buffered, not
+        // rendered) — the chat shows the working spinner until session.reply.
+        steps: [
+          { id: newId(), kind: "text", text: "I'll check the directory layout first, then read the proto contract." },
+          { id: newId(), kind: "tool", text: "Bash(ls -la)" },
+          { id: newId(), kind: "thinking", text: "thinking…" },
+          { id: newId(), kind: "tool", text: "Read(proto/README.md)" },
+        ],
+        live: "Sure — the proto contract is an NDJSON envelope over a Unix socket: events out, commands in. Let me pull the",
+      },
+      inputTokens: 1450, outputTokens: 92, cachedInputTokens: 1200, costUsd: 0.0123, lastActivity: Date.now(), messages: [
         { id: newId(), role: "user", text: "List the files in the project root and summarize what this repo does.", ts: 0, streaming: false },
-        { id: newId(), role: "assistant", text: "I'll check the directory layout first.", ts: 0, streaming: false },
-        { id: newId(), role: "tool", text: "Bash(ls -la)", ts: 0, streaming: false },
         { id: newId(), role: "assistant", text: "It's a **Go + Svelte** monorepo:\n\n- `core/` — the `xclawd` gateway daemon\n- `desktop/` — this Wails app\n- `proto/` — the control-bus contract\n\n```go\nfunc main() {\n    app.Run()\n}\n```\n\nWant me to open the README?", ts: 0, streaming: false },
         { id: newId(), role: "user", text: "yes, and the proto contract too", ts: 0, streaming: false },
-        { id: newId(), role: "assistant", text: "Sure — the proto contract is an NDJSON envelope over a Unix socket: events out, commands in. Let me pull the", ts: 0, streaming: true },
       ],
     };
     this.sessions = [s];
@@ -149,7 +189,7 @@ class Store {
     if (!botId) return;
     XClawService.Reset(botId, CONSOLE_UID);
     const s = this.currentSession;
-    if (s) s.messages = [];
+    if (s) { s.messages = []; s.proc = emptyProc(); }
   }
 
   restartCore() {
@@ -185,42 +225,56 @@ class Store {
       case "session.activity": {
         const s = this.route(env);
         if (!s) break;
-        if (env.body.kind === "turnStart") s.awaiting = true;
-        if (env.body.kind === "turnDone") { s.awaiting = false; this.finalizeStreaming(s); }
+        if (env.body.kind === "turnStart") { s.awaiting = true; s.proc = emptyProc(); s.proc.active = true; }
+        else if (env.body.kind === "thinking") {
+          // Thinking is process → status box. Flush any pending narration first so
+          // ordering reads correctly, then add the marker (no consecutive spam).
+          this.flushLive(s);
+          s.proc.active = true;
+          const last = s.proc.steps[s.proc.steps.length - 1];
+          if (!last || last.kind !== "thinking") s.proc.steps.push({ id: newId(), kind: "thinking", text: "thinking…" });
+        }
+        // turnDone just clears the typing affordance; session.reply (next) is the
+        // single point that promotes the final block into the chat.
+        else if (env.body.kind === "turnDone") s.awaiting = false;
         break;
       }
       case "session.text": {
         const s = this.route(env);
         if (!s) break;
-        s.awaiting = false;
-        let m = s.messages.find((x) => x.streaming && x.role === "assistant");
-        if (!m) { m = { id: newId(), role: "assistant", text: "", ts: Date.now() / 1000, streaming: true }; s.messages.push(m); }
-        m.text += env.body.delta ?? "";
+        // Accumulate the current text block in the process buffer. We can't yet
+        // tell if it's narration or the final answer — a following tool would make
+        // it narration; reaching session.reply makes it the answer. It is NOT
+        // rendered (the chat shows the working spinner), so nothing leaks.
+        s.proc.active = true;
+        s.proc.live += env.body.delta ?? "";
         s.lastActivity = Date.now();
         break;
       }
       case "session.tool": {
         const s = this.route(env);
         if (!s) break;
-        this.finalizeStreaming(s);
-        s.messages.push({ id: newId(), role: "tool", text: `${env.body.name}(${env.body.params ?? ""})`, ts: Date.now() / 1000, streaming: false });
+        // A tool call proves the current text block was intermediate narration:
+        // flush it to a completed step, then record the tool. proc.live restarts.
+        this.flushLive(s);
+        s.proc.active = true;
+        s.proc.steps.push({ id: newId(), kind: "tool", text: `${env.body.name}(${env.body.params ?? ""})` });
+        s.lastActivity = Date.now();
         break;
       }
       case "session.reply": {
         const s = this.route(env);
         if (!s) break;
+        // The single finalize point. The final answer is the block still in
+        // proc.live (text after the last tool); fall back to the server's full
+        // assembled text only when nothing streamed. It enters the chat now —
+        // the first and only time response text touches the transcript — then the
+        // status box clears so no process survives the turn.
+        const final = (s.proc.live.trim() ? s.proc.live : (env.body.text ?? "")).trim();
+        if (final) s.messages.push({ id: newId(), role: "assistant", text: final, ts: Date.now() / 1000, streaming: false });
         s.awaiting = false;
-        // The reply is the final assembled text. If the trailing message is the
-        // assistant turn we just streamed (whether or not turnDone already cleared
-        // its streaming flag), update it in place; only append when there's no
-        // assistant bubble to finalize (e.g. a turn that streamed no text deltas).
-        const last = s.messages[s.messages.length - 1];
-        if (last && last.role === "assistant") {
-          last.text = env.body.text ?? last.text;
-          last.streaming = false;
-        } else if (env.body.text) {
-          s.messages.push({ id: newId(), role: "assistant", text: env.body.text, ts: Date.now() / 1000, streaming: false });
-        }
+        s.proc = emptyProc();   // clear the status box
+        s.lastActivity = Date.now();
         break;
       }
       case "session.usage": {
@@ -228,6 +282,8 @@ class Store {
         if (!s) break;
         s.inputTokens = env.body.inputTokens ?? 0;
         s.outputTokens = env.body.outputTokens ?? 0;
+        s.cachedInputTokens = env.body.cachedInputTokens ?? 0;
+        s.costUsd = env.body.costUsd ?? 0;
         break;
       }
       case "error": {
@@ -237,8 +293,13 @@ class Store {
     }
   }
 
-  private finalizeStreaming(s: Session) {
-    for (const m of s.messages) if (m.streaming) m.streaming = false;
+  // flushLive moves the accumulating text block (proc.live) into a completed
+  // narration step in the status box. Called when a tool/thinking event proves
+  // the block was intermediate process, not the final answer. No-op if empty.
+  private flushLive(s: Session) {
+    const t = s.proc.live.trim();
+    if (t) s.proc.steps.push({ id: newId(), kind: "text", text: t });
+    s.proc.live = "";
   }
 
   // route resolves the session an event belongs to. The console session is
@@ -258,7 +319,7 @@ class Store {
   private ensureSession(botId: string, key: string): Session {
     let s = this.sessions.find((x) => x.botId === botId && x.key === key);
     if (!s) {
-      s = { botId, key, title: prettyTitle(key), messages: [], awaiting: false, inputTokens: 0, outputTokens: 0, lastActivity: Date.now() };
+      s = { botId, key, title: prettyTitle(key), messages: [], awaiting: false, proc: emptyProc(), inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, costUsd: 0, lastActivity: Date.now() };
       this.sessions.push(s);
     }
     // Surface an arriving conversation when nothing is selected yet (first

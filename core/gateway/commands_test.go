@@ -86,7 +86,7 @@ func (d *erroringDriver) Query(ctx context.Context, _ agent.Request) (<-chan age
 	go func() {
 		defer close(ch)
 		ch <- agent.AgentEvent{Kind: agent.KindSessionStarted, SessionID: d.sessionID}
-		ch <- agent.AgentEvent{Kind: agent.KindTextDelta, Text: d.partialText, Partial: true}
+		ch <- agent.AgentEvent{Kind: agent.KindTextDelta, Text: d.partialText}
 		ch <- agent.AgentEvent{Kind: agent.KindError, Err: "result error (subtype=error_max_turns): hit max turns"}
 		ch <- agent.AgentEvent{Kind: agent.KindTurnDone}
 	}()
@@ -438,6 +438,54 @@ func TestTerminalErrorDoesNotPersistPartialOrAdvanceResume(t *testing.T) {
 	got := sink.all()
 	if len(got) != 1 || got[0].text != errorReply || got[0].key != "u1" {
 		t.Fatalf("want one errorReply to u1, got %+v", got)
+	}
+}
+
+// transientErroringDriver streams a terminal error tagged Transient (an upstream
+// rate-limit / overload), with a reset-window hint. The gateway must reply with
+// the distinct busyReply (including the hint) rather than the generic errorReply.
+type transientErroringDriver struct{ hint string }
+
+func (d *transientErroringDriver) Name() string { return "transient" }
+func (d *transientErroringDriver) Capabilities() agent.Capabilities {
+	return agent.Capabilities{Resume: true}
+}
+func (d *transientErroringDriver) Query(ctx context.Context, _ agent.Request) (<-chan agent.AgentEvent, error) {
+	ch := make(chan agent.AgentEvent, 8)
+	go func() {
+		defer close(ch)
+		ch <- agent.AgentEvent{Kind: agent.KindSessionStarted, SessionID: "thr-busy"}
+		ch <- agent.AgentEvent{Kind: agent.KindError, Err: "usage limit reached", Transient: true, RetryHint: d.hint}
+		ch <- agent.AgentEvent{Kind: agent.KindTurnDone}
+	}()
+	return ch, nil
+}
+
+// TestTransientErrorYieldsBusyReply asserts an upstream rate-limit terminal error
+// produces the distinct busyReply (with the reset hint) and, like any terminal
+// error, neither persists a reply nor advances the resume id.
+func TestTransientErrorYieldsBusyReply(t *testing.T) {
+	st := newTestStore(t)
+	drv := &transientErroringDriver{hint: "3pm (PST)"}
+	sink := &recordSink{}
+	gw := New(drv, st, router.New(router.Config{MaxPerMinute: 100}), sink)
+
+	msg := router.InboundMessage{ChannelType: router.ChannelDM, FromUID: "u1", FromName: "alice", Text: "hi"}
+	if _, err := gw.Handle(context.Background(), msg); err != nil {
+		t.Fatalf("transient-error path must not error the handler: %v", err)
+	}
+	if got, _ := st.Resume("u1"); got != "" {
+		t.Fatalf("resume must not advance on a transient error, got %q", got)
+	}
+	got := sink.all()
+	if len(got) != 1 || got[0].key != "u1" {
+		t.Fatalf("want one reply to u1, got %+v", got)
+	}
+	if !strings.HasPrefix(got[0].text, busyReply) {
+		t.Fatalf("want busyReply prefix, got %q", got[0].text)
+	}
+	if !strings.Contains(got[0].text, "3pm (PST)") {
+		t.Fatalf("busy reply should carry the reset hint, got %q", got[0].text)
 	}
 }
 
