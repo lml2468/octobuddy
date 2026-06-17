@@ -137,6 +137,13 @@ func (d *ClaudeDriver) Query(ctx context.Context, req Request) (<-chan AgentEven
 			if line == "" {
 				continue
 			}
+			// A stale --resume id makes claude abort at session init with
+			// "No conversation found with session ID: …". Tag it so the gateway
+			// can clear the resume mapping and retry the turn fresh.
+			if req.SessionID != "" && strings.Contains(line, "No conversation found with session ID") {
+				emit(AgentEvent{Kind: KindError, Err: line, Recoverable: true, ResumeInvalid: true, Raw: line})
+				continue
+			}
 			emit(AgentEvent{Kind: KindError, Err: line, Recoverable: true, Raw: line})
 		}
 	}()

@@ -3,7 +3,6 @@ package store
 import (
 	"path/filepath"
 	"testing"
-	"time"
 )
 
 func openTemp(t *testing.T) *Store {
@@ -82,44 +81,5 @@ func TestMessagesChronologicalAndLimited(t *testing.T) {
 	}
 	if msgs[0].Role != RoleAssistant || msgs[1].Role != RoleUser {
 		t.Fatalf("roles wrong: %+v", msgs)
-	}
-}
-
-func TestCleanupExpired(t *testing.T) {
-	s := openTemp(t)
-	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	s.SetClock(func() time.Time { return base })
-
-	// old session + message
-	if _, err := s.GetOrCreate("old", "c", 1); err != nil {
-		t.Fatal(err)
-	}
-	_ = s.AppendUser("old", "stale", "")
-	_ = s.SaveResume("old", "claude", "sess-old")
-
-	// advance 8 days, create a fresh session
-	s.SetClock(func() time.Time { return base.Add(8 * 24 * time.Hour) })
-	if _, err := s.GetOrCreate("new", "c", 1); err != nil {
-		t.Fatal(err)
-	}
-
-	n, err := s.CleanupExpired(DefaultTTL)
-	if err != nil {
-		t.Fatalf("cleanup: %v", err)
-	}
-	if n != 1 {
-		t.Fatalf("want 1 expired session, got %d", n)
-	}
-	// old resume gone (cascade + explicit), messages cascade-deleted
-	if got, _ := s.Resume("old"); got != "" {
-		t.Fatalf("expired resume should be gone, got %q", got)
-	}
-	msgs, _ := s.RecentMessages("old", 10)
-	if len(msgs) != 0 {
-		t.Fatalf("expired messages should cascade-delete, got %d", len(msgs))
-	}
-	// new survives
-	if _, err := s.GetOrCreate("new", "c", 1); err != nil {
-		t.Fatalf("new session should survive: %v", err)
 	}
 }

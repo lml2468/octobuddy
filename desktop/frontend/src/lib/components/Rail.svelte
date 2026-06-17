@@ -3,7 +3,7 @@
   import Avatar from "./Avatar.svelte";
   import octoUrl from "../assets/octo.png";
 
-  let { onedit, onskills }: { onedit: () => void; onskills: () => void } = $props();
+  let { onedit, onskills, onworkflows }: { onedit: () => void; onskills: () => void; onworkflows: () => void } = $props();
 
   let menuOpen = $state(false);
   function choose(fn: () => void) { menuOpen = false; fn(); }
@@ -41,6 +41,7 @@
       <div class="menu" role="menu">
         <button role="menuitem" onclick={() => choose(onedit)}>Edit Bots</button>
         <button role="menuitem" onclick={() => choose(onskills)}>Manage Skills</button>
+        <button role="menuitem" onclick={() => choose(onworkflows)}>Manage Workflows</button>
       </div>
     {/if}
   </div>

@@ -206,6 +206,70 @@ func TestNoSandboxLeavesCwdEmpty(t *testing.T) {
 	}
 }
 
+// resumeFlakeDriver fails any turn that carries a (stale) resume id with a
+// ResumeInvalid error, and succeeds fresh — to exercise the gateway's
+// clear-resume-and-retry self-heal.
+type resumeFlakeDriver struct {
+	mu   sync.Mutex
+	seen []string // SessionID per Query call
+}
+
+func (d *resumeFlakeDriver) Name() string { return "fake" }
+func (d *resumeFlakeDriver) Capabilities() agent.Capabilities {
+	return agent.Capabilities{Resume: true}
+}
+func (d *resumeFlakeDriver) Query(ctx context.Context, req agent.Request) (<-chan agent.AgentEvent, error) {
+	d.mu.Lock()
+	d.seen = append(d.seen, req.SessionID)
+	d.mu.Unlock()
+	ch := make(chan agent.AgentEvent, 8)
+	go func() {
+		defer close(ch)
+		if req.SessionID != "" {
+			ch <- agent.AgentEvent{Kind: agent.KindError, Err: "No conversation found with session ID: stale", Recoverable: true, ResumeInvalid: true}
+			ch <- agent.AgentEvent{Kind: agent.KindError, Err: "claude exited: exit status 1"}
+			return
+		}
+		ch <- agent.AgentEvent{Kind: agent.KindSessionStarted, SessionID: "fresh-id"}
+		ch <- agent.AgentEvent{Kind: agent.KindTextDelta, Text: "recovered"}
+		ch <- agent.AgentEvent{Kind: agent.KindTurnDone}
+	}()
+	return ch, nil
+}
+
+func TestStaleResumeSelfHeals(t *testing.T) {
+	st := newTestStore(t)
+	if err := st.SaveResume("u1", "fake", "stale-id"); err != nil {
+		t.Fatal(err)
+	}
+	drv := &resumeFlakeDriver{}
+	sink := newCaptureSink()
+	gw := New(drv, st, router.New(router.Config{MaxPerMinute: 100}), sink)
+
+	msg := router.InboundMessage{ChannelType: router.ChannelDM, FromUID: "u1", FromName: "alice", Text: "hi"}
+	if _, err := gw.Handle(context.Background(), msg); err != nil {
+		t.Fatalf("handle: %v", err)
+	}
+
+	// Two Query calls: first with the stale id, then a fresh retry.
+	if len(drv.seen) != 2 || drv.seen[0] != "stale-id" || drv.seen[1] != "" {
+		t.Fatalf("expected [stale-id, \"\"] queries, got %v", drv.seen)
+	}
+	// The retry's reply reached the sink; the doomed attempt's errors did not.
+	if sink.replies["u1"] != "recovered" {
+		t.Errorf("reply = %q, want recovered", sink.replies["u1"])
+	}
+	for _, ev := range sink.events {
+		if ev.Kind == agent.KindError {
+			t.Errorf("doomed attempt's error leaked to sink: %q", ev.Err)
+		}
+	}
+	// The fresh resume id replaced the stale one.
+	if got, _ := st.Resume("u1"); got != "fresh-id" {
+		t.Errorf("resume = %q, want fresh-id", got)
+	}
+}
+
 // A hostile group message must not be able to forge prompt structure below the
 // real current-message anchor (MLT-34 L1): the body is run through
 // safety.SafeBody, so a second anchor or a fake role label survives only in

@@ -16,6 +16,7 @@ import (
 	"github.com/lml2468/xclaw/desktop/internal/core"
 	"github.com/lml2468/xclaw/desktop/internal/secrets"
 	"github.com/lml2468/xclaw/desktop/internal/skills"
+	"github.com/lml2468/xclaw/desktop/internal/workflows"
 )
 
 // EventStream is the single Wails event name the backend uses to push every
@@ -270,6 +271,25 @@ func (x *XClawService) SkillCreate(name string) error { return skills.Create(nam
 
 // SkillDelete removes a skill bundle entirely.
 func (x *XClawService) SkillDelete(name string) error { return skills.Delete(name) }
+
+// --- workflows library (~/.xclaw/workflows) for the Workflows window ---
+
+// WorkflowsList returns every workflow in the global catalog.
+func (x *XClawService) WorkflowsList() ([]workflows.Info, error) { return workflows.List() }
+
+// WorkflowRead returns a workflow's script source.
+func (x *XClawService) WorkflowRead(name string) (string, error) { return workflows.Read(name) }
+
+// WorkflowWrite creates/overwrites a workflow's script.
+func (x *XClawService) WorkflowWrite(name, content string) error {
+	return workflows.Write(name, content)
+}
+
+// WorkflowCreate scaffolds a new workflow.
+func (x *XClawService) WorkflowCreate(name string) error { return workflows.Create(name) }
+
+// WorkflowDelete removes a workflow.
+func (x *XClawService) WorkflowDelete(name string) error { return workflows.Delete(name) }
 
 // RestartCore restarts the daemon and reconnects (applies config changes). It
 // bumps the epoch first so any in-flight crash-reconnect loop bails instead of

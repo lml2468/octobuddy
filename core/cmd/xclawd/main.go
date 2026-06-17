@@ -64,9 +64,6 @@ func main() {
 		fatal("store open: %v", err)
 	}
 	defer st.Close()
-	if n, err := st.CleanupExpired(store.DefaultTTL); err == nil && n > 0 {
-		fmt.Fprintf(os.Stderr, "swept %d expired session(s)\n", n)
-	}
 
 	drv := agent.NewClaudeDriver(*claudeBin)
 

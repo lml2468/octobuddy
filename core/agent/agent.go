@@ -61,6 +61,11 @@ type AgentEvent struct {
 	// Err on KindError.
 	Err         string `json:"err,omitempty"`
 	Recoverable bool   `json:"recoverable,omitempty"`
+	// ResumeInvalid marks a KindError caused by an unknown/stale resume id (the
+	// agent's stored session no longer exists, e.g. after the config dir
+	// changed). The gateway clears the resume mapping and retries fresh.
+	// Internal control signal — not serialized.
+	ResumeInvalid bool `json:"-"`
 
 	// Raw holds the original line for debugging / forward-compat.
 	Raw string `json:"-"`

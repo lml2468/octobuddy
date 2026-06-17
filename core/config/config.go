@@ -34,6 +34,12 @@ type AgentConfig struct {
 	// (consecutive dups collapsed, capped per turn). Off by default — opt-in.
 	// Ported from cc-channel-octo `sdk.toolProgress` (src/config.ts, src/index.ts).
 	ToolProgress bool `json:"toolProgress,omitempty"`
+	// InheritUserConfig, when true, lets the agent inherit the operator's
+	// ~/.claude (user-scope skills + installed plugins). OFF by default: each bot
+	// gets an isolated CLAUDE_CONFIG_DIR so operator plugins/user-skills don't
+	// leak into every bot. Set true only for a trusted single-operator deployment
+	// that deliberately shares its ~/.claude with the bots.
+	InheritUserConfig bool `json:"inheritUserConfig,omitempty"`
 }
 
 // RateLimitConfig mirrors the on-disk rateLimit block.
@@ -95,6 +101,11 @@ type BotEntry struct {
 	// default (override ?? base). nil/empty = no global skills for this bot;
 	// per-bot dir skills (~/.xclaw/<id>/skills) are always linked regardless.
 	Skills []string `json:"skills,omitempty"`
+
+	// Workflows is the bot's allow-list of GLOBAL workflow names (files
+	// ~/.xclaw/workflows/<name>.js), linked into the sandbox's .claude/workflows.
+	// Same precedence/semantics as Skills.
+	Workflows []string `json:"workflows,omitempty"`
 }
 
 // File is the on-disk shape of the single ~/.xclaw/config.json. The top-level
@@ -116,6 +127,8 @@ type File struct {
 	// Skills is the top-level default allow-list of global skill names (a bots[]
 	// entry may override it).
 	Skills []string `json:"skills,omitempty"`
+	// Workflows is the top-level default allow-list of global workflow names.
+	Workflows []string `json:"workflows,omitempty"`
 
 	Bots []BotEntry `json:"bots,omitempty"`
 }
@@ -139,6 +152,9 @@ type Resolved struct {
 	// Skills is the effective allow-list of global skill names linked into this
 	// bot's session sandboxes (per-bot ?? top-level). nil/empty = none.
 	Skills []string
+	// Workflows is the effective allow-list of global workflow names linked into
+	// this bot's session sandboxes (per-bot ?? top-level). nil/empty = none.
+	Workflows []string
 
 	// SystemPrompt is the operator-trusted persona/behavior prompt, assembled
 	// from SOUL.md + AGENTS.md in the bot dir (not from config).
@@ -157,11 +173,19 @@ type Resolved struct {
 	OnBehalfOf OnBehalfOf
 
 	// Derived per-bot directories (never from file).
-	DataDir         string // ~/.xclaw/<id>/data       — SQLite + state
-	CwdBase         string // ~/.xclaw/<id>/workspace   — per-session cwd sandboxes
-	MemoryBase      string // ~/.xclaw/<id>/memory      — per-session auto-memory (outside CwdBase)
-	SkillsDir       string // ~/.xclaw/<id>/skills      — per-bot skills (shadow global)
-	GlobalSkillsDir string // ~/.xclaw/skills           — install-wide skills
+	DataDir            string // ~/.xclaw/<id>/data       — SQLite + state
+	CwdBase            string // ~/.xclaw/<id>/workspace   — per-session cwd sandboxes
+	MemoryBase         string // ~/.xclaw/<id>/memory      — per-session auto-memory (outside CwdBase)
+	SkillsDir          string // ~/.xclaw/<id>/skills      — per-bot skills (shadow global)
+	GlobalSkillsDir    string // ~/.xclaw/skills           — install-wide skills
+	WorkflowsDir       string // ~/.xclaw/<id>/workflows   — per-bot workflows (shadow global)
+	GlobalWorkflowsDir string // ~/.xclaw/workflows        — install-wide workflows
+	// ClaudeConfigDir is the per-bot CLAUDE_CONFIG_DIR (~/.xclaw/<id>/claude).
+	// Set as the agent's config root to ISOLATE it from the operator's ~/.claude
+	// (user-scope skills + installed plugins would otherwise leak into every
+	// bot). Empty when agent.inheritUserConfig is set. Built-in CLI skills still
+	// load; the per-bot catalog comes from the sandbox (project scope).
+	ClaudeConfigDir string
 }
 
 func defaults() Resolved {
@@ -254,6 +278,9 @@ func resolveBots(global File, baseDir string) ([]Resolved, error) {
 		r.MemoryBase = filepath.Join(botRoot, "memory")
 		r.SkillsDir = filepath.Join(botRoot, "skills")
 		r.GlobalSkillsDir = filepath.Join(baseDir, "skills")
+		r.WorkflowsDir = filepath.Join(botRoot, "workflows")
+		r.GlobalWorkflowsDir = filepath.Join(baseDir, "workflows")
+		r.ClaudeConfigDir = filepath.Join(botRoot, "claude")
 
 		// precedence: inlineBot ?? global default
 		r.APIURL = firstNonEmpty(bot.APIURL, global.APIURL)
@@ -276,6 +303,7 @@ func resolveBots(global File, baseDir string) ([]Resolved, error) {
 
 		// Skill allow-list: per-bot REPLACES top-level when non-nil.
 		r.Skills = firstNonNil(bot.Skills, global.Skills)
+		r.Workflows = firstNonNil(bot.Workflows, global.Workflows)
 
 		// System prompt: SOUL.md (identity) + AGENTS.md (behavior), file-based.
 		r.SystemPrompt = soul(botRoot)
@@ -350,6 +378,9 @@ func mergeAgent(dst *AgentConfig, src *AgentConfig) {
 	}
 	if src.ToolProgress {
 		dst.ToolProgress = true
+	}
+	if src.InheritUserConfig {
+		dst.InheritUserConfig = true
 	}
 	// env merges per-key (global base + per-bot overrides/additions), not whole
 	// replacement — so a bot can add its own OCTO_BOT_ID without dropping a
@@ -470,6 +501,12 @@ func (r Resolved) DriverEnvWith(gatewayToken string) []string {
 	}
 	if gatewayToken != "" {
 		out = append(out, "ANTHROPIC_AUTH_TOKEN="+gatewayToken)
+	}
+	// Isolate the agent's config root from the operator's ~/.claude (user-scope
+	// skills + installed plugins) unless explicitly told to inherit it. Auth is
+	// env-based (above), so this is safe; built-in CLI skills still load.
+	if r.ClaudeConfigDir != "" && !r.Agent.InheritUserConfig {
+		out = append(out, "CLAUDE_CONFIG_DIR="+r.ClaudeConfigDir)
 	}
 	return out
 }

@@ -32,6 +32,8 @@ type BotConfig struct {
 	// Skills is the bot's allow-list of global skill names (managed in the
 	// Skills window, selected per bot in the editor).
 	Skills []string `json:"skills"`
+	// Workflows is the bot's allow-list of global workflow names.
+	Workflows []string `json:"workflows"`
 }
 
 // Dir is ~/.xclaw.
@@ -123,6 +125,13 @@ func Load() ([]BotConfig, error) {
 		if bc.Skills == nil {
 			bc.Skills = []string{}
 		}
+		bc.Workflows = b.Workflows
+		if bc.Workflows == nil {
+			bc.Workflows = f.Workflows
+		}
+		if bc.Workflows == nil {
+			bc.Workflows = []string{}
+		}
 		out = append(out, bc)
 	}
 	return out, nil
@@ -210,6 +219,7 @@ func Save(bots []BotConfig, removedIDs []string) error {
 		// Persist the per-bot skill allow-list (empty → omitempty drops it → the
 		// bot inherits the top-level default / no global skills).
 		entry.Skills = b.Skills
+		entry.Workflows = b.Workflows
 		entries = append(entries, entry)
 	}
 	f.Bots = entries

@@ -60,7 +60,20 @@ func TestDriverEnvEmptyWhenUnset(t *testing.T) {
 	cfg := filepath.Join(dir, "config.json")
 	writeFile(t, cfg, `{"bots":[{"id":"alpha","octoToken":"t"}]}`)
 	bots, _ := Load(cfg)
+	// With no gateway URL/token/env, the only DriverEnv entry is the isolation
+	// var (CLAUDE_CONFIG_DIR → the per-bot config root), on by default.
+	env := bots[0].DriverEnv()
+	if len(env) != 1 || env[0] != "CLAUDE_CONFIG_DIR="+bots[0].ClaudeConfigDir {
+		t.Fatalf("expected only CLAUDE_CONFIG_DIR, got %v", env)
+	}
+}
+
+func TestDriverEnvInheritUserConfigOptsOut(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "config.json")
+	writeFile(t, cfg, `{"bots":[{"id":"alpha","octoToken":"t","agent":{"inheritUserConfig":true}}]}`)
+	bots, _ := Load(cfg)
 	if len(bots[0].DriverEnv()) != 0 {
-		t.Fatalf("expected empty DriverEnv, got %v", bots[0].DriverEnv())
+		t.Fatalf("inheritUserConfig should suppress CLAUDE_CONFIG_DIR, got %v", bots[0].DriverEnv())
 	}
 }

@@ -175,3 +175,49 @@ func TestLinkSkillsSkipsDotfiles(t *testing.T) {
 		t.Fatal("visible skill must be linked")
 	}
 }
+
+// mkWorkflow creates <root>/<name>.js so the dir entry looks like a workflow.
+func mkWorkflow(t *testing.T, root, name string) string {
+	t.Helper()
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(root, name+".js")
+	if err := os.WriteFile(p, []byte("export const meta={name:'"+name+"'}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func TestLinkWorkflowsAllowListAndExtensions(t *testing.T) {
+	base := t.TempDir()
+	global := filepath.Join(base, "gwf")
+	perBot := filepath.Join(base, "bwf")
+	mkWorkflow(t, global, "deploy")
+	mkWorkflow(t, global, "audit")
+	botFlow := mkWorkflow(t, perBot, "private")
+	// a non-.js file must be ignored
+	_ = os.WriteFile(filepath.Join(global, "README.md"), []byte("x"), 0o644)
+	sandboxDir := filepath.Join(base, "sbx")
+
+	// Allow only "deploy" (name without .js) from global; per-bot unfiltered.
+	if err := LinkWorkflowsIntoSandbox(sandboxDir, []SkillSource{
+		{Dir: global, Allow: []string{"deploy"}},
+		{Dir: perBot},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(sandboxDir, ".claude", "workflows")
+	if tgt, err := os.Readlink(filepath.Join(root, "deploy.js")); err != nil || tgt != filepath.Join(global, "deploy.js") {
+		t.Errorf("deploy.js should link to global: tgt=%q err=%v", tgt, err)
+	}
+	if tgt, _ := os.Readlink(filepath.Join(root, "private.js")); tgt != botFlow {
+		t.Errorf("private.js should link to per-bot: %q", tgt)
+	}
+	if _, err := os.Lstat(filepath.Join(root, "audit.js")); !os.IsNotExist(err) {
+		t.Errorf("audit.js not in allow-list should not link")
+	}
+	if _, err := os.Lstat(filepath.Join(root, "README.md")); !os.IsNotExist(err) {
+		t.Errorf("non-.js file must be ignored")
+	}
+}

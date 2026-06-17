@@ -8,9 +8,6 @@ import (
 	_ "modernc.org/sqlite" // pure-Go driver: no cgo, cross-compiles cleanly
 )
 
-// DefaultTTL mirrors cc-channel's 7-day session expiry.
-const DefaultTTL = 7 * 24 * time.Hour
-
 // Role of a stored message.
 type Role string
 
@@ -272,22 +269,3 @@ func (s *Store) ClearHistory(sessionID string) error {
 }
 
 // --- maintenance ---
-
-// CleanupExpired deletes sessions (and, via cascade, their messages) plus
-// resume mappings not updated within ttl. Mirrors cc-channel's startup sweep.
-// Returns the number of sessions removed.
-func (s *Store) CleanupExpired(ttl time.Duration) (int, error) {
-	cutoff := s.now().Add(-ttl).Unix()
-	res, err := s.db.Exec(`DELETE FROM sessions WHERE updated_at < ?`, cutoff)
-	if err != nil {
-		return 0, err
-	}
-	if _, err := s.db.Exec(`DELETE FROM agent_sessions WHERE updated_at < ?`, cutoff); err != nil {
-		return 0, err
-	}
-	if _, err := s.db.Exec(`DELETE FROM group_reply_cursors WHERE updated_at < ?`, cutoff); err != nil {
-		return 0, err
-	}
-	n, _ := res.RowsAffected()
-	return int(n), nil
-}
