@@ -168,3 +168,76 @@ echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text
 		t.Fatalf("complete text = %q, want %q", text, "plain")
 	}
 }
+
+// TestAgentStdinIsNotTokenPipe locks the control-bus capability-token boundary
+// at the agent hop (MLT-40, hardening follow-up from the MLT-38 review of PR
+// #63). The daemon receives its cap token on fd 0 — a private pipe — but the
+// agent CLI it spawns must NEVER inherit that fd. The guarantee rests entirely
+// on claude.go leaving cmd.Stdin nil, so os/exec wires the child's fd 0 to
+// /dev/null. The concrete regression this catches is a change that set
+// cmd.Stdin = os.Stdin: the sentinel below flows through os.Stdin, so the leak
+// becomes observable. (A change wiring cmd.Stdin to a *different* token-holding
+// reader — a dup'd fd, a bytes.Reader — wouldn't be caught here; it'd leave this
+// process's fd 0 empty and the test would still pass. We assert the realistic
+// copy-paste regression, not every conceivable inheriting source.)
+//
+// We stand in for the daemon by feeding a sentinel token onto this process's
+// os.Stdin, then spawn the driver and assert the fake agent reads EOF (empty)
+// from its fd 0 — i.e. it saw /dev/null, not the token pipe. (exec uses
+// /dev/null for a nil Stdin regardless of os.Stdin, so the substitution only
+// makes the buggy os.Stdin path detectable rather than a silent pass.)
+func TestAgentStdinIsNotTokenPipe(t *testing.T) {
+	const token = "XCLAW-CAP-TOKEN-sentinel-do-not-leak-7f3a9c"
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Pre-fill the pipe with the token (well under the 64 KiB pipe buffer, so
+	// the writes never block without a reader). A buggy child that inherited
+	// fd 0 would then read the token rather than hang — a clear failure.
+	for i := 0; i < 256; i++ {
+		if _, err := w.WriteString(token + "\n"); err != nil {
+			t.Fatalf("seed token pipe: %v", err)
+		}
+	}
+
+	oldStdin := os.Stdin
+	os.Stdin = r
+	t.Cleanup(func() {
+		os.Stdin = oldStdin
+		w.Close()
+		r.Close()
+	})
+
+	// Fake agent CLI: read up to 256 bytes from its fd 0, report what it saw on
+	// stderr (which the driver surfaces as a recoverable-error event), then emit
+	// a valid stream-json init line so the turn terminates cleanly.
+	bin := writeFakeBin(t, `
+data=$(head -c 256)
+echo '{"type":"system","subtype":"init","session_id":"s1"}'
+printf 'STDIN0:[%s]\n' "$data" 1>&2
+`)
+
+	ch, err := NewClaudeDriver(bin).Query(context.Background(), Request{Prompt: "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var report string
+	var sawReport bool
+	for ev := range ch { // drain to a clean close
+		if strings.HasPrefix(ev.Err, "STDIN0:") && !sawReport {
+			report, sawReport = ev.Err, true
+		}
+	}
+	if !sawReport {
+		t.Fatal("fake agent did not report its fd 0 contents")
+	}
+	if strings.Contains(report, token) {
+		t.Fatalf("agent fd 0 leaked the daemon capability token: %q", report)
+	}
+	if report != "STDIN0:[]" {
+		t.Fatalf("agent fd 0 must be /dev/null (empty); got %q", report)
+	}
+}
