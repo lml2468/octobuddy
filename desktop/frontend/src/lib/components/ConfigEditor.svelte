@@ -2,8 +2,9 @@
   import { XClawService } from "../../../bindings/github.com/lml2468/xclaw/desktop";
   import { BotConfig } from "../../../bindings/github.com/lml2468/xclaw/desktop/internal/configstore/models";
   import { store } from "../store.svelte";
+  import Avatar from "./Avatar.svelte";
 
-  let { onclose }: { onclose: () => void } = $props();
+  let { onclose, onskills, onusage }: { onclose: () => void; onskills?: () => void; onusage?: () => void } = $props();
 
   let bots = $state<BotConfig[]>([]);
   let sel = $state(0);
@@ -115,47 +116,61 @@
 
 <div class="scrim" onclick={onclose} role="presentation">
   <div class="modal" onclick={(e) => e.stopPropagation()} role="dialog" aria-label="Edit bots">
-    <header><h2>Edit Bots</h2><button class="x" onclick={onclose} aria-label="Close">✕</button></header>
+    <header>
+      <h2>设置</h2>
+      <div class="seg" role="tablist" aria-label="设置分区">
+        <button role="tab" aria-selected="true" class="on">编辑 Bot</button>
+        <button role="tab" aria-selected="false" onclick={() => { onclose(); onskills?.(); }}>技能</button>
+        <button role="tab" aria-selected="false" onclick={() => { onclose(); onusage?.(); }}>用量</button>
+      </div>
+      <span class="hspacer"></span>
+      <button class="x" onclick={onclose} aria-label="关闭">✕</button>
+    </header>
 
     <div class="body">
       <div class="bots">
         {#each bots as b, i (i)}
-          <button class="botrow" class:sel={i === sel} onclick={() => (sel = i)}>{b.id || "(unnamed)"}</button>
+          <button class="botrow" class:sel={i === sel} onclick={() => (sel = i)}>
+            <Avatar name={b.id || "bot"} size={26} />
+            <span class="bn">{b.id || "(未命名)"}</span>
+          </button>
         {/each}
-        <button class="add" onclick={addBot}>+ Add bot</button>
+        <button class="add" onclick={addBot}>+ 新增 Bot</button>
       </div>
 
       {#if current}
         <div class="form">
-          <label>Bot ID <input bind:value={current.id} placeholder="my-bot" /></label>
-          <label>API URL <input bind:value={current.apiUrl} placeholder="https://octo-server" /></label>
-          <div class="grp">
-            <label>Bot token
-              <input type="password" bind:value={current.octoToken} placeholder="bf_…" />
-              <small>Stored in your OS keychain, never in config.json.</small>
-            </label>
+          <div class="grid2">
+            <label>Bot ID <input bind:value={current.id} placeholder="my-bot" /></label>
+            <label>模型 <input bind:value={current.model} placeholder="claude-opus-4-8" /></label>
           </div>
-          <label>Model <input bind:value={current.model} placeholder="claude-opus-4-8" /></label>
-          <label>Gateway base URL <input bind:value={current.gatewayBaseUrl} placeholder="https://gateway/v1 (optional)" /></label>
-          <label>Gateway token <input type="password" bind:value={current.gatewayToken} placeholder="sk-… (optional)" /></label>
+          <label>API URL <input bind:value={current.apiUrl} placeholder="https://octo-server" /></label>
+          <div class="grid2">
+            <label>Bot Token
+              <input type="password" bind:value={current.octoToken} placeholder="bf_…" />
+              <small>存于系统钥匙串,绝不写入 config.json。</small>
+            </label>
+            <label>网关地址(可选)<input bind:value={current.gatewayBaseUrl} placeholder="https://gateway/v1" /></label>
+          </div>
+          <label>网关 Token(可选)<input type="password" bind:value={current.gatewayToken} placeholder="sk-…" /></label>
 
           <div class="env">
-            <span class="lbl">Environment</span>
+            <span class="lbl">环境变量</span>
             {#each envRows as row, i (i)}
               <div class="envrow">
                 <input class="k" bind:value={row.k} placeholder="KEY" />
                 <span>=</span>
                 <input class="v" bind:value={row.v} placeholder="value" />
-                <button class="del" onclick={() => (envRows = envRows.filter((_, x) => x !== i))} aria-label="Remove">−</button>
+                <button class="del" onclick={() => (envRows = envRows.filter((_, x) => x !== i))} aria-label="删除">−</button>
               </div>
             {/each}
-            <button class="add sm" onclick={() => (envRows = [...envRows, { k: "", v: "" }])}>+ Add var</button>
+            <button class="add sm" onclick={() => (envRows = [...envRows, { k: "", v: "" }])}>+ 添加变量</button>
           </div>
 
           <div class="skills">
-            <span class="lbl">Available skills</span>
+            <span class="lbl">可用技能</span>
             {#if allSkills.length === 0}
-              <small>No skills in the library yet — add some from the tray's “Manage Skills…”.</small>
+              <small>技能库还是空的 — 从「管理技能」里添加。</small>
             {:else}
               {#each allSkills as s (s.name)}
                 <label class="skrow">
@@ -168,9 +183,9 @@
           </div>
 
           <div class="skills">
-            <span class="lbl">Available workflows</span>
+            <span class="lbl">可用工作流</span>
             {#if allWorkflows.length === 0}
-              <small>No workflows in the library yet — add some from “Manage Workflows…”.</small>
+              <small>工作流库还是空的 — 从「管理工作流」里添加。</small>
             {:else}
               {#each allWorkflows as w (w.name)}
                 <label class="skrow">
@@ -182,19 +197,19 @@
             {/if}
           </div>
 
-          <label>SOUL.md <textarea bind:value={current.soul} rows="3" placeholder="Who this bot is — identity, voice, role"></textarea></label>
-          <label>AGENTS.md <textarea bind:value={current.agents} rows="3" placeholder="How it should behave — norms, do's and don'ts"></textarea></label>
+          <label>SOUL.md <textarea bind:value={current.soul} rows="3" placeholder="身份、语气、角色"></textarea></label>
+          <label>AGENTS.md <textarea bind:value={current.agents} rows="3" placeholder="规范、可做与不可做"></textarea></label>
 
-          <button class="remove" onclick={() => removeBot(sel)}>Remove this bot</button>
+          <button class="remove" onclick={() => removeBot(sel)}>删除此 Bot</button>
         </div>
       {/if}
     </div>
 
     <footer>
-      {#if error}<span class="err">⚠️ {error}</span>{:else if saved}<span class="ok">✓ Saved</span>{/if}
+      {#if error}<span class="err">⚠️ {error}</span>{:else if saved}<span class="ok">✓ 已保存</span>{/if}
       <span class="spacer"></span>
-      <button onclick={() => save(false)} disabled={busy}>Save</button>
-      <button class="primary" onclick={() => save(true)} disabled={busy}>Save & Restart</button>
+      <button onclick={() => save(false)} disabled={busy}>保存</button>
+      <button class="primary" onclick={() => save(true)} disabled={busy}>保存并重启</button>
     </footer>
   </div>
 </div>
@@ -202,20 +217,27 @@
 <style>
   .scrim { position: fixed; inset: 0; z-index: 50; background: color-mix(in srgb, var(--ink) 22%, transparent); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); display: grid; place-items: center; }
   .modal { width: min(860px, 92vw); height: min(620px, 88vh); display: flex; flex-direction: column; background: var(--glass); backdrop-filter: blur(40px) saturate(180%); -webkit-backdrop-filter: blur(40px) saturate(180%); border: 1px solid var(--glass-border); border-radius: 16px; box-shadow: 0 24px 60px rgba(0, 0, 0, 0.22); overflow: hidden; }
-  header { display: flex; align-items: center; padding: 16px 18px; border-bottom: 1px solid var(--hairline); }
-  header h2 { font-size: 17px; flex: 1; }
+  header { display: flex; align-items: center; gap: 12px; padding: 14px 18px; border-bottom: 1px solid var(--border-soft, var(--hairline)); }
+  header h2 { font-size: 17px; font-weight: 600; }
+  .hspacer { flex: 1; }
+  .seg { display: inline-flex; background: rgba(var(--ink-tint, 0,0,0), 0.05); border-radius: 10px; padding: 3px; }
+  .seg button { padding: 6px 14px; border: none; background: transparent; border-radius: 8px; font-size: 13px; color: var(--ink-soft); cursor: pointer; }
+  .seg button.on { background: var(--surface); color: var(--ink); box-shadow: var(--elev-1, 0 1px 2px rgba(0,0,0,0.08)); }
+  .seg button:not(.on):hover { color: var(--ink); }
   .x { background: none; border: none; color: var(--ink-soft); font-size: 15px; }
 
-  .body { flex: 1; display: grid; grid-template-columns: 200px 1fr; overflow: hidden; }
-  .bots { border-right: 1px solid var(--hairline); padding: 10px; display: flex; flex-direction: column; gap: 3px; overflow-y: auto; background: color-mix(in srgb, var(--ink) 3%, transparent); }
-  .botrow { text-align: left; padding: 8px 10px; border: none; background: transparent; border-radius: 4px; color: var(--ink); }
+  .body { flex: 1; display: grid; grid-template-columns: 210px 1fr; overflow: hidden; }
+  .bots { border-right: 1px solid var(--border-soft, var(--hairline)); padding: 10px; display: flex; flex-direction: column; gap: 3px; overflow-y: auto; }
+  .botrow { display: flex; align-items: center; gap: 9px; text-align: left; padding: 7px 9px; border: none; background: transparent; border-radius: 9px; color: var(--ink-soft); }
+  .botrow .bn { font-size: 13px; font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .botrow:hover { background: color-mix(in srgb, var(--ink) 5%, transparent); }
-  .botrow.sel { background: color-mix(in srgb, var(--accent) 16%, transparent); }
-  .add { text-align: left; padding: 8px 10px; border: 1px dashed var(--hairline); background: transparent; border-radius: 4px; color: var(--ink-soft); margin-top: 4px; }
-  .add.sm { font-size: 12px; padding: 5px 8px; }
+  .botrow.sel { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--ink); }
+  .add { text-align: center; padding: 8px 10px; border: 1px dashed var(--hairline); background: transparent; border-radius: 9px; color: var(--ink-soft); margin-top: 4px; }
+  .add.sm { font-size: 12px; padding: 5px 8px; text-align: left; }
 
-  .form { padding: 16px 18px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
-  label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--ink-soft); }
+  .form { padding: 18px 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  label { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--ink-soft); }
   input, textarea { background: color-mix(in srgb, var(--ink) 4%, var(--surface)); border: 1px solid var(--hairline); border-radius: 10px; padding: 8px 11px; color: var(--ink); font-size: 13px; outline: none; transition: border-color .15s ease, box-shadow .15s ease; }
   input:focus, textarea:focus { border-color: color-mix(in srgb, var(--accent) 55%, var(--hairline)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent); }
   textarea { resize: vertical; font-family: var(--ui); }

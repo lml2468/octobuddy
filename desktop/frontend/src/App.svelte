@@ -136,7 +136,7 @@
   />
 {/if}
 {#if showEditor}
-  <ConfigEditor onclose={() => (showEditor = false)} />
+  <ConfigEditor onclose={() => (showEditor = false)} onskills={() => (showSkills = true)} onusage={() => (showUsage = true)} />
 {/if}
 {#if showSkills}
   <SkillsPanel onclose={() => (showSkills = false)} />
