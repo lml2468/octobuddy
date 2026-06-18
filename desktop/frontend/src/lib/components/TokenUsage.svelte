@@ -180,9 +180,10 @@
 </div>
 
 <style>
-  .scrim { position: fixed; inset: 0; z-index: 50; background: color-mix(in srgb, var(--ink) 22%, transparent); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); display: grid; place-items: center; }
-  .modal { width: min(800px, 94vw); height: min(560px, 88vh); display: flex; flex-direction: column; background: var(--glass); backdrop-filter: blur(40px) saturate(180%); -webkit-backdrop-filter: blur(40px) saturate(180%); border: 1px solid var(--glass-border); border-radius: 16px; box-shadow: 0 24px 60px rgba(0, 0, 0, 0.22); overflow: hidden; }
-  header { display: flex; align-items: center; gap: 12px; padding: 14px 18px; border-bottom: 1px solid var(--hairline); }
+  .scrim { position: fixed; inset: 0; z-index: 50; background: var(--window-grad); display: block; }
+  .modal { width: 100%; height: 100%; position: relative; display: flex; flex-direction: column; background: var(--glass); backdrop-filter: blur(24px) saturate(180%); -webkit-backdrop-filter: blur(24px) saturate(180%); border: none; border-radius: 0; box-shadow: none; overflow: hidden; color: var(--ink); font-family: var(--ui); }
+  header { display: flex; align-items: center; gap: 12px; padding: 14px 18px 14px 92px; -webkit-app-region: drag; border-bottom: 1px solid var(--hairline); }
+  header .seg, header .nav, header .x, header .seg button, header .nav button { -webkit-app-region: no-drag; }
 
   .hspacer { flex: 1; }
   .nav { display: inline-flex; background: rgba(var(--ink-tint, 0,0,0), 0.05); border-radius: 10px; padding: 3px; }
