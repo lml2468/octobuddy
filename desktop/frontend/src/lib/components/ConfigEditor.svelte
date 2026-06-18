@@ -226,7 +226,8 @@
   .seg button { padding: 6px 14px; border: none; background: transparent; border-radius: 8px; font-size: 13px; color: var(--ink-soft); cursor: pointer; }
   .seg button.on { background: var(--surface); color: var(--ink); box-shadow: var(--elev-1, 0 1px 2px rgba(0,0,0,0.08)); }
   .seg button:not(.on):hover { color: var(--ink); }
-  .x { background: none; border: none; color: var(--ink-soft); font-size: 15px; }
+  .x { width: 30px; height: 30px; display: grid; place-items: center; background: none; border: none; border-radius: 8px; color: var(--ink-soft); font-size: 15px; transition: background .14s ease, color .14s ease; }
+  .x:hover { background: color-mix(in srgb, var(--ink) 8%, transparent); color: var(--ink); }
 
   .body { flex: 1; display: grid; grid-template-columns: 210px 1fr; overflow: hidden; }
   .bots { border-right: 1px solid var(--border-soft, var(--hairline)); padding: 10px; display: flex; flex-direction: column; gap: 3px; overflow-y: auto; }
@@ -241,7 +242,7 @@
 
   .form { padding: 18px 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; }
   .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-  label { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--ink-soft); }
+  label { display: flex; flex-direction: column; gap: 5px; font-size: 12px; font-weight: 550; letter-spacing: 0.01em; color: var(--ink-soft); }
   input, textarea { background: color-mix(in srgb, var(--ink) 4%, var(--surface)); border: 1px solid var(--hairline); border-radius: 10px; padding: 8px 11px; color: var(--ink); font-size: 13px; outline: none; transition: border-color .15s ease, box-shadow .15s ease; }
   input:focus, textarea:focus { border-color: color-mix(in srgb, var(--accent) 55%, var(--hairline)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent); }
   textarea { resize: vertical; font-family: var(--ui); }
@@ -264,8 +265,18 @@
 
   footer { display: flex; align-items: center; gap: 10px; padding: 12px 18px; border-top: 1px solid var(--hairline); }
   .spacer { flex: 1; }
-  footer button { padding: 7px 16px; border-radius: 4px; border: 1px solid var(--hairline); background: color-mix(in srgb, var(--ink) 4%, var(--surface)); color: var(--ink); }
-  footer .primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  footer button { padding: 8px 18px; border-radius: 10px; border: 1px solid var(--hairline); background: color-mix(in srgb, var(--ink) 4%, var(--surface)); color: var(--ink); font-weight: 550; transition: background .14s ease, transform .12s ease, box-shadow .14s ease; }
+  footer button:hover { background: color-mix(in srgb, var(--ink) 8%, var(--surface)); }
+  footer button:active { transform: translateY(1px); }
+  footer button:disabled { opacity: .5; cursor: default; transform: none; box-shadow: none; }
+  footer .primary { background: linear-gradient(135deg, var(--grad-a), var(--grad-b)); color: #fff; border: none; box-shadow: 0 4px 14px color-mix(in srgb, var(--grad-a) 45%, transparent); }
+  footer .primary:hover { transform: translateY(-1px); box-shadow: 0 8px 22px color-mix(in srgb, var(--grad-a) 52%, transparent); }
+
+  /* interaction states + keyboard focus (WCAG 2.4.7) */
+  .botrow:focus-visible, .seg button:focus-visible, .nav button:focus-visible, footer button:focus-visible, .x:focus-visible, .add:focus-visible, .remove:focus-visible { outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent); }
+  .add:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--hairline)); color: var(--accent-strong, var(--accent)); }
+  .remove:hover { background: color-mix(in srgb, var(--danger) 10%, transparent); }
+  .skrow:focus-within { background: color-mix(in srgb, var(--accent) 8%, transparent); }
   .err { color: var(--danger); font-size: 12px; }
   .ok { color: #5aa873; font-size: 12px; }
 </style>
