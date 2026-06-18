@@ -72,7 +72,7 @@
   --glass-soft: rgba(255, 255, 255, 0.42);
   --glass-border: rgba(255, 255, 255, 0.55);
 
-  --ui: "Inter", -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", system-ui, sans-serif;
+  --ui: "Inter Variable", "Inter", -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", system-ui, sans-serif;
   --mono: "JetBrains Mono", "Geist Mono Variable", ui-monospace, "SF Mono", Menlo, monospace;
 }
 
