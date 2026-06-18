@@ -133,6 +133,7 @@
           <button class="botrow" class:sel={i === sel} onclick={() => (sel = i)}>
             <Avatar name={b.id || "bot"} size={26} />
             <span class="bn">{b.id || "(未命名)"}</span>
+            <span class="bdot" class:on={store.bots.find((x) => x.id === b.id)?.connected}></span>
           </button>
         {/each}
         <button class="add" onclick={addBot}>+ 新增 Bot</button>
@@ -229,7 +230,9 @@
   .body { flex: 1; display: grid; grid-template-columns: 210px 1fr; overflow: hidden; }
   .bots { border-right: 1px solid var(--border-soft, var(--hairline)); padding: 10px; display: flex; flex-direction: column; gap: 3px; overflow-y: auto; }
   .botrow { display: flex; align-items: center; gap: 9px; text-align: left; padding: 7px 9px; border: none; background: transparent; border-radius: 9px; color: var(--ink-soft); }
-  .botrow .bn { font-size: 13px; font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .botrow .bn { font-size: 13px; font-weight: 550; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bdot { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; background: var(--muted); }
+  .bdot.on { background: var(--online, var(--success)); }
   .botrow:hover { background: color-mix(in srgb, var(--ink) 5%, transparent); }
   .botrow.sel { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--ink); }
   .add { text-align: center; padding: 8px 10px; border: 1px dashed var(--hairline); background: transparent; border-radius: 9px; color: var(--ink-soft); margin-top: 4px; }
