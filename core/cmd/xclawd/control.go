@@ -142,19 +142,25 @@ func makeHandler(ctx context.Context, deps handlerDeps) control.CommandHandler {
 			if err != nil {
 				return nil, err
 			}
-			u, err := t.store.Usage()
+			// Since == 0 means all time; otherwise sum day buckets at or after it.
+			var u store.TokenUsage
+			if b.Since > 0 {
+				u, err = t.store.UsageSince(b.Since)
+			} else {
+				u, err = t.store.Usage()
+			}
 			if err != nil {
 				return nil, err
 			}
 			return control.UsageStats{
 				BotID:            b.BotID,
+				Since:            b.Since,
 				InputTokens:      u.InputTokens,
 				OutputTokens:     u.OutputTokens,
 				CachedTokens:     u.CachedTokens,
 				CacheWriteTokens: u.CacheWriteTokens,
 				CostUSD:          u.CostUSD,
 				Turns:            u.Turns,
-				UpdatedAt:        u.UpdatedAt,
 			}, nil
 
 		case "session.reset":

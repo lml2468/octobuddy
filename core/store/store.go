@@ -74,19 +74,19 @@ CREATE TABLE IF NOT EXISTS group_reply_cursors (
   updated_at  INTEGER NOT NULL
 );
 
--- Cumulative token usage for this bot's store (one DB per bot), accumulated
--- across every completed turn. Single-row aggregate (id=1); the per-bot total IS
--- this row, and the desktop sums bots for the grand total. Persists across
--- restarts, unlike the live session.usage event (which is last-turn only).
-CREATE TABLE IF NOT EXISTS token_usage (
-  id            INTEGER PRIMARY KEY CHECK(id = 1),
-  input_tokens  INTEGER NOT NULL DEFAULT 0,
-  output_tokens INTEGER NOT NULL DEFAULT 0,
-  cached_tokens INTEGER NOT NULL DEFAULT 0,
+-- Per-day token usage buckets for this bot's store (one DB per bot). Each row is
+-- one local calendar day (day = Unix seconds at local midnight); AddUsage upserts
+-- into today's row, and range queries SUM over day >= since [AND day < until].
+-- The legacy all-time aggregate migrated from the old single-row table lands in
+-- the day=0 bucket: counted in "All" (since=0) but excluded from dated ranges.
+CREATE TABLE IF NOT EXISTS token_usage_daily (
+  day                INTEGER PRIMARY KEY,
+  input_tokens       INTEGER NOT NULL DEFAULT 0,
+  output_tokens      INTEGER NOT NULL DEFAULT 0,
+  cached_tokens      INTEGER NOT NULL DEFAULT 0,
   cache_write_tokens INTEGER NOT NULL DEFAULT 0,
-  cost_usd      REAL    NOT NULL DEFAULT 0,
-  turns         INTEGER NOT NULL DEFAULT 0,
-  updated_at    INTEGER NOT NULL DEFAULT 0
+  cost_usd           REAL    NOT NULL DEFAULT 0,
+  turns              INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages(session_id, id);
@@ -101,15 +101,46 @@ func Open(path string) (*Store, error) {
 	if _, err := db.Exec(schema); err != nil {
 		return nil, err
 	}
-	// Idempotent migration: add token_usage.cache_write_tokens to DBs created
-	// before it existed. CREATE TABLE IF NOT EXISTS won't alter an existing table,
-	// so ADD COLUMN here; ignore the "duplicate column name" error on DBs that
-	// already have it.
-	if _, err := db.Exec(`ALTER TABLE token_usage ADD COLUMN cache_write_tokens INTEGER NOT NULL DEFAULT 0`); err != nil &&
-		!strings.Contains(err.Error(), "duplicate column name") {
-		return nil, fmt.Errorf("migrate token_usage: %w", err)
+	if err := migrateTokenUsage(db); err != nil {
+		return nil, err
 	}
 	return &Store{db: db, now: time.Now}, nil
+}
+
+// migrateTokenUsage folds the legacy single-row token_usage aggregate (pre
+// per-day buckets) into the day=0 bucket of token_usage_daily, then drops the old
+// table. Idempotent: a no-op once the old table is gone. The day=0 bucket keeps
+// pre-migration totals visible under "All" while excluding them from dated ranges
+// (those days weren't recorded, so attributing them to any real day would lie).
+func migrateTokenUsage(db *sql.DB) error {
+	var exists int
+	if err := db.QueryRow(
+		`SELECT 1 FROM sqlite_master WHERE type='table' AND name='token_usage'`).Scan(&exists); err == sql.ErrNoRows {
+		return nil // already migrated (or fresh DB)
+	} else if err != nil {
+		return fmt.Errorf("migrate token_usage check: %w", err)
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(
+		`INSERT INTO token_usage_daily(day, input_tokens, output_tokens, cached_tokens, cache_write_tokens, cost_usd, turns)
+		 SELECT 0, input_tokens, output_tokens, cached_tokens, cache_write_tokens, cost_usd, turns FROM token_usage WHERE id = 1
+		 ON CONFLICT(day) DO UPDATE SET
+		   input_tokens       = input_tokens       + excluded.input_tokens,
+		   output_tokens      = output_tokens      + excluded.output_tokens,
+		   cached_tokens      = cached_tokens      + excluded.cached_tokens,
+		   cache_write_tokens = cache_write_tokens + excluded.cache_write_tokens,
+		   cost_usd           = cost_usd           + excluded.cost_usd,
+		   turns              = turns              + excluded.turns;`); err != nil {
+		return fmt.Errorf("migrate token_usage copy: %w", err)
+	}
+	if _, err := tx.Exec(`DROP TABLE token_usage`); err != nil {
+		return fmt.Errorf("migrate token_usage drop: %w", err)
+	}
+	return tx.Commit()
 }
 
 // dsn carries the connection pragmas in the DSN as _pragma query params so the
@@ -271,9 +302,10 @@ func (s *Store) ListSessions() ([]SessionSummary, error) {
 	return out, rows.Err()
 }
 
-// --- token usage (cumulative, per-bot store) ---
+// --- token usage (per-day buckets, per-bot store) ---
 
-// TokenUsage is this bot's cumulative token accounting across all turns.
+// TokenUsage is a token-accounting total over some range of days (zero value =
+// no usage recorded in that range).
 type TokenUsage struct {
 	InputTokens      int64
 	OutputTokens     int64
@@ -281,45 +313,61 @@ type TokenUsage struct {
 	CacheWriteTokens int64 // cache writes (cache_creation_input_tokens)
 	CostUSD          float64
 	Turns            int64
-	UpdatedAt        int64
 }
 
-// AddUsage accumulates one completed turn's usage into the running total. A
-// no-op when all deltas are zero (e.g. a turn the agent reported no usage for),
-// so the turn counter only advances on real usage.
+// localMidnight returns the Unix-seconds timestamp of the most recent local
+// midnight at or before t — the key for t's day bucket.
+func localMidnight(t time.Time) int64 {
+	y, m, d := t.Date()
+	return time.Date(y, m, d, 0, 0, 0, 0, t.Location()).Unix()
+}
+
+// AddUsage accumulates one completed turn's usage into today's bucket. A no-op
+// when all deltas are zero (a turn the agent reported no usage for), so the turn
+// counter only advances on real usage.
 func (s *Store) AddUsage(in, out, cached, cacheWrite int, cost float64) error {
 	if in == 0 && out == 0 && cached == 0 && cacheWrite == 0 && cost == 0 {
 		return nil
 	}
+	day := localMidnight(s.now())
 	_, err := s.db.Exec(
-		`INSERT INTO token_usage(id, input_tokens, output_tokens, cached_tokens, cache_write_tokens, cost_usd, turns, updated_at)
-		 VALUES(1, ?, ?, ?, ?, ?, 1, ?)
-		 ON CONFLICT(id) DO UPDATE SET
+		`INSERT INTO token_usage_daily(day, input_tokens, output_tokens, cached_tokens, cache_write_tokens, cost_usd, turns)
+		 VALUES(?, ?, ?, ?, ?, ?, 1)
+		 ON CONFLICT(day) DO UPDATE SET
 		   input_tokens       = input_tokens       + excluded.input_tokens,
 		   output_tokens      = output_tokens      + excluded.output_tokens,
 		   cached_tokens      = cached_tokens      + excluded.cached_tokens,
 		   cache_write_tokens = cache_write_tokens + excluded.cache_write_tokens,
 		   cost_usd           = cost_usd           + excluded.cost_usd,
-		   turns              = turns              + 1,
-		   updated_at         = excluded.updated_at;`,
-		in, out, cached, cacheWrite, cost, s.now().Unix())
+		   turns              = turns              + 1;`,
+		day, in, out, cached, cacheWrite, cost)
 	if err != nil {
 		return fmt.Errorf("add usage: %w", err)
 	}
 	return nil
 }
 
-// Usage returns this bot's cumulative token totals (zero value when no turns
-// have been recorded yet).
+// Usage returns the all-time cumulative totals (every bucket, including the
+// day=0 legacy bucket migrated from before per-day tracking).
 func (s *Store) Usage() (TokenUsage, error) {
+	return s.usageWhere("")
+}
+
+// UsageSince returns totals for day buckets at or after `since` (Unix seconds at
+// a local midnight). The day=0 legacy bucket is excluded from any dated range
+// (since > 0), since its turns predate per-day tracking and can't be dated.
+func (s *Store) UsageSince(since int64) (TokenUsage, error) {
+	return s.usageWhere("WHERE day >= ?", since)
+}
+
+func (s *Store) usageWhere(cond string, args ...any) (TokenUsage, error) {
 	var u TokenUsage
 	err := s.db.QueryRow(
-		`SELECT input_tokens, output_tokens, cached_tokens, cache_write_tokens, cost_usd, turns, updated_at
-		 FROM token_usage WHERE id = 1`).
-		Scan(&u.InputTokens, &u.OutputTokens, &u.CachedTokens, &u.CacheWriteTokens, &u.CostUSD, &u.Turns, &u.UpdatedAt)
-	if err == sql.ErrNoRows {
-		return TokenUsage{}, nil
-	}
+		`SELECT COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0),
+		        COALESCE(SUM(cached_tokens),0), COALESCE(SUM(cache_write_tokens),0),
+		        COALESCE(SUM(cost_usd),0), COALESCE(SUM(turns),0)
+		 FROM token_usage_daily `+cond, args...).
+		Scan(&u.InputTokens, &u.OutputTokens, &u.CachedTokens, &u.CacheWriteTokens, &u.CostUSD, &u.Turns)
 	if err != nil {
 		return u, fmt.Errorf("usage: %w", err)
 	}

@@ -174,6 +174,82 @@ func TestTokenUsageAccumulates(t *testing.T) {
 	}
 }
 
+func TestTokenUsageByDateRange(t *testing.T) {
+	s := openTemp(t)
+	// Pin "now" to a fixed wall clock so day bucketing is deterministic.
+	now := time.Date(2026, 6, 18, 10, 0, 0, 0, time.Local)
+	cur := now
+	s.SetClock(func() time.Time { return cur })
+
+	// Three days of usage: 10 days ago, 3 days ago, today.
+	cur = now.AddDate(0, 0, -10)
+	_ = s.AddUsage(1000, 0, 0, 0, 1.0)
+	cur = now.AddDate(0, 0, -3)
+	_ = s.AddUsage(100, 0, 0, 0, 0.1)
+	cur = now
+	_ = s.AddUsage(10, 0, 0, 0, 0.01)
+
+	// All = everything.
+	if u, _ := s.Usage(); u.InputTokens != 1110 || u.Turns != 3 {
+		t.Fatalf("all: %+v want 1110/3", u)
+	}
+	// Last 7 days (since 7 days ago midnight) = the -3d and today rows.
+	since7 := localMidnight(now.AddDate(0, 0, -7))
+	if u, _ := s.UsageSince(since7); u.InputTokens != 110 || u.Turns != 2 {
+		t.Fatalf("7d: %+v want 110/2", u)
+	}
+	// Today only.
+	sinceToday := localMidnight(now)
+	if u, _ := s.UsageSince(sinceToday); u.InputTokens != 10 || u.Turns != 1 {
+		t.Fatalf("today: %+v want 10/1", u)
+	}
+}
+
+func TestTokenUsageMigratesLegacyAggregate(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "legacy.db")
+	// Build a DB with the OLD single-row token_usage table + a row.
+	pre, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pre.db.Exec(`DROP TABLE token_usage_daily`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pre.db.Exec(`CREATE TABLE token_usage (id INTEGER PRIMARY KEY CHECK(id=1),
+		input_tokens INTEGER, output_tokens INTEGER, cached_tokens INTEGER,
+		cache_write_tokens INTEGER, cost_usd REAL, turns INTEGER, updated_at INTEGER)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pre.db.Exec(`INSERT INTO token_usage VALUES(1, 500, 60, 40, 20, 2.5, 9, 123)`); err != nil {
+		t.Fatal(err)
+	}
+	pre.Close()
+
+	// Reopen: migration should fold the legacy row into the day=0 bucket.
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("reopen/migrate: %v", err)
+	}
+	t.Cleanup(func() { s.Close() })
+	u, err := s.Usage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.InputTokens != 500 || u.OutputTokens != 60 || u.Turns != 9 || u.CacheWriteTokens != 20 {
+		t.Fatalf("legacy not migrated into All: %+v", u)
+	}
+	// Excluded from any dated range (its turns predate per-day tracking).
+	if u2, _ := s.UsageSince(1); u2.Turns != 0 {
+		t.Fatalf("legacy day=0 bucket must be excluded from dated ranges: %+v", u2)
+	}
+	// Old table is gone.
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='token_usage'`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("old token_usage table should be dropped (n=%d err=%v)", n, err)
+	}
+}
+
 func TestDSN(t *testing.T) {
 	if got := dsn("/tmp/x.db"); got != "/tmp/x.db?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)" {
 		t.Fatalf("plain path dsn wrong: %q", got)

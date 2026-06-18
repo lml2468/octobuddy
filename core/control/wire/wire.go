@@ -116,23 +116,27 @@ type SessionsListBody struct {
 	BotID string `json:"botId,omitempty"`
 }
 
-// UsageStatsBody requests a bot's cumulative token usage (proto: usage.stats)
-// for the desktop Token Usage window.
+// UsageStatsBody requests a bot's token usage (proto: usage.stats) for the
+// desktop Token Usage window. Since (Unix seconds) bounds the range: 0 = all
+// time; otherwise only day buckets at or after Since are summed. The client
+// computes Since from its own local calendar (today / last 7d / …) so the range
+// matches the user's timezone, not the daemon's.
 type UsageStatsBody struct {
 	BotID string `json:"botId,omitempty"`
+	Since int64  `json:"since,omitempty"`
 }
 
 // UsageStats is the usage.stats response: a bot's cumulative token totals across
 // every completed turn (persisted, so it survives restarts).
 type UsageStats struct {
 	BotID            string  `json:"botId,omitempty"`
+	Since            int64   `json:"since"` // echoes the request range bound (0 = all time)
 	InputTokens      int64   `json:"inputTokens"`
 	OutputTokens     int64   `json:"outputTokens"`
 	CachedTokens     int64   `json:"cachedTokens"`
 	CacheWriteTokens int64   `json:"cacheWriteTokens"`
 	CostUSD          float64 `json:"costUsd"`
 	Turns            int64   `json:"turns"`
-	UpdatedAt        int64   `json:"updatedAt"` // Unix seconds; 0 when no usage yet
 }
 
 // SecretInjectBody carries a single secret into the core (proto: secret.inject).
