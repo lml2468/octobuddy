@@ -11,13 +11,15 @@ XClaw is a monorepo of three pieces that version together against one contract
 architecture):
 
 - `core/` — Go daemon `xclawd` (the agent gateway). Single static binary, zero cgo.
-- `app/` — Swift macOS app (SwiftPM, macOS 14+), a control-bus client.
-- `proto/` — the language-neutral control-bus contract shared by core and app.
+- `desktop/` — Go + Wails v3 desktop app (Svelte 5 + TypeScript frontend), a
+  control-bus client.
+- `proto/` — the language-neutral control-bus contract shared by core and desktop.
 
 ## Prerequisites
 
 - **Go** matching `core/go.mod` (currently Go 1.26).
-- **Swift / Xcode** for the macOS app (macOS 14+), only if you touch `app/`.
+- **Node.js + npm** and the `wails3` CLI for the desktop app, only if you touch
+  `desktop/` (`go install github.com/wailsapp/wails/v3/cmd/wails3@latest`).
 - Tests need **no API key** — they run against recorded fixtures and live CLI
   spawns that only assert parsing/wiring.
 
@@ -34,8 +36,9 @@ go test -race ./...        # the race detector is part of the bar
 # Single package / single test
 go test ./gateway/ -run TestName
 
-# Swift app (run from app/)
-cd app && swift build && swift test
+# Desktop app (run from desktop/)
+cd desktop && go build ./... && go vet ./...
+cd frontend && npm run build && npm run check   # frontend build + svelte-check
 ```
 
 All four — `gofmt -l` clean, `go vet`, `go build`, `go test -race` — must pass
@@ -62,7 +65,7 @@ before a PR can merge. CI enforces them (`.github/workflows/ci.yml`).
 Use [Conventional Commits](https://www.conventionalcommits.org/):
 `feat(scope): …`, `fix(scope): …`, `refactor(scope): …`, `docs: …`, `test: …`,
 `chore: …`. Scope is usually a package (`gateway`, `router`, `agent`, `config`,
-`app`). Keep the subject in the imperative mood.
+`desktop`). Keep the subject in the imperative mood.
 
 ## Pull requests
 
@@ -70,7 +73,7 @@ Use [Conventional Commits](https://www.conventionalcommits.org/):
 2. Keep PRs focused; one logical change per PR.
 3. Fill out the PR template checklist.
 4. If you touch the control-bus contract, update `proto/README.md` **and** both
-   sides (core + app) in the same PR — they version in lockstep.
+   sides (core + desktop) in the same PR — they version in lockstep.
 5. Add or update tests for behavior changes. Security- and protocol-critical
    code (crypto, wire parsing, prompt-safety, SSRF validation) should get
    adversarial / error-path tests, not just happy-path.

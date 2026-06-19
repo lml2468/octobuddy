@@ -49,12 +49,17 @@ operator's GUI from the agent's CLI. A second layer closes that gap:
   authenticate no one, so every privileged command is denied (fail closed).
 
   - **Privileged (require auth):** `session.send`, `session.reset`,
-    `secret.inject`, `cron.create`, `cron.delete`, and the broadcast **event
-    stream** (it carries every session's live activity — cross-session
-    disclosure). These are operator/GUI→daemon operations with no sanctioned agent
-    path.
-  - **Open (no auth):** `health`, `bots.list`, `session.history`, `cron.list` —
-    read-only/health surface that leaks nothing an agent's own bot can't see.
+    `session.history`, `sessions.list`, `usage.stats`, `secret.inject`,
+    `cron.create`, `cron.list`, `cron.delete`, and the broadcast **event stream**
+    (it carries every session's live activity — cross-session disclosure). These
+    are operator/GUI→daemon operations with no sanctioned agent path. Note in
+    particular that `session.history`, `sessions.list`, and `cron.list` are
+    privileged: their handlers take an attacker-influenceable `botId`/`sessionKey`
+    and apply no per-session scoping, so an injected same-uid agent could
+    otherwise read any session's history or enumerate the owner's scheduled
+    prompts. They are the static twin of the event-stream broadcast gate.
+  - **Open (no auth):** `health`, `bots.list` — low-value liveness/roster metadata
+    only.
 
 A body field is **never** an authorization claim (see the cron owner-gate below);
 authorization is the peer-cred uid + the capability token, never client-asserted
@@ -87,9 +92,11 @@ multi-bot (config) mode; it is ignored in single-bot mode.
 | `bots.list` | — | `[{id, connected, lastError}]` |
 | `health` | — | `{uptime, driver, bots, connections}` |
 | `session.send` | `{botId?, uid, text}` | `{ok}` (turn streamed via events) |
-| `session.history` | `{botId?, sessionKey, limit}` | `[{role, content, ts}]` |
+| `session.history` | `{botId?, sessionKey, limit}` | `{botId, key, messages: [{role, content, ts}]}` (echoes botId+key so the client routes rows to the right session even if the user switched mid-fetch) |
+| `sessions.list` | `{botId?}` | `{botId, sessions: [{key, channelType, updatedAt, preview, lastRole}]}` |
+| `usage.stats` | `{botId?, since?}` | `{inputTokens, outputTokens, cachedInputTokens, cacheCreationInputTokens, costUsd, turns}` (cumulative; `since` is a Unix-seconds lower bound, omitted = all time) |
 | `session.reset` | `{botId?, uid}` | `{ok}` (clears the resume mapping) |
-| `secret.inject` | `{botId?, kind, value}` | `{ok}` (held in memory; never persisted) |
+| `secret.inject` | `{botId?, kind, value, clear?}` | `{ok}` (held in memory; never persisted. `clear:true` removes the token for `kind`; otherwise an empty `value` is ignored so seeding can't clobber an injected token) |
 | `cron.create` | `{botId?, schedule, prompt, recurring?, channelId?, channelType?, fromName?}` (`uid` accepted but ignored — authz + DM binding use the resolved owner) | `{id, schedule, recurring, prompt, nextRun, enabled}` |
 | `cron.list` | `{botId?}` | `[{id, schedule, recurring, prompt, nextRun, enabled}]` |
 | `cron.delete` | `{botId?, id}` (`uid` accepted but ignored for authz) | `{ok}` |

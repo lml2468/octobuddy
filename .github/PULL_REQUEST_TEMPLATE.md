@@ -7,7 +7,7 @@
 ## Which piece(s)
 
 - [ ] `core/` (Go daemon `xclawd`)
-- [ ] `app/` (Swift macOS app)
+- [ ] `desktop/` (Go + Wails v3 + Svelte app)
 - [ ] `proto/` (control-bus contract)
 - [ ] docs / CI / tooling
 
@@ -15,8 +15,8 @@
 
 - [ ] `cd core && gofmt -l .` reports nothing, and `go vet ./...` passes
 - [ ] `cd core && go test -race ./...` passes
-- [ ] Swift changes: `cd app && swift build && swift test` pass
-- [ ] Touched the control-bus contract? Updated `proto/README.md` **and** both sides (core + app)
+- [ ] Desktop changes: `cd desktop && go build ./... && go vet ./...` pass, and `cd frontend && npm run check` passes
+- [ ] Touched the control-bus contract? Updated `proto/README.md` **and** both sides (core + desktop)
 - [ ] Touched the gateway/router/store? Preserved the documented invariants in `CLAUDE.md` (sessionKey derivation, per-session lock ordering, group-context delta-before-cache)
 - [ ] New code carries comments in English
 

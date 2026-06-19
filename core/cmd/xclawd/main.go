@@ -7,7 +7,7 @@
 //	xclawd -control /tmp/xclaw.sock    # serve the control bus (for the GUI app)
 //
 // With -control it listens on a Unix socket speaking the proto/ NDJSON protocol
-// so the Swift macOS app (or any client) can send commands and receive the live
+// so the desktop app (or any client) can send commands and receive the live
 // event stream. The REPL and the control bus can run together.
 //
 // Each inbound becomes a DM; the gateway routes it (per-session lock, rate

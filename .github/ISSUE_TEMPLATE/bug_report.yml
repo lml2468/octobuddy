@@ -1,5 +1,5 @@
 name: Bug report
-description: Report a defect in xclawd (core), the macOS app, or the control bus.
+description: Report a defect in xclawd (core), the desktop app, or the control bus.
 labels: [bug]
 body:
   - type: dropdown
@@ -8,7 +8,7 @@ body:
       label: Which piece?
       options:
         - core (Go daemon xclawd)
-        - app (Swift macOS app)
+        - desktop (Go + Wails v3 + Svelte app)
         - proto (control-bus contract)
         - build / packaging / CI
         - not sure

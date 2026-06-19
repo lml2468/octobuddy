@@ -37,7 +37,7 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /tmp/xclawd ./cmd/xclawd  # cr
 # Desktop app (Wails v3 — needs the wails3 CLI:
 #   go install github.com/wailsapp/wails/v3/cmd/wails3@latest)
 cd desktop && go build ./... && go vet ./...
-cd desktop/frontend && npm run build && npx svelte-check   # frontend build + typecheck
+cd desktop/frontend && npm run build && npm run check   # frontend build + typecheck (svelte-check)
 zsh scripts/run-dev.sh                     # build core + `wails3 dev` (needs ~/.xclaw/config.json)
 zsh scripts/run-dev.sh --seed-config       # write a starter config first
 zsh scripts/run-dev.sh --preview           # UI preview: mock data, no daemon (XCLAW_PREVIEW)

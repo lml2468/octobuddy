@@ -11,8 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `LICENSE` (MIT), `CONTRIBUTING.md`, `SECURITY.md`, `CODE_OF_CONDUCT.md`, and
   this changelog — open-source baseline.
 - GitHub Actions CI: Go build/vet/`gofmt`-gate/`test -race`, zero-cgo
-  cross-compile matrix (darwin/linux/windows), and Swift build/test. Plus PR and
-  issue templates.
+  cross-compile matrix (darwin/linux/windows), and the desktop (Wails) Go build +
+  frontend `svelte-check`. Plus PR and issue templates.
 - Runtime secret injection (`secret.inject` control command, previously specced
   but unimplemented): the core now holds bot tokens in an in-memory store and
   resolves them lazily (per REST request / per turn), so tokens can be injected
@@ -28,6 +28,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   deployments.
 
 ### Changed
+- **Desktop app rewritten from Swift to Go + Wails v3** (Svelte 5 + TypeScript
+  frontend) under `desktop/`; the old SwiftPM `app/` is gone. The Go backend
+  reuses the wire contract directly and the UI is a clean WeChat/iMessage-grade
+  chat surface — the earlier Tahoe / Liquid-Glass and watercolor directions
+  (described in the entries below) were both tried and rejected. Older
+  Swift/Liquid-Glass entries in this section are retained as historical record.
 - Formatted the entire `core/` tree with `gofmt`.
 - Converted mixed-language code comments to English.
 - macOS app UI redesigned to Tahoe / Liquid-Glass conventions: a unified window
