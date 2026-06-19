@@ -23,6 +23,9 @@ import * as configstore$0 from "./internal/configstore/models.js";
 import * as control$0 from "./internal/control/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
+import * as octoapi$0 from "./internal/octoapi/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
 import * as skills$0 from "./internal/skills/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
@@ -201,6 +204,19 @@ export function LoadConfig(): $CancellablePromise<configstore$0.BotConfig[]> {
 }
 
 /**
+ * OctoAddBot provisions a new bot on octo-server using the operator's User API
+ * Key (uk_…), returning the bot's robot id + bf_ token. The wizard then folds
+ * these into a BotConfig and calls SaveConfig — so the token reaches the
+ * keychain (never config.json) by the existing path. Self-service replacement
+ * for the manual BotFather /newbot flow.
+ */
+export function OctoAddBot(apiURL: string, apiKey: string, name: string): $CancellablePromise<octoapi$0.BotResult> {
+    return $Call.ByID(1338554973, apiURL, apiKey, name).then(($result: any) => {
+        return $$createType7($result);
+    });
+}
+
+/**
  * Reset clears a session's resume mapping (start fresh).
  */
 export function Reset(botID: string, uid: string): $CancellablePromise<void> {
@@ -346,7 +362,7 @@ export function WorkflowsList(): $CancellablePromise<workflows$0.Info[]> {
  */
 export function WorkspaceFile(botID: string, sessionKey: string, relPath: string): $CancellablePromise<workspace$0.FileContent> {
     return $Call.ByID(2447146625, botID, sessionKey, relPath).then(($result: any) => {
-        return $$createType7($result);
+        return $$createType8($result);
     });
 }
 
@@ -356,7 +372,7 @@ export function WorkspaceFile(botID: string, sessionKey: string, relPath: string
  */
 export function WorkspaceTree(botID: string, sessionKey: string): $CancellablePromise<workspace$0.Node | null> {
     return $Call.ByID(710539635, botID, sessionKey).then(($result: any) => {
-        return $$createType9($result);
+        return $$createType10($result);
     });
 }
 
@@ -368,6 +384,7 @@ const $$createType3 = workflows$0.Info.createFrom;
 const $$createType4 = $Create.Array($$createType3);
 const $$createType5 = configstore$0.BotConfig.createFrom;
 const $$createType6 = $Create.Array($$createType5);
-const $$createType7 = workspace$0.FileContent.createFrom;
-const $$createType8 = workspace$0.Node.createFrom;
-const $$createType9 = $Create.Nullable($$createType8);
+const $$createType7 = octoapi$0.BotResult.createFrom;
+const $$createType8 = workspace$0.FileContent.createFrom;
+const $$createType9 = workspace$0.Node.createFrom;
+const $$createType10 = $Create.Nullable($$createType9);

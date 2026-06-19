@@ -83,10 +83,19 @@ func main() {
 	// any injected gateway token lazily per turn.
 	sec := &secretStore{}
 	drv.EnvFn = func() []string {
+		var out []string
 		if t := sec.GatewayToken(); t != "" {
-			return []string{"ANTHROPIC_AUTH_TOKEN=" + t}
+			out = append(out, "ANTHROPIC_AUTH_TOKEN="+t)
 		}
-		return nil
+		// octo-cli companion credential: the agent's octo-cli reads these from
+		// the env (no on-disk profile). Mirrors DriverEnvForOcto in -config mode.
+		if t := sec.OctoToken(); t != "" {
+			out = append(out, "OCTO_BOT_TOKEN="+t)
+		}
+		if *octoAPI != "" {
+			out = append(out, "OCTO_API_BASE_URL="+*octoAPI)
+		}
+		return out
 	}
 
 	// Sinks fan out: stdout always, control bus + Octo connector when enabled.

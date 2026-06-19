@@ -15,6 +15,7 @@ import (
 	"github.com/lml2468/xclaw/desktop/internal/configstore"
 	"github.com/lml2468/xclaw/desktop/internal/control"
 	"github.com/lml2468/xclaw/desktop/internal/core"
+	"github.com/lml2468/xclaw/desktop/internal/octoapi"
 	"github.com/lml2468/xclaw/desktop/internal/secrets"
 	"github.com/lml2468/xclaw/desktop/internal/skills"
 	"github.com/lml2468/xclaw/desktop/internal/workflows"
@@ -310,6 +311,15 @@ func (x *XClawService) LoadConfig() ([]configstore.BotConfig, error) {
 // follows with RestartCore to apply.
 func (x *XClawService) SaveConfig(bots []configstore.BotConfig, removedIDs []string) error {
 	return configstore.Save(bots, removedIDs)
+}
+
+// OctoAddBot provisions a new bot on octo-server using the operator's User API
+// Key (uk_…), returning the bot's robot id + bf_ token. The wizard then folds
+// these into a BotConfig and calls SaveConfig — so the token reaches the
+// keychain (never config.json) by the existing path. Self-service replacement
+// for the manual BotFather /newbot flow.
+func (x *XClawService) OctoAddBot(apiURL, apiKey, name string) (octoapi.BotResult, error) {
+	return octoapi.AddBot(context.Background(), apiURL, apiKey, name)
 }
 
 // --- skills: global marketplace catalog (~/.xclaw/skills) ---

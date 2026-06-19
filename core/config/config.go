@@ -464,6 +464,21 @@ func (r Resolved) DriverEnv() []string {
 // boundary. This is the accepted tradeoff documented in SECURITY.md — the
 // agent CLI takes its credentials via env, and the daemon runs as the operator.
 func (r Resolved) DriverEnvWith(gatewayToken string) []string {
+	return r.DriverEnvForOcto(gatewayToken, "")
+}
+
+// DriverEnvForOcto is DriverEnvWith plus the octo-cli companion credential,
+// supplied explicitly so the caller can pass the runtime-injected bot token
+// (from the in-memory secret store) rather than a config-file value.
+//
+// The spawned agent calls the octo-cli companion over Bash; with no on-disk
+// credential profile, octo-cli's EnvProvider reads OCTO_BOT_TOKEN +
+// OCTO_API_BASE_URL from the process env. The bot's octoToken IS the bf_ token
+// octo-cli wants, and the bot's apiUrl is the base URL — so injecting these two
+// is what makes the agent's octo-cli authenticated (no manual `auth login`).
+// Both are omitted when empty; the same exec-boundary security note as
+// DriverEnvWith applies (octo-cli takes its credential via env by design).
+func (r Resolved) DriverEnvForOcto(gatewayToken, octoToken string) []string {
 	var out []string
 	for k, v := range r.Agent.Env {
 		out = append(out, k+"="+v)
@@ -473,6 +488,14 @@ func (r Resolved) DriverEnvWith(gatewayToken string) []string {
 	}
 	if gatewayToken != "" {
 		out = append(out, "ANTHROPIC_AUTH_TOKEN="+gatewayToken)
+	}
+	// octo-cli companion credential (appended last so it wins over any same-named
+	// agent.env entry, mirroring the gateway vars above).
+	if octoToken != "" {
+		out = append(out, "OCTO_BOT_TOKEN="+octoToken)
+	}
+	if r.APIURL != "" {
+		out = append(out, "OCTO_API_BASE_URL="+r.APIURL)
 	}
 	// Isolate the agent's config root from the operator's ~/.claude (user-scope
 	// skills + installed plugins) unless explicitly told to inherit it. Auth is

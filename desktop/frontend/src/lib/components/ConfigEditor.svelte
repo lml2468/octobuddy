@@ -74,6 +74,46 @@
     sel = bots.length - 1;
   }
 
+  // --- Add-bot wizard: provision a bot on octo-server in one click ---
+  let wizardOpen = $state(false);
+  let wizApiUrl = $state("");
+  let wizApiKey = $state("");
+  let wizName = $state("");
+  let wizBusy = $state(false);
+  let wizError = $state("");
+
+  function openWizard() {
+    wizApiUrl = bots[0]?.apiUrl && bots[0].apiUrl !== "https://" ? bots[0].apiUrl : "";
+    wizApiKey = ""; wizName = ""; wizError = "";
+    wizardOpen = true;
+  }
+
+  // Manual fallback: the old empty-bot path for operators who already hold a token.
+  function manualAdd() {
+    wizardOpen = false;
+    addBot();
+    dirty = true;
+  }
+
+  async function createBot() {
+    wizError = ""; wizBusy = true;
+    try {
+      const r = await XClawService.OctoAddBot(wizApiUrl.trim(), wizApiKey.trim(), wizName.trim());
+      // Fold the provisioned identity into a new editor row; the operator can
+      // then fill SOUL/AGENTS/model and 保存并重启 (SaveConfig stores the bf_
+      // token in the keychain, never config.json).
+      const b = new BotConfig({ id: r.robotId, apiUrl: wizApiUrl.trim(), octoToken: r.botToken });
+      bots = [...bots, b];
+      sel = bots.length - 1;
+      dirty = true;
+      wizardOpen = false;
+    } catch (e: any) {
+      wizError = String(e?.message ?? e);
+    } finally {
+      wizBusy = false;
+    }
+  }
+
   function removeBot(i: number) {
     bots = bots.filter((_, idx) => idx !== i);
     sel = Math.max(0, Math.min(sel, bots.length - 1));
@@ -121,7 +161,7 @@
             <span class="bdot" class:on={store.bots.find((x) => x.id === b.id)?.connected}></span>
           </button>
         {/each}
-        <button class="add" onclick={addBot}>+ 新增 Bot</button>
+        <button class="add" onclick={openWizard}>+ 新增 Bot</button>
       </div>
 
       {#if current}
@@ -176,6 +216,34 @@
     {#if pendingLeave}
       <Confirm message="有未保存的改动,确认离开?" confirmLabel="离开" onresult={resolveLeave} />
     {/if}
+
+    {#if wizardOpen}
+      <!-- svelte-ignore a11y_click_events_have_key_events (use:modal handles Escape/Tab) -->
+      <div class="wizscrim" onclick={() => !wizBusy && (wizardOpen = false)} role="presentation">
+        <div class="wizcard" use:modal={{ onclose: () => !wizBusy && (wizardOpen = false) }} onclick={(e) => e.stopPropagation()} role="dialog" aria-label="新增 Bot" tabindex="-1">
+          <div class="wizhead">
+            <h3>新增 Bot</h3>
+            <button class="x" onclick={() => !wizBusy && (wizardOpen = false)} aria-label="关闭">✕</button>
+          </div>
+          <p class="wizsub">用你的 octo API Key(uk_…)一键在服务器创建 Bot,自动获取并保存 Token。</p>
+          <div class="wizform">
+            <label>API URL <input bind:value={wizApiUrl} placeholder="https://im.deepminer.com.cn/api" /></label>
+            <label>API Key
+              <input type="password" bind:value={wizApiKey} placeholder="uk_…" autocomplete="off" />
+              <small>仅用于本次创建,不会被保存。</small>
+            </label>
+            <label>Bot 名称 <input bind:value={wizName} placeholder="My Bot" /></label>
+          </div>
+          {#if wizError}<div class="wizerr">⚠️ {wizError}</div>{/if}
+          <div class="wizbtns">
+            <button class="link" onclick={manualAdd} disabled={wizBusy}>手动添加(已有 Token)</button>
+            <span class="spacer"></span>
+            <button onclick={() => (wizardOpen = false)} disabled={wizBusy}>取消</button>
+            <button class="primary" onclick={createBot} disabled={wizBusy}>{wizBusy ? "创建中…" : "创建"}</button>
+          </div>
+        </div>
+      </div>
+    {/if}
   </div>
 </div>
 
@@ -227,4 +295,24 @@
   .remove:hover { background: color-mix(in srgb, var(--danger) 10%, transparent); }
   .err { color: var(--danger); font-size: 12px; }
   .ok { color: #5aa873; font-size: 12px; }
+
+  /* Add-bot wizard overlay (sibling to the unsaved-changes confirm) */
+  .wizscrim { position: absolute; inset: 0; z-index: 60; background: color-mix(in srgb, #000 38%, transparent); display: flex; align-items: center; justify-content: center; }
+  .wizcard { width: min(440px, 92%); background: var(--surface); border: 1px solid var(--hairline); border-radius: 14px; box-shadow: 0 18px 50px color-mix(in srgb, #000 38%, transparent); padding: 18px 20px; display: flex; flex-direction: column; gap: 14px; }
+  .wizhead { display: flex; align-items: center; }
+  .wizhead h3 { margin: 0; font-size: 15px; font-weight: 650; color: var(--ink); flex: 1; }
+  .wizhead .x { width: 26px; height: 26px; border-radius: 8px; border: none; background: transparent; color: var(--ink-soft); font-size: 14px; }
+  .wizhead .x:hover { background: color-mix(in srgb, var(--ink) 8%, transparent); }
+  .wizsub { margin: 0; font-size: 12px; color: var(--ink-faint); line-height: 1.5; }
+  .wizform { display: flex; flex-direction: column; gap: 12px; }
+  .wizerr { color: var(--danger); font-size: 12px; }
+  .wizbtns { display: flex; align-items: center; gap: 10px; }
+  .wizbtns .spacer { flex: 1; }
+  .wizbtns button { padding: 8px 16px; border-radius: 10px; border: 1px solid var(--hairline); background: color-mix(in srgb, var(--ink) 4%, var(--surface)); color: var(--ink); font-weight: 550; }
+  .wizbtns button:hover { background: color-mix(in srgb, var(--ink) 8%, var(--surface)); }
+  .wizbtns button:disabled { opacity: .5; cursor: default; }
+  .wizbtns .link { border: none; background: transparent; color: var(--ink-soft); font-weight: 500; font-size: 12px; padding: 8px 4px; }
+  .wizbtns .link:hover { background: transparent; color: var(--accent-strong, var(--accent)); text-decoration: underline; }
+  .wizbtns .primary { background: linear-gradient(135deg, var(--grad-a), var(--grad-b)); color: #fff; border: none; box-shadow: 0 4px 14px color-mix(in srgb, var(--grad-a) 45%, transparent); }
+  .wizbtns button:focus-visible, .wizhead .x:focus-visible { outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent); }
 </style>

@@ -243,7 +243,7 @@ func runBot(ctx context.Context, cfg config.Resolved, reg *botRegistry, srv *con
 	// another (Codex, …) additive to the gateway.
 	drv := agent.NewClaudeDriver("")
 	// Resolve the gateway token lazily per turn so an injected token takes effect.
-	drv.EnvFn = func() []string { return cfg.DriverEnvWith(sec.GatewayToken()) }
+	drv.EnvFn = func() []string { return cfg.DriverEnvForOcto(sec.GatewayToken(), sec.OctoToken()) }
 
 	if cfg.APIURL == "" {
 		return fmt.Errorf("bot %s: config mode requires apiUrl", cfg.BotID)
