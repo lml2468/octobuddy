@@ -6,12 +6,22 @@
 
   let { onclose, onedit, onusage, onworkflows }: { onclose: () => void; onedit?: () => void; onusage?: () => void; onworkflows?: () => void } = $props();
 
-  type SkillInfo = { name: string; description: string; files: number; installed: boolean };
+  type SkillInfo = { name: string; description: string; files: number; installed: boolean; broken?: boolean };
 
   const isPreview = new URLSearchParams(location.search).has("preview");
 
   // The bot whose skills we manage. Defaults to the selected bot; a picker switches.
   let botId = $state<string | null>(store.selectedBotId ?? store.bots[0]?.id ?? null);
+
+  // If the panel opened before the bot roster loaded (botId null), adopt the
+  // first bot once it arrives, then load its skills — without clobbering an
+  // explicit picker choice.
+  $effect(() => {
+    if (botId == null && store.bots.length) {
+      botId = store.selectedBotId ?? store.bots[0].id;
+      if (isPreview) loadBotPreview(); else loadBot();
+    }
+  });
 
   let botSkills = $state<SkillInfo[]>([]); // this bot's own + installed skills
   let catalog = $state<SkillInfo[]>([]);   // global marketplace catalog
@@ -214,9 +224,9 @@
         <div class="sectlbl">本 Bot 技能</div>
         {#each botSkills as s (s.name)}
           <div class="row" class:sel={s.name === sel}>
-            <button class="rowmain" onclick={() => selectSkill(s.name)}>
-              <span class="nm">{s.name}{#if s.installed}<span class="badge">已安装</span>{:else}<span class="badge own">自有</span>{/if}</span>
-              <span class="ds">{s.description || "无描述"}</span>
+            <button class="rowmain" onclick={() => (s.broken ? null : selectSkill(s.name))} disabled={s.broken}>
+              <span class="nm">{s.name}{#if s.broken}<span class="badge broken">失效</span>{:else if s.installed}<span class="badge">已安装</span>{:else}<span class="badge own">自有</span>{/if}</span>
+              <span class="ds">{s.broken ? "市场来源已删除,卸载以清理" : (s.description || "无描述")}</span>
             </button>
             <button class="del" title={s.installed ? "卸载" : "删除"} onclick={() => removeBotSkill(s)}>−</button>
           </div>
@@ -323,6 +333,8 @@
   .nm { font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
   .badge { font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 6px; background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent-strong, var(--accent)); }
   .badge.own { background: color-mix(in srgb, var(--ink) 10%, transparent); color: var(--ink-soft); }
+  .badge.broken { background: color-mix(in srgb, var(--danger) 16%, transparent); color: var(--danger); }
+  .rowmain:disabled { cursor: default; opacity: .7; }
   .ds { font-size: 11px; color: var(--ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .muted { color: var(--ink-faint); font-size: 12px; padding: 12px; }
   .muted.center { display: grid; place-items: center; height: 100%; }

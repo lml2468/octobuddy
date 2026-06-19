@@ -18,6 +18,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/lml2468/xclaw/desktop/internal/assetlib"
 	"github.com/lml2468/xclaw/desktop/internal/safepath"
 )
 
@@ -25,6 +26,12 @@ import (
 func Dir() string {
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".xclaw", "skills")
+}
+
+// xclawRoot is ~/.xclaw — the parent of both the catalog and the per-bot dirs.
+func xclawRoot() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".xclaw")
 }
 
 // botDir is ~/.xclaw/<botID>/skills — the bot's own skills dir, the single source
@@ -68,15 +75,20 @@ func resolveInSkill(root, name, rel string) (string, error) {
 
 // SkillInfo summarizes a skill for the list view. Installed marks a per-bot entry
 // that is a symlink into the marketplace catalog (vs. a real per-bot bundle).
+// Broken marks an installed symlink whose catalog target no longer resolves to a
+// directory (e.g. the marketplace entry was deleted) — surfaced so the UI can
+// show it and let the user uninstall the orphan.
 type SkillInfo struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	Files       int    `json:"files"`
 	Installed   bool   `json:"installed"`
+	Broken      bool   `json:"broken"`
 }
 
-// listIn returns every skill bundle directly under root (dirs, including symlinks
-// to dirs). markInstalled reports whether an entry is a symlink (installed).
+// listIn returns every skill bundle directly under root (real dirs + symlinks to
+// dirs). A symlink whose target no longer resolves to a directory is still
+// listed, flagged Broken, so a dangling install never silently vanishes.
 func listIn(root string) ([]SkillInfo, error) {
 	entries, err := os.ReadDir(root)
 	if err != nil {
@@ -91,12 +103,19 @@ func listIn(root string) ([]SkillInfo, error) {
 		if strings.HasPrefix(name, ".") {
 			continue
 		}
-		// Accept real dirs and symlinks (resolve symlinks to a dir).
-		info, err := os.Stat(filepath.Join(root, name))
-		if err != nil || !info.IsDir() {
+		isLink := e.Type()&os.ModeSymlink != 0
+		// os.Stat follows the symlink: ok+dir means a resolvable bundle.
+		info, statErr := os.Stat(filepath.Join(root, name))
+		resolvesToDir := statErr == nil && info.IsDir()
+		if !resolvesToDir {
+			// A non-symlink that isn't a dir (stray file) is not a skill — skip it.
+			// A symlink that doesn't resolve to a dir is a broken install — surface it.
+			if !isLink {
+				continue
+			}
+			out = append(out, SkillInfo{Name: name, Description: "(目标已失效)", Installed: true, Broken: true})
 			continue
 		}
-		isLink := e.Type()&os.ModeSymlink != 0
 		files, _ := filesIn(root, name)
 		out = append(out, SkillInfo{
 			Name:        name,
@@ -240,13 +259,19 @@ func DeleteFile(name, rel string) error { return deleteFileIn(Dir(), name, rel) 
 // Create scaffolds a new catalog skill with a starter SKILL.md.
 func Create(name string) error { return createIn(Dir(), name) }
 
-// Delete removes a catalog skill bundle entirely.
+// Delete removes a catalog skill bundle entirely, then prunes the now-dangling
+// install symlinks for it from every bot (a bot's own same-named bundle is left
+// untouched — Prune only removes symlinks).
 func Delete(name string) error {
 	dir, err := skillDirIn(Dir(), name)
 	if err != nil {
 		return err
 	}
-	return os.RemoveAll(dir)
+	if err := os.RemoveAll(dir); err != nil {
+		return err
+	}
+	assetlib.PruneInstallsAcrossBots(xclawRoot(), "skills", name, "skills", "workflows", "bin")
+	return nil
 }
 
 // ---- Per-bot skills (~/.xclaw/<id>/skills) ----
@@ -340,8 +365,7 @@ func BotDelete(botID, name string) error {
 }
 
 // Install symlinks a catalog skill into the bot's dir, making it available to the
-// agent on its next turn. Idempotent: a correct existing symlink is left as-is.
-// Refuses to overwrite a real (own) bundle of the same name.
+// agent on its next turn. Idempotent; refuses to overwrite a real (own) bundle.
 func Install(botID, name string) error {
 	if !safepath.ValidSlug(name) {
 		return fmt.Errorf("invalid skill name %q", name)
@@ -360,18 +384,7 @@ func Install(botID, name string) error {
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return err
 	}
-	dst := filepath.Join(root, name)
-	if info, err := os.Lstat(dst); err == nil {
-		if info.Mode()&os.ModeSymlink != 0 {
-			if cur, _ := os.Readlink(dst); cur == src {
-				return nil // already installed, correct target
-			}
-			_ = os.Remove(dst) // stale symlink → replace
-		} else {
-			return fmt.Errorf("a per-bot skill named %q already exists", name)
-		}
-	}
-	return os.Symlink(src, dst)
+	return assetlib.Install(src, filepath.Join(root, name), "skill")
 }
 
 // Uninstall removes an installed (symlinked) catalog skill from the bot's dir.
@@ -385,17 +398,7 @@ func Uninstall(botID, name string) error {
 	if err != nil {
 		return err
 	}
-	info, err := os.Lstat(dst)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil // already gone
-		}
-		return err
-	}
-	if info.Mode()&os.ModeSymlink == 0 {
-		return fmt.Errorf("skill %q is a per-bot bundle, not an installed skill — delete it instead", name)
-	}
-	return os.Remove(dst)
+	return assetlib.Uninstall(dst, "skill")
 }
 
 // isInstalled reports whether <root>/<name> is a symlink (an installed catalog
@@ -405,12 +408,5 @@ func isInstalled(root, name string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	info, err := os.Lstat(dir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return false, nil
-		}
-		return false, err
-	}
-	return info.Mode()&os.ModeSymlink != 0, nil
+	return assetlib.IsSymlink(dir)
 }

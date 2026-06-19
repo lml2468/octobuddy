@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/lml2468/xclaw/desktop/internal/assetlib"
 	"github.com/lml2468/xclaw/desktop/internal/safepath"
 )
 
@@ -24,6 +25,12 @@ import (
 func Dir() string {
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".xclaw", "workflows")
+}
+
+// xclawRoot is ~/.xclaw — the parent of both the catalog and the per-bot dirs.
+func xclawRoot() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".xclaw")
 }
 
 // botDir is ~/.xclaw/<botID>/workflows — the bot's own workflows dir, the single
@@ -54,15 +61,21 @@ func pathIn(root, name string) (string, error) {
 
 // Info summarizes a workflow for the list view. Installed marks a per-bot entry
 // that is a symlink into the marketplace catalog (vs. a real per-bot script).
+// Broken marks an installed symlink whose catalog target no longer resolves
+// (e.g. the marketplace entry was deleted) — surfaced so the UI can offer to
+// uninstall the orphan.
 type Info struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	Installed   bool   `json:"installed"`
+	Broken      bool   `json:"broken"`
 }
 
 var descRe = regexp.MustCompile(`description\s*:\s*["']([^"']+)["']`)
 
 // listIn returns every workflow (*.js) directly under root, including symlinks.
+// A symlink whose target no longer resolves is still listed, flagged Broken, so
+// a dangling install never silently vanishes.
 func listIn(root string) ([]Info, error) {
 	entries, err := os.ReadDir(root)
 	if err != nil {
@@ -77,15 +90,24 @@ func listIn(root string) ([]Info, error) {
 		if strings.HasPrefix(n, ".") || !strings.HasSuffix(n, ".js") {
 			continue
 		}
-		// Skip directories (only files / symlinks-to-files are workflows).
+		// A directory named *.js is not a workflow; skip it. (A symlink reports
+		// IsDir per its target, so a symlink-to-file passes here.)
 		if e.IsDir() {
 			continue
 		}
 		name := strings.TrimSuffix(n, ".js")
+		isLink := e.Type()&os.ModeSymlink != 0
+		if isLink {
+			// Surface a dangling install (target file gone) as Broken.
+			if _, err := os.Stat(filepath.Join(root, n)); err != nil {
+				out = append(out, Info{Name: name, Description: "(目标已失效)", Installed: true, Broken: true})
+				continue
+			}
+		}
 		out = append(out, Info{
 			Name:        name,
 			Description: descriptionIn(root, name),
-			Installed:   e.Type()&os.ModeSymlink != 0,
+			Installed:   isLink,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
@@ -158,14 +180,7 @@ func isInstalled(root, name string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	info, err := os.Lstat(p)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return false, nil
-		}
-		return false, err
-	}
-	return info.Mode()&os.ModeSymlink != 0, nil
+	return assetlib.IsSymlink(p)
 }
 
 // ---- Global marketplace catalog (~/.xclaw/workflows) ----
@@ -182,13 +197,19 @@ func Write(name, content string) error { return writeIn(Dir(), name, content) }
 // Create scaffolds a new catalog workflow with a starter script.
 func Create(name string) error { return createIn(Dir(), name) }
 
-// Delete removes a catalog workflow script.
+// Delete removes a catalog workflow script, then prunes the now-dangling install
+// symlinks for it from every bot (a bot's own same-named script is left untouched
+// — Prune only removes symlinks).
 func Delete(name string) error {
 	p, err := pathIn(Dir(), name)
 	if err != nil {
 		return err
 	}
-	return os.Remove(p)
+	if err := os.Remove(p); err != nil {
+		return err
+	}
+	assetlib.PruneInstallsAcrossBots(xclawRoot(), "workflows", name+".js", "skills", "workflows", "bin")
+	return nil
 }
 
 // ---- Per-bot workflows (~/.xclaw/<id>/workflows) ----
@@ -271,18 +292,7 @@ func Install(botID, name string) error {
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return err
 	}
-	dst := filepath.Join(root, name+".js")
-	if info, err := os.Lstat(dst); err == nil {
-		if info.Mode()&os.ModeSymlink != 0 {
-			if cur, _ := os.Readlink(dst); cur == src {
-				return nil // already installed
-			}
-			_ = os.Remove(dst)
-		} else {
-			return fmt.Errorf("a per-bot workflow named %q already exists", name)
-		}
-	}
-	return os.Symlink(src, dst)
+	return assetlib.Install(src, filepath.Join(root, name+".js"), "workflow")
 }
 
 // Uninstall removes an installed (symlinked) catalog workflow from the bot's dir.
@@ -296,15 +306,5 @@ func Uninstall(botID, name string) error {
 	if err != nil {
 		return err
 	}
-	info, err := os.Lstat(p)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-	if info.Mode()&os.ModeSymlink == 0 {
-		return fmt.Errorf("workflow %q is a per-bot script, not an installed workflow — delete it instead", name)
-	}
-	return os.Remove(p)
+	return assetlib.Uninstall(p, "workflow")
 }

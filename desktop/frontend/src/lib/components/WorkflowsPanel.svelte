@@ -6,10 +6,18 @@
 
   let { onclose, onedit, onskills, onusage }: { onclose: () => void; onedit?: () => void; onskills?: () => void; onusage?: () => void } = $props();
 
-  type WfInfo = { name: string; description: string; installed: boolean };
+  type WfInfo = { name: string; description: string; installed: boolean; broken?: boolean };
   const isPreview = new URLSearchParams(location.search).has("preview");
 
   let botId = $state<string | null>(store.selectedBotId ?? store.bots[0]?.id ?? null);
+
+  // Adopt the first bot once the roster loads, if the panel opened before it did.
+  $effect(() => {
+    if (botId == null && store.bots.length) {
+      botId = store.selectedBotId ?? store.bots[0].id;
+      if (isPreview) loadBotPreview(); else loadBot();
+    }
+  });
 
   let botWfs = $state<WfInfo[]>([]); // this bot's own + installed workflows
   let catalog = $state<WfInfo[]>([]); // global marketplace catalog
@@ -165,9 +173,9 @@
           <div class="sectlbl">本 Bot 工作流</div>
           {#each botWfs as w (w.name)}
             <div class="row" class:sel={w.name === sel}>
-              <button class="rowmain" onclick={() => select(w.name)}>
-                <span class="nm">{w.name}{#if w.installed}<span class="badge">已安装</span>{:else}<span class="badge own">自有</span>{/if}</span>
-                <span class="ds">{w.description || "暂无描述"}</span>
+              <button class="rowmain" onclick={() => (w.broken ? null : select(w.name))} disabled={w.broken}>
+                <span class="nm">{w.name}{#if w.broken}<span class="badge broken">失效</span>{:else if w.installed}<span class="badge">已安装</span>{:else}<span class="badge own">自有</span>{/if}</span>
+                <span class="ds">{w.broken ? "市场来源已删除,卸载以清理" : (w.description || "暂无描述")}</span>
               </button>
               <button class="del" title={w.installed ? "卸载" : "删除"} onclick={() => removeBotWf(w)}>−</button>
             </div>
@@ -246,6 +254,8 @@
   .nm { font-size: 13px; font-weight: 600; font-family: var(--mono); display: flex; align-items: center; gap: 6px; }
   .badge { font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 6px; background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent-strong, var(--accent)); font-family: var(--ui); }
   .badge.own { background: color-mix(in srgb, var(--ink) 10%, transparent); color: var(--ink-soft); }
+  .badge.broken { background: color-mix(in srgb, var(--danger) 16%, transparent); color: var(--danger); }
+  .rowmain:disabled { cursor: default; opacity: .7; }
   .ds { font-size: 11px; color: var(--ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .del { width: 24px; height: 24px; flex: 0 0 auto; border: none; background: transparent; color: var(--ink-faint); font-size: 15px; }
   .del:hover { color: var(--danger); }

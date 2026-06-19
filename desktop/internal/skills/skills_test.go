@@ -149,3 +149,55 @@ func botPath(t *testing.T, id string) string {
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".xclaw", id, "skills")
 }
+
+// Deleting a catalog skill must prune the install symlinks in every bot, but
+// leave a bot's own same-named bundle alone; the orphan must never silently
+// linger (regression: code review findings 1 & 2).
+func TestCatalogDeletePrunesInstalls(t *testing.T) {
+	setup(t)
+	_ = Create("shared")
+	if err := Install("bot1", "shared"); err != nil { // bot1 installs it (symlink)
+		t.Fatal(err)
+	}
+	if err := BotCreate("bot2", "shared"); err != nil { // bot2 has its OWN same-named bundle
+		t.Fatal(err)
+	}
+
+	if err := Delete("shared"); err != nil { // delete from the catalog
+		t.Fatal(err)
+	}
+
+	// bot1's install symlink is pruned.
+	if _, err := os.Lstat(filepath.Join(botPath(t, "bot1"), "shared")); !os.IsNotExist(err) {
+		t.Error("bot1 install symlink should be pruned when the catalog entry is deleted")
+	}
+	// bot2's own bundle survives.
+	if _, err := os.Stat(filepath.Join(botPath(t, "bot2"), "shared", "SKILL.md")); err != nil {
+		t.Error("bot2's own bundle must survive a catalog delete")
+	}
+}
+
+// A dangling install symlink (catalog target gone) must still appear in BotList,
+// flagged Broken, so the user can uninstall it (regression: finding 2).
+func TestBrokenInstallSurfaced(t *testing.T) {
+	setup(t)
+	_ = Create("ghost")
+	if err := Install("bot1", "ghost"); err != nil {
+		t.Fatal(err)
+	}
+	// Remove the catalog target directly, leaving the per-bot symlink dangling.
+	if err := os.RemoveAll(filepath.Join(Dir(), "ghost")); err != nil {
+		t.Fatal(err)
+	}
+	list, err := BotList("bot1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 || list[0].Name != "ghost" || !list[0].Broken || !list[0].Installed {
+		t.Fatalf("broken install should be surfaced: %+v", list)
+	}
+	// And it must be uninstallable (it's a symlink).
+	if err := Uninstall("bot1", "ghost"); err != nil {
+		t.Errorf("broken install should be uninstallable: %v", err)
+	}
+}
