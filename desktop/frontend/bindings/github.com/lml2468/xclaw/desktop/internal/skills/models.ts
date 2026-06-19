@@ -6,12 +6,14 @@
 import { Create as $Create } from "@wailsio/runtime";
 
 /**
- * SkillInfo summarizes a skill for the list view.
+ * SkillInfo summarizes a skill for the list view. Installed marks a per-bot entry
+ * that is a symlink into the marketplace catalog (vs. a real per-bot bundle).
  */
 export class SkillInfo {
     "name": string;
     "description": string;
     "files": number;
+    "installed": boolean;
 
     /** Creates a new SkillInfo instance. */
     constructor($$source: Partial<SkillInfo> = {}) {
@@ -23,6 +25,9 @@ export class SkillInfo {
         }
         if (!("files" in $$source)) {
             this["files"] = 0;
+        }
+        if (!("installed" in $$source)) {
+            this["installed"] = false;
         }
 
         Object.assign(this, $$source);

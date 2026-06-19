@@ -6,11 +6,13 @@
 import { Create as $Create } from "@wailsio/runtime";
 
 /**
- * Info summarizes a workflow for the list view.
+ * Info summarizes a workflow for the list view. Installed marks a per-bot entry
+ * that is a symlink into the marketplace catalog (vs. a real per-bot script).
  */
 export class Info {
     "name": string;
     "description": string;
+    "installed": boolean;
 
     /** Creates a new Info instance. */
     constructor($$source: Partial<Info> = {}) {
@@ -19,6 +21,9 @@ export class Info {
         }
         if (!("description" in $$source)) {
             this["description"] = "";
+        }
+        if (!("installed" in $$source)) {
+            this["installed"] = false;
         }
 
         Object.assign(this, $$source);

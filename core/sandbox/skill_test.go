@@ -176,6 +176,47 @@ func TestLinkSkillsSkipsDotfiles(t *testing.T) {
 	}
 }
 
+// TestLinkSkillsPerBotMixedSymlinkAndReal models the marketplace-install design:
+// the per-bot dir (~/.xclaw/<id>/skills) is the SINGLE link source and holds two
+// kinds of entries — a symlink "installed" from the global catalog, and a real
+// dir the bot authored itself. Both must link into the sandbox, and the installed
+// one must resolve through the chain (sandbox link → per-bot symlink → catalog).
+func TestLinkSkillsPerBotMixedSymlinkAndReal(t *testing.T) {
+	base := t.TempDir()
+	catalog := filepath.Join(base, "skills")        // ~/.xclaw/skills (marketplace)
+	perBot := filepath.Join(base, "bot1", "skills") // ~/.xclaw/bot1/skills
+	if err := os.MkdirAll(perBot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Marketplace skill, "installed" into the per-bot dir as a symlink.
+	catSkill := mkSkill(t, catalog, "translator")
+	installed := filepath.Join(perBot, "translator")
+	if err := os.Symlink(catSkill, installed); err != nil {
+		t.Fatal(err)
+	}
+	// Bot's own real skill dir.
+	ownSkill := mkSkill(t, perBot, "mine")
+
+	sandboxDir := filepath.Join(base, "sbx")
+	if err := LinkSkillsIntoSandbox(sandboxDir, []SkillSource{{Dir: perBot}}); err != nil {
+		t.Fatal(err)
+	}
+	skillsRoot := filepath.Join(sandboxDir, ".claude", "skills")
+
+	// Both entries are linked; the sandbox links point at the per-bot entries.
+	if tgt, _ := os.Readlink(filepath.Join(skillsRoot, "translator")); tgt != installed {
+		t.Errorf("translator → %q, want per-bot symlink %q", tgt, installed)
+	}
+	if tgt, _ := os.Readlink(filepath.Join(skillsRoot, "mine")); tgt != ownSkill {
+		t.Errorf("mine → %q, want own dir %q", tgt, ownSkill)
+	}
+	// The installed skill resolves end-to-end through the symlink chain.
+	if b, err := os.ReadFile(filepath.Join(skillsRoot, "translator", "SKILL.md")); err != nil || string(b) != "x" {
+		t.Errorf("installed skill must resolve through chain: content=%q err=%v", b, err)
+	}
+}
+
 // mkWorkflow creates <root>/<name>.js so the dir entry looks like a workflow.
 func mkWorkflow(t *testing.T, root, name string) string {
 	t.Helper()
