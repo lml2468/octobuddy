@@ -39,6 +39,11 @@ func ResolveLexical(root, rel string) (string, error) {
 			return "", fmt.Errorf("path escapes root: %q", rel)
 		}
 	}
+	// Clean the root so the containment compare is consistent with `full` (which
+	// filepath.Join cleans) regardless of how the caller spelled the root — and so
+	// the path-separator is OS-native on Windows (filepath.Join uses backslashes
+	// there, which a raw forward-slash root would not prefix-match).
+	root = filepath.Clean(root)
 	full := filepath.Join(root, filepath.FromSlash(rel))
 	if full != root && !strings.HasPrefix(full, root+string(os.PathSeparator)) {
 		return "", fmt.Errorf("path escapes root: %q", rel)

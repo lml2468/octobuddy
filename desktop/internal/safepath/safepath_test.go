@@ -22,7 +22,7 @@ func TestValidSlug(t *testing.T) {
 }
 
 func TestResolveLexicalRejectsEscape(t *testing.T) {
-	root := "/tmp/root"
+	root := filepath.Join(t.TempDir(), "root")
 	bad := []string{"", "/abs", "../x", "a/../../b", "../../etc/passwd"}
 	for _, rel := range bad {
 		if _, err := ResolveLexical(root, rel); err == nil {
@@ -33,7 +33,7 @@ func TestResolveLexicalRejectsEscape(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveLexical clean path: %v", err)
 	}
-	if good != filepath.Join(root, "a/b/c.txt") {
+	if good != filepath.Join(root, "a", "b", "c.txt") {
 		t.Errorf("unexpected resolved path %q", good)
 	}
 }
