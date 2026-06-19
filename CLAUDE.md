@@ -95,16 +95,25 @@ Key invariants to preserve:
   (driver emits `AgentEvent.ResumeInvalid` — e.g. the session predates a
   config-dir change), the gateway swallows the doomed attempt, clears the
   mapping, and retries the turn fresh.
-- **Skills & workflows** (`core/sandbox/skill.go`, ported from `skill-linker.ts`):
-  each turn symlinks operator assets into the session sandbox's `.claude/` so the
-  agent CLI discovers them — `LinkSkillsIntoSandbox` (skill dirs → `.claude/skills/`)
-  and `LinkWorkflowsIntoSandbox` (`*.js` → `.claude/workflows/`) share one
-  collect/prune/link core. Sources are `[]SkillSource{Dir,Allow}` in ascending
-  precedence: the **global catalog** (`~/.xclaw/skills` / `~/.xclaw/workflows`)
-  filtered by the bot's `Skills`/`Workflows` allow-list (`gateway.WithSkillAllow`
-  / `WithWorkflows`, from `Resolved.Skills`/`Resolved.Workflows`; nil/empty = none),
-  then the **per-bot dir** (`~/.xclaw/<id>/skills|workflows`, unfiltered). Managed
-  from the desktop Skills/Workflows windows.
+- **Skills & workflows — marketplace + per-bot install** (`core/sandbox/skill.go`,
+  ported from `skill-linker.ts`): the global dirs `~/.xclaw/skills` (SKILL.md
+  bundles) and `~/.xclaw/workflows` (`*.js`) are a **read-only marketplace**. A
+  bot uses an asset only after it is **installed** into the bot's own dir
+  `~/.xclaw/<id>/skills|workflows` — an install is a **symlink** to the catalog
+  entry — and a bot may also author its own real assets there. Each turn the
+  gateway symlinks **only the per-bot dir** into the session sandbox's `.claude/`
+  (`LinkSkillsIntoSandbox` / `LinkWorkflowsIntoSandbox`, one collect/prune/link
+  core): so a marketplace asset reaches the agent solely via the per-bot symlink,
+  forming a chain `sandbox/.claude/skills/<n>` → `<id>/skills/<n>` → catalog. The
+  gateway link source is single (`{Dir: g.skillsDir}` / `{Dir: g.workflowsDir}`);
+  `SkillSource{Dir,Allow}` still supports an allow-list but it is **no longer
+  used** — there is no global-catalog allow-list and no `skills`/`workflows`
+  config field anymore (legacy keys in `config.json` are silently ignored). Install
+  mechanics live in `desktop/internal/assetlib` (`Install`/`Uninstall`/`Prune`/
+  `PruneInstallsAcrossBots`), shared by the desktop `skills` + `workflows`
+  packages; catalog delete prunes the now-dangling install symlinks across bots,
+  and `listIn` surfaces a dead symlink as `Installed+Broken` so the UI can clear
+  it. Managed from the desktop per-bot Skills/Workflows windows.
 - **Agent config isolation** (`config.DriverEnvWith`): each bot's `claude` runs
   with `CLAUDE_CONFIG_DIR=~/.xclaw/<id>/claude` so it does NOT inherit the
   operator's `~/.claude` (user-scope skills + installed plugins would otherwise
@@ -165,10 +174,10 @@ store, gateway, driver, group-context, Octo connector, each under `~/.xclaw/<id>
   `apiUrl`/`agent`/`rateLimit`/`context` defaults. Capability switches live under
   `agent` (`cron`, `toolProgress`, `inheritUserConfig`); the group-gating lists
   (`mentionFreeGroups`, `knownBotUids`, `allowedBotUids`, `botBlocklist`) plus
-  `groupConfigDir`, `onBehalfOf`, `skills`, and `workflows` (per-bot allow-lists,
-  names from the global `~/.xclaw/skills/` and `~/.xclaw/workflows/` catalogs)
-  are top-level defaults a bot may override — a per-bot value REPLACES the
-  default. `core/config.example.json` is the canonical field list.
+  `groupConfigDir` and `onBehalfOf` are top-level defaults a bot may override — a
+  per-bot value REPLACES the default. (Skills/workflows are **not** config fields;
+  they're installed per-bot on the filesystem — see the marketplace bullet above.)
+  `core/config.example.json` is the canonical field list.
 - `core/config/` does slug + SSRF validation on URLs — keep that on any new
   config field that holds a URL. `groupConfigDir` files are injected UNSANITIZED
   as `[Group instructions]`, so config load rejects a dir at/under a bot's
@@ -196,10 +205,12 @@ logic, so swapping the GUI never touches `core/`.
   exposes command/config methods, and auto-reconnects on daemon crash.
   `internal/`: `control` (UDS/NDJSON client over `core/control/wire`), `core`
   (supervisor: resolve binary → spawn `-control … -exit-with-parent` → stop/restart),
-  `configstore` (read/write `~/.xclaw/config.json` + per-bot SOUL/AGENTS + skill
-  & workflow allow-lists), `skills` (CRUD over the `~/.xclaw/skills/` catalog
-  bundles) and `workflows` (CRUD over `~/.xclaw/workflows/*.js`), both with slug
-  + path-traversal validation, `octocli` (bundle/install/upgrade the octo-cli
+  `configstore` (read/write `~/.xclaw/config.json` + per-bot SOUL/AGENTS),
+  `assetlib` (the shared per-bot install/uninstall/prune symlink primitives),
+  `skills` (marketplace catalog CRUD over `~/.xclaw/skills/` bundles **plus**
+  per-bot `Bot*`/`Install`/`Uninstall` over `~/.xclaw/<id>/skills`) and
+  `workflows` (same, for `*.js`), all with slug + path-traversal validation,
+  `octocli` (bundle/install/upgrade the octo-cli
   companion), `secrets` (tokens in the OS credential store via go-keyring,
   zero cgo; injected at runtime, **never** written to config.json).
 - **Frontend** (`frontend/src`): `lib/store.svelte.ts` is the single reducer —
@@ -226,8 +237,13 @@ logic, so swapping the GUI never touches `core/`.
   (`ConfigEditor` · `SkillsPanel` · `WorkflowsPanel` · `TokenUsage`), all opened over
   the console from the rail gear menu (and tray) via `xclaw:open-editor` / `-skills` /
   `-workflows` / `-usage` events — same scrim + centered card + header/✕ chrome (keep
-  them visually consistent). ConfigEditor has the per-bot "Available skills" + "Available
-  workflows" checklists. TokenUsage is read-only: per-bot cumulative input/output/cached
+  them visually consistent). SkillsPanel/WorkflowsPanel are **per-bot**: a bot
+  picker in the header, a "本 Bot 技能/工作流" section (own + installed assets, with
+  install/uninstall and an own-content editor; a dangling install shows a 失效
+  badge and is uninstall-only) and a marketplace section with install/已安装
+  toggles — install/uninstall take effect on the next turn, no RestartCore.
+  ConfigEditor no longer has any skill/workflow checklist. TokenUsage is read-only:
+  per-bot cumulative input/output/cached
   tokens + cost + turns, plus an all-bots total, from the privileged `usage.stats`
   control command (backed by core/store's `token_usage` table, accumulated each
   turn_done in the gateway; persists across restarts). NOTE: `window.confirm/alert` are
