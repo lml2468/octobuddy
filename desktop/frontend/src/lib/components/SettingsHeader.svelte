@@ -14,8 +14,8 @@
   const tabs: { key: Key; label: string }[] = [
     { key: "editor", label: "编辑 Bot" },
     { key: "skills", label: "技能" },
-    { key: "usage", label: "用量" },
     { key: "workflows", label: "工作流" },
+    { key: "usage", label: "用量" },
   ];
 
   // Resolve the nav handler for a tab at click time (not captured at init), so
