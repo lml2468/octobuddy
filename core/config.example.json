@@ -22,10 +22,7 @@
   "knownBotUids": [],
   "allowedBotUids": [],
   "botBlocklist": [],
-  "_comment_skills": "Optional allow-list of skill names from the global catalog at ~/.xclaw/skills/<name>/ (each a Claude Code SKILL.md bundle). When set, ONLY the named skills are linked into the bot's session sandbox (.claude/skills) for the agent to use; omitted/empty = no global skills. Top-level default; a bots[] entry may override it (the per-bot value REPLACES the default). Per-bot dir skills under ~/.xclaw/<id>/skills always link regardless. Manage the catalog and per-bot selection in the desktop app (gear → Manage Skills / Edit Bots).",
-  "skills": [],
-  "_comment_workflows": "Same model as skills, for workflows: names from the global catalog at ~/.xclaw/workflows/<name>.js (each a workflow script the agent's Workflow tool runs by name). Linked into the sandbox's .claude/workflows. Top-level default; per-bot REPLACES it. Manage via the desktop app (gear → Manage Workflows / Edit Bots).",
-  "workflows": [],
+  "_comment_skills": "Skills/workflows are NO LONGER configured here. The global dirs ~/.xclaw/skills/<name>/ (SKILL.md bundles) and ~/.xclaw/workflows/<name>.js are a READ-ONLY marketplace. A bot uses a skill only after it is INSTALLED into the bot's own dir ~/.xclaw/<id>/skills (a symlink to the catalog entry), and the bot may also author its own real skills/workflows there. Only ~/.xclaw/<id>/skills|workflows is linked into the session sandbox (.claude/skills|workflows). Install/uninstall and author per-bot content in the desktop app (gear → per-bot Skills / Workflows). Any leftover top-level or per-bot \"skills\"/\"workflows\" keys in this file are ignored.",
   "bots": [
     {
       "id": "my-bot",
@@ -38,11 +35,7 @@
           "GH_TOKEN": "ghp_xxx"
         }
       },
-      "context": { "maxContextChars": 8000 },
-      "_comment_skills": "This bot may use only these catalog skills (overrides the top-level default).",
-      "skills": ["pdf-tools"],
-      "_comment_workflows": "This bot may run only these catalog workflows.",
-      "workflows": ["review-changes"]
+      "context": { "maxContextChars": 8000 }
     },
     {
       "id": "admin-clone",

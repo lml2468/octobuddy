@@ -15,7 +15,10 @@ import (
 func setup(t *testing.T) {
 	t.Helper()
 	keyring.MockInit()
-	t.Setenv("HOME", t.TempDir())
+	// UserHomeDir reads $HOME on unix but %USERPROFILE% on Windows — set both.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 }
 
 func writeConfig(t *testing.T, f config.File) {
@@ -166,27 +169,5 @@ func TestSavePrunesOnlyExplicitRemovals(t *testing.T) {
 	}
 	if _, err := os.Stat(botDir("d")); err != nil {
 		t.Errorf("removed id without data/ dir should not be RemoveAll'd: %v", err)
-	}
-}
-
-// The per-bot skill allow-list must round-trip through Load → Save.
-func TestSaveRoundTripsSkills(t *testing.T) {
-	setup(t)
-	writeConfig(t, config.File{Bots: []config.BotEntry{{ID: "a", APIURL: "https://x.example", Skills: []string{"pdf-tools", "octo-broadcast"}}}})
-	loaded, err := Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(loaded[0].Skills) != 2 {
-		t.Fatalf("Load skills = %v", loaded[0].Skills)
-	}
-	// Drop one and save.
-	loaded[0].Skills = []string{"pdf-tools"}
-	if err := Save(loaded, nil); err != nil {
-		t.Fatal(err)
-	}
-	b := readBack(t).Bots[0]
-	if len(b.Skills) != 1 || b.Skills[0] != "pdf-tools" {
-		t.Fatalf("saved skills = %v, want [pdf-tools]", b.Skills)
 	}
 }

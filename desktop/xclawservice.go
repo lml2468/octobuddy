@@ -312,49 +312,127 @@ func (x *XClawService) SaveConfig(bots []configstore.BotConfig, removedIDs []str
 	return configstore.Save(bots, removedIDs)
 }
 
-// --- skills library (~/.xclaw/skills) for the Skills window ---
+// --- skills: global marketplace catalog (~/.xclaw/skills) ---
 
-// SkillsList returns every skill in the global catalog.
+// SkillsList returns every skill in the global marketplace catalog.
 func (x *XClawService) SkillsList() ([]skills.SkillInfo, error) { return skills.List() }
 
-// SkillFiles lists the relative file paths in a skill bundle.
+// SkillFiles lists the relative file paths in a catalog skill bundle.
 func (x *XClawService) SkillFiles(name string) ([]string, error) { return skills.Files(name) }
 
-// SkillRead returns one file's contents from a skill bundle.
+// SkillRead returns one file's contents from a catalog skill bundle.
 func (x *XClawService) SkillRead(name, rel string) (string, error) { return skills.ReadFile(name, rel) }
 
-// SkillWrite creates/overwrites a file in a skill bundle.
+// SkillWrite creates/overwrites a file in a catalog skill bundle.
 func (x *XClawService) SkillWrite(name, rel, content string) error {
 	return skills.WriteFile(name, rel, content)
 }
 
-// SkillDeleteFile removes a file from a skill bundle.
+// SkillDeleteFile removes a file from a catalog skill bundle.
 func (x *XClawService) SkillDeleteFile(name, rel string) error { return skills.DeleteFile(name, rel) }
 
-// SkillCreate scaffolds a new skill (starter SKILL.md).
+// SkillCreate scaffolds a new catalog skill (starter SKILL.md).
 func (x *XClawService) SkillCreate(name string) error { return skills.Create(name) }
 
-// SkillDelete removes a skill bundle entirely.
+// SkillDelete removes a catalog skill bundle entirely.
 func (x *XClawService) SkillDelete(name string) error { return skills.Delete(name) }
 
-// --- workflows library (~/.xclaw/workflows) for the Workflows window ---
+// --- skills: per-bot (~/.xclaw/<id>/skills) install + own content ---
 
-// WorkflowsList returns every workflow in the global catalog.
+// BotSkillsList returns a bot's skills (installed marketplace links + own bundles).
+func (x *XClawService) BotSkillsList(botID string) ([]skills.SkillInfo, error) {
+	return skills.BotList(botID)
+}
+
+// BotSkillInstall symlinks a catalog skill into the bot's dir (effective next turn).
+func (x *XClawService) BotSkillInstall(botID, name string) error { return skills.Install(botID, name) }
+
+// BotSkillUninstall removes an installed (symlinked) catalog skill from the bot.
+func (x *XClawService) BotSkillUninstall(botID, name string) error {
+	return skills.Uninstall(botID, name)
+}
+
+// BotSkillFiles lists files in one of the bot's skill bundles.
+func (x *XClawService) BotSkillFiles(botID, name string) ([]string, error) {
+	return skills.BotFiles(botID, name)
+}
+
+// BotSkillRead reads a file within one of the bot's skill bundles.
+func (x *XClawService) BotSkillRead(botID, name, rel string) (string, error) {
+	return skills.BotRead(botID, name, rel)
+}
+
+// BotSkillWrite writes a file within one of the bot's OWN skill bundles.
+func (x *XClawService) BotSkillWrite(botID, name, rel, content string) error {
+	return skills.BotWrite(botID, name, rel, content)
+}
+
+// BotSkillDeleteFile removes a file within one of the bot's OWN skill bundles.
+func (x *XClawService) BotSkillDeleteFile(botID, name, rel string) error {
+	return skills.BotDeleteFile(botID, name, rel)
+}
+
+// BotSkillCreate scaffolds a new per-bot OWN skill bundle.
+func (x *XClawService) BotSkillCreate(botID, name string) error { return skills.BotCreate(botID, name) }
+
+// BotSkillDelete removes one of the bot's OWN skill bundles.
+func (x *XClawService) BotSkillDelete(botID, name string) error { return skills.BotDelete(botID, name) }
+
+// --- workflows: global marketplace catalog (~/.xclaw/workflows) ---
+
+// WorkflowsList returns every workflow in the global marketplace catalog.
 func (x *XClawService) WorkflowsList() ([]workflows.Info, error) { return workflows.List() }
 
-// WorkflowRead returns a workflow's script source.
+// WorkflowRead returns a catalog workflow's script source.
 func (x *XClawService) WorkflowRead(name string) (string, error) { return workflows.Read(name) }
 
-// WorkflowWrite creates/overwrites a workflow's script.
+// WorkflowWrite creates/overwrites a catalog workflow's script.
 func (x *XClawService) WorkflowWrite(name, content string) error {
 	return workflows.Write(name, content)
 }
 
-// WorkflowCreate scaffolds a new workflow.
+// WorkflowCreate scaffolds a new catalog workflow.
 func (x *XClawService) WorkflowCreate(name string) error { return workflows.Create(name) }
 
-// WorkflowDelete removes a workflow.
+// WorkflowDelete removes a catalog workflow.
 func (x *XClawService) WorkflowDelete(name string) error { return workflows.Delete(name) }
+
+// --- workflows: per-bot (~/.xclaw/<id>/workflows) install + own content ---
+
+// BotWorkflowsList returns a bot's workflows (installed links + own scripts).
+func (x *XClawService) BotWorkflowsList(botID string) ([]workflows.Info, error) {
+	return workflows.BotList(botID)
+}
+
+// BotWorkflowInstall symlinks a catalog workflow into the bot's dir.
+func (x *XClawService) BotWorkflowInstall(botID, name string) error {
+	return workflows.Install(botID, name)
+}
+
+// BotWorkflowUninstall removes an installed (symlinked) catalog workflow.
+func (x *XClawService) BotWorkflowUninstall(botID, name string) error {
+	return workflows.Uninstall(botID, name)
+}
+
+// BotWorkflowRead reads one of the bot's workflow scripts.
+func (x *XClawService) BotWorkflowRead(botID, name string) (string, error) {
+	return workflows.BotRead(botID, name)
+}
+
+// BotWorkflowWrite writes one of the bot's OWN workflow scripts.
+func (x *XClawService) BotWorkflowWrite(botID, name, content string) error {
+	return workflows.BotWrite(botID, name, content)
+}
+
+// BotWorkflowCreate scaffolds a new per-bot OWN workflow script.
+func (x *XClawService) BotWorkflowCreate(botID, name string) error {
+	return workflows.BotCreate(botID, name)
+}
+
+// BotWorkflowDelete removes one of the bot's OWN workflow scripts.
+func (x *XClawService) BotWorkflowDelete(botID, name string) error {
+	return workflows.BotDelete(botID, name)
+}
 
 // WorkspaceTree returns the file tree of a session's sandbox workspace
 // (read-only). Returns an empty tree when no turn has created the sandbox yet.

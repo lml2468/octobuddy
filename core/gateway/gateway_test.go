@@ -154,7 +154,7 @@ func TestSandboxInjectsCwdAndMemoryPerSession(t *testing.T) {
 	st := newTestStore(t)
 	drv := &fakeDriver{threadID: "t", reply: "ok"}
 	gw := New(drv, st, router.New(router.Config{MaxPerMinute: 100}), newCaptureSink()).
-		WithSandbox(cwdBase, memBase, "", "")
+		WithSandbox(cwdBase, memBase, "")
 
 	// DM turn → request carries a per-session cwd that exists on disk + a memory dir.
 	_, err := gw.Handle(context.Background(),

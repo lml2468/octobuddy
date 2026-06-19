@@ -36,28 +36,6 @@
   // Bot ids present when this editor opened — the basis for an EXPLICIT removal
   // list on save (so the daemon never infers deletions from a set-difference).
   let loadedIds: string[] = [];
-  // Global skill catalog (for the per-bot available-skills checklist).
-  let allSkills = $state<{ name: string; description: string }[]>([]);
-  let allWorkflows = $state<{ name: string; description: string }[]>([]);
-
-  function skillOn(name: string): boolean {
-    return (current?.skills ?? []).includes(name);
-  }
-  function toggleSkill(name: string) {
-    if (!current) return;
-    const set = new Set(current.skills ?? []);
-    set.has(name) ? set.delete(name) : set.add(name);
-    current.skills = [...set];
-  }
-  function workflowOn(name: string): boolean {
-    return (current?.workflows ?? []).includes(name);
-  }
-  function toggleWorkflow(name: string) {
-    if (!current) return;
-    const set = new Set(current.workflows ?? []);
-    set.has(name) ? set.delete(name) : set.add(name);
-    current.workflows = [...set];
-  }
 
   $effect(() => {
     // Rebuild env rows when the selected bot changes.
@@ -71,19 +49,15 @@
   async function load() {
     if (new URLSearchParams(location.search).has("preview")) {
       bots = [
-        new BotConfig({ id: "main", apiUrl: "https://im.example.com/api", model: "claude-opus-4-8", gatewayBaseUrl: "https://gw.example/v1", env: { OCTO_BOT_ID: "main-7f3a" }, soul: "You are Atlas, the team's ops copilot.", agents: "Confirm before destructive actions.", skills: ["pdf-tools"] }),
+        new BotConfig({ id: "main", apiUrl: "https://im.example.com/api", model: "claude-opus-4-8", gatewayBaseUrl: "https://gw.example/v1", env: { OCTO_BOT_ID: "main-7f3a" }, soul: "You are Atlas, the team's ops copilot.", agents: "Confirm before destructive actions." }),
         new BotConfig({ id: "research", apiUrl: "https://im.example.com/api" }),
       ];
-      allSkills = [{ name: "pdf-tools", description: "Extract text and fill PDF forms." }, { name: "octo-broadcast", description: "Announce to every channel." }];
-      allWorkflows = [{ name: "review-changes", description: "Multi-dimension diff review." }, { name: "deep-audit", description: "Exhaustive audit pass." }];
       sel = 0;
       return;
     }
     try {
       bots = (await XClawService.LoadConfig()) ?? [];
       loadedIds = bots.map((b) => b.id);
-      try { allSkills = ((await XClawService.SkillsList()) ?? []) as any; } catch { allSkills = []; }
-      try { allWorkflows = ((await XClawService.WorkflowsList()) ?? []) as any; } catch { allWorkflows = []; }
       if (bots.length === 0) addBot();
       sel = 0;
     } catch (e: any) {
@@ -180,33 +154,8 @@
           </div>
 
           <div class="skills">
-            <span class="lbl">可用技能</span>
-            {#if allSkills.length === 0}
-              <small>技能库还是空的 — 从「管理技能」里添加。</small>
-            {:else}
-              {#each allSkills as s (s.name)}
-                <label class="skrow">
-                  <input type="checkbox" checked={skillOn(s.name)} onchange={() => toggleSkill(s.name)} />
-                  <span class="sknm">{s.name}</span>
-                  <span class="skds">{s.description}</span>
-                </label>
-              {/each}
-            {/if}
-          </div>
-
-          <div class="skills">
-            <span class="lbl">可用工作流</span>
-            {#if allWorkflows.length === 0}
-              <small>工作流库还是空的 — 从「管理工作流」里添加。</small>
-            {:else}
-              {#each allWorkflows as w (w.name)}
-                <label class="skrow">
-                  <input type="checkbox" checked={workflowOn(w.name)} onchange={() => toggleWorkflow(w.name)} />
-                  <span class="sknm">{w.name}</span>
-                  <span class="skds">{w.description}</span>
-                </label>
-              {/each}
-            {/if}
+            <span class="lbl">技能 / 工作流</span>
+            <small>在「技能」「工作流」分页里为本 Bot 安装市场内容或维护自有内容。</small>
           </div>
 
           <label>SOUL.md <textarea bind:value={current.soul} rows="3" placeholder="身份、语气、角色"></textarea></label>
@@ -257,11 +206,6 @@
   .lbl { font-size: 12px; color: var(--ink-soft); }
   .skills { display: flex; flex-direction: column; gap: 5px; }
   .skills small { color: var(--ink-faint); font-size: 11px; }
-  .skrow { display: flex; flex-direction: row; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 5px; }
-  .skrow:hover { background: color-mix(in srgb, var(--ink) 4%, transparent); }
-  .skrow input { accent-color: var(--accent); margin: 0; flex: 0 0 auto; }
-  .skrow .sknm { font-family: var(--mono); font-size: 12px; color: var(--ink); flex: 0 0 auto; }
-  .skrow .skds { font-size: 11px; color: var(--ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .envrow { display: flex; align-items: center; gap: 6px; }
   .envrow .k { width: 160px; font-family: var(--mono); font-size: 12px; }
   .envrow .v { flex: 1; }
@@ -281,7 +225,6 @@
   .botrow:focus-visible, footer button:focus-visible, .add:focus-visible, .remove:focus-visible { outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent); }
   .add:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--hairline)); color: var(--accent-strong, var(--accent)); }
   .remove:hover { background: color-mix(in srgb, var(--danger) 10%, transparent); }
-  .skrow:focus-within { background: color-mix(in srgb, var(--accent) 8%, transparent); }
   .err { color: var(--danger); font-size: 12px; }
   .ok { color: #5aa873; font-size: 12px; }
 </style>

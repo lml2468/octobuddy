@@ -72,14 +72,14 @@ type Gateway struct {
 	model string
 	// Per-session sandbox roots (set via WithSandbox). When cwdBase is set, each
 	// turn runs in cwdBase/<hash>, with auto-memory under memoryBase/<hash> and
-	// operator skills symlinked in. Empty cwdBase = no isolation (inherit proc).
-	cwdBase, memoryBase, skillsDir, globalSkillsDir string
-	// globalSkillAllow scopes which global-catalog skills link into this bot's
-	// sandboxes (nil = none). Per-bot dir skills always link.
-	globalSkillAllow []string
-	// Workflow catalog dirs + per-bot allow-list (same model as skills).
-	workflowsDir, globalWorkflowsDir string
-	globalWorkflowAllow              []string
+	// the bot's per-bot skills/workflows symlinked in. Empty cwdBase = no
+	// isolation (inherit proc).
+	//
+	// skillsDir/workflowsDir are the bot's OWN dirs (~/.xclaw/<id>/skills|workflows).
+	// They are the single link source into the sandbox: a marketplace skill reaches
+	// the sandbox only via a symlink the operator "installed" into the per-bot dir
+	// (~/.xclaw/<id>/skills/<name> → ~/.xclaw/skills/<name>), never linked globally.
+	cwdBase, memoryBase, skillsDir, workflowsDir string
 	// mediaAuth, when set, supplies the Authorization header for an inbound-media
 	// download URL (scoped to the IM's apiUrl host). Set via WithMediaAuth by the
 	// IM connector; keeps the gateway IM-agnostic (it never embeds a token).
@@ -186,31 +186,20 @@ func (g *Gateway) WithModel(m string) *Gateway {
 }
 
 // WithSandbox enables per-session filesystem isolation: each turn runs in a
-// hashed subdir of cwdBase, with auto-memory consolidated under memoryBase and the
-// operator's skills (globalSkillsDir then skillsDir, latter shadows) symlinked
-// into the sandbox. An empty cwdBase disables isolation.
-func (g *Gateway) WithSandbox(cwdBase, memoryBase, skillsDir, globalSkillsDir string) *Gateway {
+// hashed subdir of cwdBase, with auto-memory consolidated under memoryBase and
+// the bot's per-bot skills (skillsDir, ~/.xclaw/<id>/skills) symlinked into the
+// sandbox. An empty cwdBase disables isolation.
+func (g *Gateway) WithSandbox(cwdBase, memoryBase, skillsDir string) *Gateway {
 	g.cwdBase = cwdBase
 	g.memoryBase = memoryBase
 	g.skillsDir = skillsDir
-	g.globalSkillsDir = globalSkillsDir
 	return g
 }
 
-// WithSkillAllow sets the allow-list of global-catalog skill names exposed to
-// this bot (nil/empty = none). Per-bot dir skills are always linked.
-func (g *Gateway) WithSkillAllow(names []string) *Gateway {
-	g.globalSkillAllow = names
-	return g
-}
-
-// WithWorkflows configures the workflow catalog dirs and the per-bot allow-list
-// of global workflow names exposed to this bot (nil/empty = none). Per-bot dir
-// workflows always link.
-func (g *Gateway) WithWorkflows(workflowsDir, globalWorkflowsDir string, allow []string) *Gateway {
+// WithWorkflows configures the bot's per-bot workflow dir (~/.xclaw/<id>/workflows),
+// the single source linked into the sandbox's .claude/workflows.
+func (g *Gateway) WithWorkflows(workflowsDir string) *Gateway {
 	g.workflowsDir = workflowsDir
-	g.globalWorkflowsDir = globalWorkflowsDir
-	g.globalWorkflowAllow = allow
 	return g
 }
 
@@ -405,15 +394,15 @@ func (g *Gateway) resolveSandbox(sessionKey string, msg router.InboundMessage) (
 	if err != nil {
 		return "", "", fmt.Errorf("resolve sandbox cwd: %w", err)
 	}
-	// Global catalog is scoped to this bot's allow-list; per-bot dir skills always link.
+	// Link the bot's per-bot skills dir (~/.xclaw/<id>/skills) as the SINGLE
+	// source: marketplace skills reach the sandbox only via symlinks the operator
+	// installed there, plus the bot's own real skill dirs. The global catalog is
+	// never linked directly (it's a read-only marketplace, not auto-exposed).
 	_ = sandbox.LinkSkillsIntoSandbox(cwd, []sandbox.SkillSource{
-		{Dir: g.globalSkillsDir, Allow: g.globalSkillAllow},
 		{Dir: g.skillsDir},
 	})
-	// Same for workflows (.claude/workflows): global catalog scoped to the bot's
-	// allow-list, plus the always-linked per-bot dir.
+	// Same for workflows (.claude/workflows): the per-bot dir is the only source.
 	_ = sandbox.LinkWorkflowsIntoSandbox(cwd, []sandbox.SkillSource{
-		{Dir: g.globalWorkflowsDir, Allow: g.globalWorkflowAllow},
 		{Dir: g.workflowsDir},
 	})
 	if g.memoryBase != "" {

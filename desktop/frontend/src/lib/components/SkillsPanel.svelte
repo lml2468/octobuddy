@@ -1,16 +1,31 @@
 <script lang="ts">
   import { XClawService } from "../../../bindings/github.com/lml2468/xclaw/desktop";
+  import { store } from "../store.svelte";
   import { modal } from "../actions/modal";
   import SettingsHeader from "./SettingsHeader.svelte";
 
   let { onclose, onedit, onusage, onworkflows }: { onclose: () => void; onedit?: () => void; onusage?: () => void; onworkflows?: () => void } = $props();
 
-  type SkillInfo = { name: string; description: string; files: number };
+  type SkillInfo = { name: string; description: string; files: number; installed: boolean; broken?: boolean };
 
   const isPreview = new URLSearchParams(location.search).has("preview");
 
-  let skills = $state<SkillInfo[]>([]);
-  let sel = $state<string | null>(null);
+  // The bot whose skills we manage. Defaults to the selected bot; a picker switches.
+  let botId = $state<string | null>(store.selectedBotId ?? store.bots[0]?.id ?? null);
+
+  // If the panel opened before the bot roster loaded (botId null), adopt the
+  // first bot once it arrives, then load its skills — without clobbering an
+  // explicit picker choice.
+  $effect(() => {
+    if (botId == null && store.bots.length) {
+      botId = store.selectedBotId ?? store.bots[0].id;
+      if (isPreview) loadBotPreview(); else loadBot();
+    }
+  });
+
+  let botSkills = $state<SkillInfo[]>([]); // this bot's own + installed skills
+  let catalog = $state<SkillInfo[]>([]);   // global marketplace catalog
+  let sel = $state<string | null>(null);   // selected bot skill (for the editor)
   let files = $state<string[]>([]);
   let activeFile = $state<string | null>(null);
   let content = $state("");
@@ -18,30 +33,34 @@
   let error = $state("");
   let newName = $state("");
   let newFilePath = $state("");
+
+  // The selected skill's "installed" flag → its files are read-only marketplace content.
+  const selInstalled = $derived(botSkills.find((s) => s.name === sel)?.installed ?? false);
+  const installedNames = $derived(new Set(botSkills.filter((s) => s.installed).map((s) => s.name)));
+
   // window.confirm() is a no-op in the Wails webview, so use an in-app dialog.
   let confirmState = $state<{ msg: string; resolve: (v: boolean) => void } | null>(null);
   function ask(msg: string): Promise<boolean> {
     return new Promise((resolve) => (confirmState = { msg, resolve }));
   }
-  function answer(v: boolean) {
-    confirmState?.resolve(v);
-    confirmState = null;
-  }
-  // Guarded nav/close: an in-progress edit prompts before leaving.
+  function answer(v: boolean) { confirmState?.resolve(v); confirmState = null; }
   async function leave(fn?: () => void) {
     if (dirty && !(await ask("有未保存的改动,确认离开?"))) return;
     onclose(); fn?.();
   }
 
-  // Preview-mode in-memory catalog so the layout can be screenshotted without a daemon.
-  const mock: Record<string, Record<string, string>> = {
-    "pdf-tools": {
-      "SKILL.md": "---\nname: pdf-tools\ndescription: Extract text and fill forms in PDF files.\n---\n\n# pdf-tools\n\nUse for reading and filling PDFs.",
-      "scripts/extract.py": "import sys\nprint('extract', sys.argv)",
+  // Preview-mode in-memory state so the layout can be screenshotted without a daemon.
+  const mockCatalog: Record<string, { description: string; files: Record<string, string> }> = {
+    "pdf-tools": { description: "Extract text and fill forms in PDF files.", files: { "SKILL.md": "---\nname: pdf-tools\ndescription: Extract text and fill forms in PDF files.\n---\n\n# pdf-tools" } },
+    "octo-broadcast": { description: "Send an announcement to every channel.", files: { "SKILL.md": "---\nname: octo-broadcast\ndescription: Send an announcement to every channel.\n---\n\n# octo-broadcast" } },
+  };
+  // bot id → { name → {installed, files} }
+  const mockBot: Record<string, Record<string, { installed: boolean; files: Record<string, string> }>> = {
+    main: {
+      "pdf-tools": { installed: true, files: mockCatalog["pdf-tools"].files },
+      "my-helper": { installed: false, files: { "SKILL.md": "---\nname: my-helper\ndescription: This bot's own helper skill.\n---\n\n# my-helper" } },
     },
-    "octo-broadcast": {
-      "SKILL.md": "---\nname: octo-broadcast\ndescription: Send an announcement to every channel the bot is in.\n---\n\n# octo-broadcast\n\nCall octo-cli to broadcast.",
-    },
+    research: {},
   };
 
   load();
@@ -50,14 +69,35 @@
     error = "";
     try {
       if (isPreview) {
-        skills = Object.entries(mock).map(([name, fs]) => ({
-          name, description: descOf(fs["SKILL.md"] ?? ""), files: Object.keys(fs).length,
-        }));
-      } else {
-        skills = ((await XClawService.SkillsList()) ?? []) as SkillInfo[];
+        catalog = Object.entries(mockCatalog).map(([name, c]) => ({ name, description: c.description, files: Object.keys(c.files).length, installed: false }));
+        loadBotPreview();
+        return;
       }
-      if (skills.length && !sel) selectSkill(skills[0].name);
+      catalog = ((await XClawService.SkillsList()) ?? []) as SkillInfo[];
+      await loadBot();
     } catch (e: any) { error = String(e?.message ?? e); }
+  }
+
+  function loadBotPreview() {
+    const b = botId ?? "";
+    botSkills = Object.entries(mockBot[b] ?? {}).map(([name, s]) => ({
+      name, description: descOf(s.files["SKILL.md"] ?? ""), files: Object.keys(s.files).length, installed: s.installed,
+    }));
+    if (botSkills.length && !botSkills.find((s) => s.name === sel)) selectSkill(botSkills[0].name);
+    else if (!botSkills.length) { sel = null; files = []; activeFile = null; content = ""; }
+  }
+
+  async function loadBot() {
+    if (!botId) { botSkills = []; sel = null; files = []; return; }
+    botSkills = ((await XClawService.BotSkillsList(botId)) ?? []) as SkillInfo[];
+    if (botSkills.length && !botSkills.find((s) => s.name === sel)) selectSkill(botSkills[0].name);
+    else if (!botSkills.length) { sel = null; files = []; activeFile = null; content = ""; }
+  }
+
+  async function switchBot(id: string) {
+    if (dirty && !(await ask("放弃未保存的改动?"))) return;
+    botId = id; sel = null; activeFile = null; content = ""; dirty = false;
+    if (isPreview) loadBotPreview(); else await loadBot();
   }
 
   function descOf(skillmd: string): string {
@@ -68,7 +108,11 @@
   async function selectSkill(name: string) {
     sel = name; activeFile = null; content = ""; dirty = false; error = "";
     try {
-      files = isPreview ? Object.keys(mock[name] ?? {}).sort() : (((await XClawService.SkillFiles(name)) ?? []) as string[]);
+      if (isPreview) {
+        files = Object.keys(mockBot[botId ?? ""]?.[name]?.files ?? {}).sort();
+      } else {
+        files = ((await XClawService.BotSkillFiles(botId!, name)) ?? []) as string[];
+      }
       const first = files.find((f) => f === "SKILL.md") ?? files[0];
       if (first) openFile(first);
     } catch (e: any) { error = String(e?.message ?? e); }
@@ -78,26 +122,26 @@
     if (dirty && !(await ask("放弃未保存的改动?"))) return;
     activeFile = rel; error = "";
     try {
-      content = isPreview ? (mock[sel!]?.[rel] ?? "") : await XClawService.SkillRead(sel!, rel);
+      content = isPreview ? (mockBot[botId ?? ""]?.[sel!]?.files[rel] ?? "") : await XClawService.BotSkillRead(botId!, sel!, rel);
       dirty = false;
     } catch (e: any) { error = String(e?.message ?? e); }
   }
 
   async function saveFile() {
-    if (!sel || !activeFile) return;
+    if (!sel || !activeFile || selInstalled) return;
     try {
-      if (isPreview) { (mock[sel] ??= {})[activeFile] = content; }
-      else await XClawService.SkillWrite(sel, activeFile, content);
+      if (isPreview) { (mockBot[botId ?? ""][sel].files)[activeFile] = content; }
+      else await XClawService.BotSkillWrite(botId!, sel, activeFile, content);
       dirty = false;
     } catch (e: any) { error = String(e?.message ?? e); }
   }
 
   async function addFile() {
     const rel = newFilePath.trim();
-    if (!sel || !rel) return;
+    if (!sel || !rel || selInstalled) return;
     try {
-      if (isPreview) { (mock[sel] ??= {})[rel] = ""; }
-      else await XClawService.SkillWrite(sel, rel, "");
+      if (isPreview) { (mockBot[botId ?? ""][sel].files)[rel] = ""; }
+      else await XClawService.BotSkillWrite(botId!, sel, rel, "");
       newFilePath = "";
       await selectSkill(sel);
       openFile(rel);
@@ -105,34 +149,55 @@
   }
 
   async function deleteFile(rel: string) {
-    if (!sel || rel === "SKILL.md") return;
+    if (!sel || rel === "SKILL.md" || selInstalled) return;
     if (!(await ask(`删除文件 ${rel}?`))) return;
     try {
-      if (isPreview) { delete mock[sel][rel]; }
-      else await XClawService.SkillDeleteFile(sel, rel);
+      if (isPreview) { delete mockBot[botId ?? ""][sel].files[rel]; }
+      else await XClawService.BotSkillDeleteFile(botId!, sel, rel);
       if (activeFile === rel) { activeFile = null; content = ""; }
       await selectSkill(sel);
     } catch (e: any) { error = String(e?.message ?? e); }
   }
 
-  async function createSkill() {
+  async function createOwn() {
     const name = newName.trim();
-    if (!name) return;
+    if (!name || !botId) return;
     try {
-      if (isPreview) { mock[name] = { "SKILL.md": `---\nname: ${name}\ndescription: One line on when to use this skill.\n---\n\n# ${name}\n` }; }
-      else await XClawService.SkillCreate(name);
+      if (isPreview) { (mockBot[botId] ??= {})[name] = { installed: false, files: { "SKILL.md": `---\nname: ${name}\ndescription: One line on when to use this skill.\n---\n\n# ${name}\n` } }; loadBotPreview(); }
+      else { await XClawService.BotSkillCreate(botId, name); await loadBot(); }
       newName = "";
-      await load();
       selectSkill(name);
     } catch (e: any) { error = String(e?.message ?? e); }
   }
 
-  async function deleteSkill(name: string) {
-    if (!(await ask(`删除技能「${name}」及其所有文件?`))) return;
+  async function removeBotSkill(s: SkillInfo) {
+    const verb = s.installed ? "卸载" : "删除";
+    if (!(await ask(`${verb}「${s.name}」?`))) return;
     try {
-      if (isPreview) { delete mock[name]; } else await XClawService.SkillDelete(name);
+      if (isPreview) { delete mockBot[botId ?? ""][s.name]; loadBotPreview(); }
+      else {
+        if (s.installed) await XClawService.BotSkillUninstall(botId!, s.name);
+        else await XClawService.BotSkillDelete(botId!, s.name);
+        await loadBot();
+      }
+      if (sel === s.name) { sel = null; files = []; activeFile = null; content = ""; }
+    } catch (e: any) { error = String(e?.message ?? e); }
+  }
+
+  async function install(name: string) {
+    if (!botId) return;
+    try {
+      if (isPreview) { (mockBot[botId] ??= {})[name] = { installed: true, files: mockCatalog[name].files }; loadBotPreview(); }
+      else { await XClawService.BotSkillInstall(botId, name); await loadBot(); }
+    } catch (e: any) { error = String(e?.message ?? e); }
+  }
+
+  async function uninstall(name: string) {
+    if (!botId) return;
+    try {
+      if (isPreview) { delete mockBot[botId ?? ""][name]; loadBotPreview(); }
+      else { await XClawService.BotSkillUninstall(botId, name); await loadBot(); }
       if (sel === name) { sel = null; files = []; activeFile = null; content = ""; }
-      await load();
     } catch (e: any) { error = String(e?.message ?? e); }
   }
 </script>
@@ -140,42 +205,75 @@
 <div class="scrim" onclick={() => leave()} role="presentation">
   <!-- svelte-ignore a11y_click_events_have_key_events (use:modal handles Escape/Tab; this onclick only stops propagation) -->
   <div class="modal" use:modal={{ onclose: () => leave() }} onclick={(e) => e.stopPropagation()} role="dialog" aria-label="技能" tabindex="-1">
-    <SettingsHeader active="skills" onclose={() => leave()} onnav={leave} {onedit} {onusage} {onworkflows} />
+    <SettingsHeader active="skills" onclose={() => leave()} onnav={leave} {onedit} {onusage} {onworkflows}>
+      <label class="botpick">
+        <span>Bot</span>
+        <select value={botId} onchange={(e) => switchBot((e.currentTarget as HTMLSelectElement).value)}>
+          {#each (isPreview ? [{ id: "main" }, { id: "research" }] : store.bots) as b (b.id)}
+            <option value={b.id}>{b.id}</option>
+          {/each}
+        </select>
+      </label>
+    </SettingsHeader>
 
     <div class="body">
     <div class="list">
-      {#each skills as s (s.name)}
-        <button class="row" class:sel={s.name === sel} onclick={() => selectSkill(s.name)}>
-          <span class="nm">{s.name}</span>
-          <span class="ds">{s.description || "No description"}</span>
-        </button>
-      {/each}
-      {#if skills.length === 0}<div class="muted">暂无技能</div>{/if}
-      <div class="new">
-        <input placeholder="新技能名称" bind:value={newName} onkeydown={(e) => e.key === "Enter" && createSkill()} />
-        <button class="add" onclick={createSkill} disabled={!newName.trim()}>+ 新建技能</button>
-      </div>
+      {#if !botId}
+        <div class="muted">先选择一个 Bot</div>
+      {:else}
+        <div class="sectlbl">本 Bot 技能</div>
+        {#each botSkills as s (s.name)}
+          <div class="row" class:sel={s.name === sel}>
+            <button class="rowmain" onclick={() => (s.broken ? null : selectSkill(s.name))} disabled={s.broken}>
+              <span class="nm">{s.name}{#if s.broken}<span class="badge broken">失效</span>{:else if s.installed}<span class="badge">已安装</span>{:else}<span class="badge own">自有</span>{/if}</span>
+              <span class="ds">{s.broken ? "市场来源已删除,卸载以清理" : (s.description || "无描述")}</span>
+            </button>
+            <button class="del" title={s.installed ? "卸载" : "删除"} onclick={() => removeBotSkill(s)}>−</button>
+          </div>
+        {/each}
+        {#if botSkills.length === 0}<div class="muted">该 Bot 还没有技能</div>{/if}
+        <div class="new">
+          <input placeholder="新建自有技能名称" bind:value={newName} onkeydown={(e) => e.key === "Enter" && createOwn()} />
+          <button class="add" onclick={createOwn} disabled={!newName.trim()}>+ 新建自有技能</button>
+        </div>
+
+        <div class="sectlbl market">技能市场</div>
+        {#each catalog as c (c.name)}
+          <div class="mrow">
+            <span class="mnm">{c.name}</span>
+            <span class="mds">{c.description || "无描述"}</span>
+            {#if installedNames.has(c.name)}
+              <button class="inst on" onclick={() => uninstall(c.name)}>已安装</button>
+            {:else}
+              <button class="inst" onclick={() => install(c.name)}>安装</button>
+            {/if}
+          </div>
+        {/each}
+        {#if catalog.length === 0}<div class="muted">市场为空</div>{/if}
+      {/if}
     </div>
 
     {#if sel}
       <div class="detail">
         <div class="dhead">
           <span class="dt">{sel}</span>
+          {#if selInstalled}<span class="robadge">市场技能 · 只读</span>{/if}
           <span class="spacer"></span>
-          <button class="remove" onclick={() => deleteSkill(sel!)}>删除技能</button>
         </div>
         <div class="cols">
           <div class="files">
             {#each files as f (f)}
               <div class="frow" class:sel={f === activeFile}>
                 <button class="fname" onclick={() => openFile(f)}>{f}</button>
-                {#if f !== "SKILL.md"}<button class="del" title="Delete file" onclick={() => deleteFile(f)}>−</button>{/if}
+                {#if f !== "SKILL.md" && !selInstalled}<button class="del" title="删除文件" onclick={() => deleteFile(f)}>−</button>{/if}
               </div>
             {/each}
-            <div class="new">
-              <input placeholder="路径/文件.ext" bind:value={newFilePath} onkeydown={(e) => e.key === "Enter" && addFile()} />
-              <button class="add" onclick={addFile} disabled={!newFilePath.trim()}>+ 添加文件</button>
-            </div>
+            {#if !selInstalled}
+              <div class="new">
+                <input placeholder="路径/文件.ext" bind:value={newFilePath} onkeydown={(e) => e.key === "Enter" && addFile()} />
+                <button class="add" onclick={addFile} disabled={!newFilePath.trim()}>+ 添加文件</button>
+              </div>
+            {/if}
           </div>
           <div class="editor">
             {#if activeFile}
@@ -183,17 +281,17 @@
                 <span class="fn">{activeFile}</span>
                 <span class="spacer"></span>
                 {#if dirty}<span class="dirty">●</span>{/if}
-                <button class="primary" onclick={saveFile} disabled={!dirty}>保存</button>
+                {#if !selInstalled}<button class="primary" onclick={saveFile} disabled={!dirty}>保存</button>{/if}
               </div>
-              <textarea class="code" bind:value={content} oninput={() => (dirty = true)} spellcheck="false"></textarea>
+              <textarea class="code" bind:value={content} oninput={() => (dirty = true)} readonly={selInstalled} spellcheck="false"></textarea>
             {:else}
-              <div class="muted center">选择一个文件编辑</div>
+              <div class="muted center">选择一个文件查看</div>
             {/if}
           </div>
         </div>
       </div>
     {:else}
-      <div class="detail"><div class="muted center">选择或新建一个技能</div></div>
+      <div class="detail"><div class="muted center">选择一个技能,或从市场安装</div></div>
     {/if}
   </div>
 
@@ -217,20 +315,38 @@
   /* Mirrors ConfigEditor: full-window scrim + glass modal + shared SettingsHeader. */
   .scrim { position: fixed; inset: 0; z-index: 50; background: var(--window-grad); display: block; }
   .modal { width: 100%; height: 100%; position: relative; display: flex; flex-direction: column; background: var(--glass); backdrop-filter: blur(24px) saturate(180%); -webkit-backdrop-filter: blur(24px) saturate(180%); border: none; border-radius: 0; box-shadow: none; overflow: hidden; color: var(--ink); font-family: var(--ui); }
-  .row:focus-visible, .add:focus-visible, .remove:focus-visible, .primary:focus-visible, .fname:focus-visible, .del:focus-visible, .cbtns button:focus-visible { outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent); }
+  .row:focus-visible, .rowmain:focus-visible, .add:focus-visible, .primary:focus-visible, .fname:focus-visible, .del:focus-visible, .inst:focus-visible, .cbtns button:focus-visible { outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent); }
   .add:hover:not(:disabled) { border-color: color-mix(in srgb, var(--accent) 45%, var(--hairline)); color: var(--accent-strong, var(--accent)); }
-  .remove:hover { background: color-mix(in srgb, var(--danger) 10%, transparent); }
 
-  .body { flex: 1; display: grid; grid-template-columns: 220px 1fr; overflow: hidden; }
+  .botpick { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--ink-soft); -webkit-app-region: no-drag; }
+  .botpick select { background: color-mix(in srgb, var(--ink) 5%, var(--surface)); border: 1px solid var(--hairline); border-radius: 8px; padding: 5px 9px; color: var(--ink); font-size: 12px; font-family: var(--mono); outline: none; }
+
+  .body { flex: 1; display: grid; grid-template-columns: 260px 1fr; overflow: hidden; }
 
   .list { border-right: 1px solid var(--hairline); padding: 10px; display: flex; flex-direction: column; gap: 3px; overflow-y: auto; background: color-mix(in srgb, var(--ink) 3%, transparent); }
-  .row { display: flex; flex-direction: column; gap: 2px; text-align: left; padding: 8px 10px; border: none; background: transparent; border-radius: 8px; color: var(--ink); }
+  .sectlbl { font-size: 11px; font-weight: 600; color: var(--ink-faint); text-transform: uppercase; letter-spacing: .04em; padding: 6px 6px 3px; }
+  .sectlbl.market { margin-top: 12px; border-top: 1px solid var(--hairline); padding-top: 12px; }
+  .row { display: flex; align-items: center; border-radius: 8px; }
   .row:hover { background: color-mix(in srgb, var(--ink) 5%, transparent); }
   .row.sel { background: color-mix(in srgb, var(--accent) 16%, transparent); }
-  .row .nm { font-size: 13px; font-weight: 600; }
-  .row .ds { font-size: 11px; color: var(--ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rowmain { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; text-align: left; padding: 8px 10px; border: none; background: transparent; color: var(--ink); }
+  .nm { font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
+  .badge { font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 6px; background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent-strong, var(--accent)); }
+  .badge.own { background: color-mix(in srgb, var(--ink) 10%, transparent); color: var(--ink-soft); }
+  .badge.broken { background: color-mix(in srgb, var(--danger) 16%, transparent); color: var(--danger); }
+  .rowmain:disabled { cursor: default; opacity: .7; }
+  .ds { font-size: 11px; color: var(--ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .muted { color: var(--ink-faint); font-size: 12px; padding: 12px; }
   .muted.center { display: grid; place-items: center; height: 100%; }
+
+  .mrow { display: grid; grid-template-columns: 1fr auto; grid-template-rows: auto auto; column-gap: 8px; align-items: center; padding: 7px 8px; border-radius: 8px; }
+  .mrow:hover { background: color-mix(in srgb, var(--ink) 4%, transparent); }
+  .mnm { font-size: 12.5px; font-weight: 600; font-family: var(--mono); }
+  .mds { grid-column: 1; font-size: 11px; color: var(--ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .inst { grid-column: 2; grid-row: 1 / span 2; padding: 5px 12px; border-radius: 8px; border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--hairline)); background: transparent; color: var(--accent-strong, var(--accent)); font-size: 11px; font-weight: 600; }
+  .inst:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+  .inst.on { border-color: var(--hairline); color: var(--ink-soft); }
+  .inst.on:hover { border-color: color-mix(in srgb, var(--danger) 40%, var(--hairline)); color: var(--danger); background: color-mix(in srgb, var(--danger) 8%, transparent); }
 
   .new { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
   input { background: color-mix(in srgb, var(--ink) 4%, var(--surface)); border: 1px solid var(--hairline); border-radius: 10px; padding: 8px 11px; color: var(--ink); font-size: 12px; font-family: var(--mono); outline: none; transition: border-color .15s ease, box-shadow .15s ease; }
@@ -240,10 +356,10 @@
   .add:disabled { opacity: 0.45; }
 
   .detail { display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
-  .dhead { display: flex; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--hairline); }
+  .dhead { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--hairline); }
   .dt { font-size: 14px; font-weight: 600; font-family: var(--mono); }
+  .robadge { font-size: 11px; color: var(--ink-faint); }
   .spacer { flex: 1; }
-  .remove { color: var(--danger); background: transparent; border: 1px solid color-mix(in srgb, var(--danger) 40%, var(--hairline)); border-radius: 4px; padding: 5px 11px; font-size: 12px; }
 
   .cols { flex: 1; display: grid; grid-template-columns: 210px 1fr; min-height: 0; }
   .files { border-right: 1px solid var(--hairline); padding: 10px; display: flex; flex-direction: column; gap: 2px; overflow-y: auto; background: color-mix(in srgb, var(--ink) 3%, transparent); }
@@ -262,6 +378,7 @@
   .primary:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 6px 18px color-mix(in srgb, var(--grad-a) 50%, transparent); }
   .primary:disabled { opacity: 0.45; }
   textarea.code { flex: 1; resize: none; border: none; outline: none; background: var(--code-bg); color: var(--ink); padding: 12px 14px; font-family: var(--mono); font-size: 12.5px; line-height: 1.6; }
+  textarea.code[readonly] { opacity: .85; }
 
   .err { position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%); background: var(--surface); border: 1px solid color-mix(in srgb, var(--danger) 50%, var(--hairline)); color: var(--danger); padding: 8px 14px; border-radius: 8px; font-size: 12px; box-shadow: var(--shadow-pop); }
 

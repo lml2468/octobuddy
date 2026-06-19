@@ -6,11 +6,17 @@
 import { Create as $Create } from "@wailsio/runtime";
 
 /**
- * Info summarizes a workflow for the list view.
+ * Info summarizes a workflow for the list view. Installed marks a per-bot entry
+ * that is a symlink into the marketplace catalog (vs. a real per-bot script).
+ * Broken marks an installed symlink whose catalog target no longer resolves
+ * (e.g. the marketplace entry was deleted) — surfaced so the UI can offer to
+ * uninstall the orphan.
  */
 export class Info {
     "name": string;
     "description": string;
+    "installed": boolean;
+    "broken": boolean;
 
     /** Creates a new Info instance. */
     constructor($$source: Partial<Info> = {}) {
@@ -19,6 +25,12 @@ export class Info {
         }
         if (!("description" in $$source)) {
             this["description"] = "";
+        }
+        if (!("installed" in $$source)) {
+            this["installed"] = false;
+        }
+        if (!("broken" in $$source)) {
+            this["broken"] = false;
         }
 
         Object.assign(this, $$source);
