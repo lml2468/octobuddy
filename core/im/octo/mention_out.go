@@ -398,13 +398,21 @@ type segment struct {
 // strictly inside a protected range, pull back to the range start (move the
 // protected unit whole to the next segment). Returns (-1, false) when pulling
 // back would land at 0.
+// adjustSplitForProtectedRanges moves a candidate split point off of any
+// protected range it lands inside. If the range has room before it, split there;
+// if the range starts at 0 (a single mention longer than maxUnits at the segment
+// start), there is no earlier boundary, so split at the range END to keep the
+// mention intact in one (over-long) segment rather than slicing through it —
+// returning (rangeEnd, true). A mention can never realistically exceed maxUnits
+// (SanitizeDisplayName caps names well under 3500 UTF-16 units), so this is a
+// safety net, not a hot path.
 func adjustSplitForProtectedRanges(splitAt int, ranges []protectedRange) (int, bool) {
 	for _, r := range ranges {
 		if splitAt > r.start && splitAt < r.end {
 			if r.start > 0 {
 				return r.start, true
 			}
-			return -1, false
+			return r.end, true
 		}
 	}
 	return splitAt, true
@@ -476,12 +484,19 @@ func splitMessageProtected(text string, maxUnits int, ranges []protectedRange) [
 				splitAt--
 			}
 			if adj, ok := adjustSplitForProtectedRanges(splitAt, local); ok && adj > 0 {
-				if adj < splitAt {
-					splitAt = adj
-				}
+				// adj < splitAt: a protected range with room before it → cut earlier.
+				// adj > splitAt: a mention longer than maxUnits starting at 0 → cut at
+				// its end so the whole mention stays in this (over-long) segment
+				// instead of being sliced through.
+				splitAt = adj
 			}
 		}
 
+		// adj from a start-0 oversized mention can exceed the remaining length;
+		// clamp so the slice below never panics.
+		if splitAt > len(remaining) {
+			splitAt = len(remaining)
+		}
 		segs = append(segs, segment{text: decodeUTF16(remaining[:splitAt]), start: consumed})
 		remaining = remaining[splitAt:]
 		consumed += splitAt

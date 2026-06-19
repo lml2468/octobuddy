@@ -89,6 +89,7 @@ func TestBuildMediaURL(t *testing.T) {
 		{"dot segment", "file/./secret", testAPIURL, ""},
 		{"encoded dot", "file/%2e%2e/secret", testAPIURL, ""},
 		{"encoded slash", "file/..%2f..%2fsecret", testAPIURL, ""},
+		{"double encoded dot", "file/%252e%252e/secret", testAPIURL, ""},
 		{"leading slash", "/etc/passwd", testAPIURL, ""},
 		{"protocol downgrade same host", "http://api.example.com/file/z.png", testAPIURL, ""},
 	}

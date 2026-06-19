@@ -139,6 +139,12 @@ func buildMediaURL(relURL, apiURL string) string {
 	if strings.Contains(lower, "%2e") {
 		return ""
 	}
+	// Reject an encoded percent (%25…) too: a downstream store that double-decodes
+	// could turn %252e back into %2e and then "." — a traversal the single-decode
+	// checks above would miss (L21).
+	if strings.Contains(lower, "%25") {
+		return ""
+	}
 
 	baseURL := strings.TrimRight(apiURL, "/")
 	candidate := baseURL + "/file/" + storagePath

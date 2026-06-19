@@ -283,6 +283,31 @@ func TestSplitProtectedKeepsSpacedNameWhole(t *testing.T) {
 	}
 }
 
+// TestSplitProtectedOversizedAtStart: a protected range that begins at offset 0
+// and is longer than maxUnits has no earlier boundary to cut at. The splitter
+// must keep it whole in one (over-long) segment instead of slicing through it or
+// panicking (L22 regression).
+func TestSplitProtectedOversizedAtStart(t *testing.T) {
+	text := "AAAAAAAAAAAAAAAAAAAA tail" // 20 'A's, then " tail"
+	ranges := []protectedRange{{start: 0, end: 20}}
+	segs := splitMessageProtected(text, 8, ranges) // maxUnits < protected length
+	if len(segs) == 0 {
+		t.Fatal("expected at least one segment")
+	}
+	// The protected run must survive intact at the start of the first segment.
+	if !strings.HasPrefix(segs[0].text, "AAAAAAAAAAAAAAAAAAAA") {
+		t.Errorf("protected run was sliced: first segment = %q", segs[0].text)
+	}
+	// Reassembly must be lossless.
+	var reassembled string
+	for _, s := range segs {
+		reassembled += s.text
+	}
+	if reassembled != text {
+		t.Errorf("reassembled = %q, want %q", reassembled, text)
+	}
+}
+
 // --- OnReply: empty reply → no-response fallback -----------------------------
 
 func TestOnReplyEmptyFallback(t *testing.T) {
