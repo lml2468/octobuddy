@@ -156,7 +156,7 @@ type Resolved struct {
 	GlobalSkillsDir    string // ~/.xclaw/skills           — install-wide skills
 	WorkflowsDir       string // ~/.xclaw/<id>/workflows   — per-bot workflows (shadow global)
 	GlobalWorkflowsDir string // ~/.xclaw/workflows        — install-wide workflows
-	// ClaudeConfigDir is the per-bot CLAUDE_CONFIG_DIR (~/.xclaw/<id>/claude).
+	// ClaudeConfigDir is the per-bot CLAUDE_CONFIG_DIR (~/.xclaw/<id>/.claude).
 	// Set as the agent's config root to ISOLATE it from the operator's ~/.claude
 	// (user-scope skills + installed plugins would otherwise leak into every
 	// bot). Empty when agent.inheritUserConfig is set. Built-in CLI skills still
@@ -256,7 +256,7 @@ func resolveBots(global File, baseDir string) ([]Resolved, error) {
 		r.GlobalSkillsDir = filepath.Join(baseDir, "skills")
 		r.WorkflowsDir = filepath.Join(botRoot, "workflows")
 		r.GlobalWorkflowsDir = filepath.Join(baseDir, "workflows")
-		r.ClaudeConfigDir = filepath.Join(botRoot, "claude")
+		r.ClaudeConfigDir = filepath.Join(botRoot, ".claude")
 
 		// precedence: inlineBot ?? global default
 		r.APIURL = firstNonEmpty(bot.APIURL, global.APIURL)

@@ -115,7 +115,7 @@ Key invariants to preserve:
   and `listIn` surfaces a dead symlink as `Installed+Broken` so the UI can clear
   it. Managed from the desktop per-bot Skills/Workflows windows.
 - **Agent config isolation** (`config.DriverEnvWith`): each bot's `claude` runs
-  with `CLAUDE_CONFIG_DIR=~/.xclaw/<id>/claude` so it does NOT inherit the
+  with `CLAUDE_CONFIG_DIR=~/.xclaw/<id>/.claude` so it does NOT inherit the
   operator's `~/.claude` (user-scope skills + installed plugins would otherwise
   leak into every bot). Auth is env-based (`ANTHROPIC_*`), so this is safe; CLI
   built-in skills still load, and the per-bot catalog comes from the sandbox.
