@@ -188,3 +188,38 @@ func TestUpgradeAbortsWhenChecksumsDownloadFails(t *testing.T) {
 		t.Error("no binary must be installed when the checksums download fails")
 	}
 }
+
+func TestLoginRequiresRobotIDAndToken(t *testing.T) {
+	if err := Login(context.Background(), "", "bf_x", "https://x/api"); err == nil {
+		t.Error("Login with empty robotID must error")
+	}
+	if err := Login(context.Background(), "bot_x", "", "https://x/api"); err == nil {
+		t.Error("Login with empty token must error")
+	}
+}
+
+func TestLoginMissingBinaryErrors(t *testing.T) {
+	// Point HOME at an empty temp dir so BinPath() resolves to a path that
+	// doesn't exist; Login must refuse with a clear error rather than spawn.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	err := Login(context.Background(), "bot_x", "bf_x", "https://x/api")
+	if err == nil {
+		t.Fatal("Login with no installed binary must error")
+	}
+}
+
+func TestLogoutNoOpOnAbsentBinary(t *testing.T) {
+	// Without a binary OR a profile, Logout must be a clean no-op so callers
+	// (e.g. bot-delete path) can run it unconditionally.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	if err := Logout(context.Background(), "bot_x"); err != nil {
+		t.Errorf("Logout with no binary should be no-op, got %v", err)
+	}
+	if err := Logout(context.Background(), ""); err != nil {
+		t.Errorf("Logout with empty robotID should be no-op, got %v", err)
+	}
+}

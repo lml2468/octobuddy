@@ -22,6 +22,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -378,4 +379,67 @@ func compareVersions(a, b string) int {
 func isFile(path string) bool {
 	fi, err := os.Stat(path)
 	return err == nil && !fi.IsDir()
+}
+
+// Login records a bot's bf_ token under a per-robot-id profile in octo-cli's
+// credential store (~/.octo-cli/credentials.enc). Required for any new bot:
+// when the agent is spawned with OCTO_BOT_ID=<robotID>, octo-cli does a
+// profile lookup (NOT env fallback) and errors with "no profile found" if the
+// profile is missing — so without this call, every octo-cli invocation from
+// the agent for a newly-added bot fails authoritatively even though the bf_
+// token is in our keychain + injected as OCTO_BOT_TOKEN.
+//
+// Idempotent: re-running with the same (robotID, token, apiURL) replaces the
+// profile in place. Best-effort by design: a missing octo-cli binary or a
+// failure inside auth login is returned so the caller can surface it, but a
+// caller that wants to keep "saving config" robust can choose to log + ignore.
+//
+// The token is fed on stdin (`--with-token`) — never as an argv element, so it
+// never appears in ps / process listings.
+func Login(ctx context.Context, robotID, token, apiURL string) error {
+	if robotID == "" {
+		return fmt.Errorf("octocli.Login: robotID is required")
+	}
+	if token == "" {
+		return fmt.Errorf("octocli.Login: token is required")
+	}
+	bin := BinPath()
+	if !isFile(bin) {
+		return fmt.Errorf("octocli.Login: octo-cli not installed at %s", bin)
+	}
+	args := []string{"auth", "login", "--bot-id", robotID, "--with-token"}
+	if apiURL != "" {
+		args = append(args, "--api-base-url", apiURL)
+	}
+	cmd := exec.CommandContext(ctx, bin, args...)
+	cmd.Stdin = strings.NewReader(token)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("octo-cli auth login (%s): %v: %s", robotID, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// Logout removes the per-robot-id profile from octo-cli's credential store.
+// Best-effort: absent profile + absent binary both return nil so callers can
+// run this on bot deletion without worrying about preconditions.
+func Logout(ctx context.Context, robotID string) error {
+	if robotID == "" {
+		return nil
+	}
+	bin := BinPath()
+	if !isFile(bin) {
+		return nil
+	}
+	cmd := exec.CommandContext(ctx, bin, "auth", "logout", "--bot-id", robotID)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		// octo-cli returns non-zero when the profile doesn't exist — treat as
+		// already-clean rather than an error.
+		if strings.Contains(string(out), "no profile found") {
+			return nil
+		}
+		return fmt.Errorf("octo-cli auth logout (%s): %v: %s", robotID, err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }

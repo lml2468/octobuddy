@@ -475,13 +475,16 @@ func (r Resolved) DriverEnvWith(gatewayToken string) []string {
 // supplied explicitly so the caller can pass the runtime-injected bot token
 // (from the in-memory secret store) rather than a config-file value.
 //
-// The spawned agent calls the octo-cli companion over Bash; with no on-disk
-// credential profile, octo-cli's EnvProvider reads OCTO_BOT_TOKEN +
-// OCTO_API_BASE_URL from the process env. The bot's octoToken IS the bf_ token
-// octo-cli wants, and the bot's apiUrl is the base URL — so injecting these two
-// is what makes the agent's octo-cli authenticated (no manual `auth login`).
+// The spawned agent calls the octo-cli companion over Bash. octo-cli has a
+// resolution chain: when OCTO_BOT_ID is set in the env (the wizard always
+// sets it), octo-cli does a DISK-PROFILE lookup keyed by robot id and IGNORES
+// OCTO_BOT_TOKEN entirely — so the bf_ token alone in env isn't enough; the
+// desktop side must also run `octo-cli auth login` per bot to write the disk
+// profile (see desktop/internal/octocli.Login, called from configstore.Save).
+// We still inject OCTO_BOT_TOKEN + OCTO_API_BASE_URL here as the fallback path
+// for any agent code that bypasses --bot-id (e.g. a one-off `octo-cli api …`).
 // Both are omitted when empty; the same exec-boundary security note as
-// DriverEnvWith applies (octo-cli takes its credential via env by design).
+// DriverEnvWith applies.
 func (r Resolved) DriverEnvForOcto(gatewayToken, octoToken string) []string {
 	var out []string
 	for k, v := range r.Agent.Env {

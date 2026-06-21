@@ -6,14 +6,18 @@
 package configstore
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/lml2468/xclaw/core/config"
+	"github.com/lml2468/xclaw/desktop/internal/octocli"
 	"github.com/lml2468/xclaw/desktop/internal/safepath"
 	"github.com/lml2468/xclaw/desktop/internal/secrets"
 )
@@ -275,6 +279,19 @@ func Save(bots []BotConfig, removedIDs []string) error {
 		if err := secrets.Set(b.ID, secrets.GatewayToken, b.GatewayToken); err != nil {
 			return fmt.Errorf("store gatewayToken for %s: %w", b.ID, err)
 		}
+		// octo-cli profile: when OCTO_BOT_ID is set in the env (which the wizard
+		// always does), octo-cli requires a matching disk profile — it does NOT
+		// fall back to env-injected OCTO_BOT_TOKEN. Without this, the very first
+		// octo-cli call from the agent fails with "no profile found for bot id".
+		// Best-effort: a missing octo-cli binary or login failure logs but doesn't
+		// fail the save (the operator can repair from the tray's octo-cli row).
+		if robotID := strings.TrimSpace(b.Env["OCTO_BOT_ID"]); robotID != "" && b.OctoToken != "" {
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			if err := octocli.Login(ctx, robotID, b.OctoToken, b.APIURL); err != nil {
+				log.Printf("xclaw: octo-cli profile for %s (robot=%s) not synced: %v", b.ID, robotID, err)
+			}
+			cancel()
+		}
 	}
 
 	// Prune ONLY explicitly-removed bots, and only when their data dir really
@@ -293,6 +310,19 @@ func Save(bots []BotConfig, removedIDs []string) error {
 		_ = os.RemoveAll(botDir(id))
 		_ = secrets.Delete(id, secrets.OctoToken)
 		_ = secrets.Delete(id, secrets.GatewayToken)
+		// Clear the matching octo-cli disk profile too, so a re-add of the same
+		// robot id doesn't pick up a stale token. existing[id] is the on-disk
+		// entry from before this save, so it still carries the bot's env (where
+		// OCTO_BOT_ID lives) even though the new bots[] no longer mentions it.
+		if prior, ok := existing[id]; ok && prior.Agent != nil {
+			if robotID := strings.TrimSpace(prior.Agent.Env["OCTO_BOT_ID"]); robotID != "" {
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				if err := octocli.Logout(ctx, robotID); err != nil {
+					log.Printf("xclaw: octo-cli profile for %s (robot=%s) not cleared: %v", id, robotID, err)
+				}
+				cancel()
+			}
+		}
 	}
 	return nil
 }
