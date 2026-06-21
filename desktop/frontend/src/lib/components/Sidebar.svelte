@@ -22,12 +22,20 @@
     s.awaiting ? "replying…" : (s.messages.at(-1)?.text ?? s.preview ?? "No messages yet");
 
   // In-app light/dark toggle (persisted). The store also honours ?theme=.
+  // The button shows the icon for the OPPOSITE state — sun while in dark
+  // (click → light), moon while in light (click → dark) — the standard
+  // affordance hint for what the click will do.
+  function currentTheme(): "dark" | "light" {
+    const cur = document.documentElement.getAttribute("data-theme");
+    if (cur === "dark" || cur === "light") return cur;
+    return matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  }
+  let theme = $state<"dark" | "light">("dark");
+  $effect(() => { theme = currentTheme(); });
   function toggleTheme() {
-    const el = document.documentElement;
-    let cur = el.getAttribute("data-theme");
-    if (!cur) cur = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-    const next = cur === "dark" ? "light" : "dark";
-    el.setAttribute("data-theme", next);
+    const next = theme === "dark" ? "light" : "dark";
+    document.documentElement.setAttribute("data-theme", next);
+    theme = next;
     try { localStorage.setItem("xclaw:theme", next); } catch (_) {}
   }
 </script>
@@ -38,7 +46,11 @@
     <span class="brand-name">XClaw</span>
     <span class="spacer"></span>
     <button class="iconbtn theme-btn" style="--wails-draggable: no-drag;" title="切换明暗" aria-label="切换明暗" onclick={toggleTheme}>
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+      {#if theme === "dark"}
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+      {:else}
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+      {/if}
     </button>
   </div>
 
