@@ -142,14 +142,35 @@ func (c *Connector) OnStatus(fn func(connected bool, lastErr string)) { c.onStat
 // (re)registration. The owner uid gates owner-only features (cron create/delete).
 func (c *Connector) OnOwner(fn func(ownerUID string)) { c.onOwner = fn }
 
-// RegisterReplyTarget binds a session key to a delivery channel so OnReply knows
-// where to send. Real inbound messages do this in onInbound; the cron fire hook
-// uses it so a scheduled task whose session never received a live message still
-// has its reply delivered to the bound channel.
+// RegisterReplyTarget is DEPRECATED — direct map writes race onInbound's
+// per-turn target. Cron callers must use EnqueueCron instead, which carries
+// the target alongside the queued inbound so drainTurns is the sole writer.
+// Kept temporarily as a no-op shim with a loud log so a forgotten caller
+// surfaces in stderr rather than producing a mis-routed reply.
 func (c *Connector) RegisterReplyTarget(sessionKey, channelID string, channelType ChannelType) {
-	c.mu.Lock()
-	c.targets[sessionKey] = replyTarget{channelID: channelID, channelType: channelType}
-	c.mu.Unlock()
+	c.logf("DEPRECATED: RegisterReplyTarget(%s) is a no-op since round-8 F1-Arch; use EnqueueCron — call ignored", sessionKey)
+}
+
+// EnqueueCron enqueues a cron-fired turn onto the per-session worker so it
+// serializes with real inbound on the same key (round 8 F1-Arch). The
+// target — including any persona on-behalf-of binding — travels with the
+// queued turn so OnReply reads exactly the target the cron fire intended,
+// even if a real inbound enqueued in between and tried to write its own
+// target into the global map.
+//
+// Returns immediately. The actual gw.Handle call happens on the worker
+// goroutine that drainTurns owns; the bot's shutdown chain
+// (connector.WaitTurns + cm.Wait) ensures the in-flight turn finishes
+// before the store closes.
+func (c *Connector) EnqueueCron(sessionKey, channelID string, channelType ChannelType, inbound router.InboundMessage) {
+	tgt := replyTarget{channelID: channelID, channelType: channelType}
+	// Persona-OBO bots speak as the grantor; without this the cron reply
+	// arrives from the bot identity while every other reply in the channel
+	// arrives from the grantor — the persona illusion breaks visibly.
+	if c.persona.UID != "" {
+		tgt.onBehalfOf = c.persona.UID
+	}
+	c.enqueueTurn(sessionKey, inbound, tgt)
 }
 
 func (c *Connector) setStatus(connected bool, lastErr string) {
@@ -197,8 +218,22 @@ func NewConnector(rest *RESTClient) *Connector {
 // turnQueue is the per-session-key serial dispatch state (guarded by Connector.mu).
 // pending holds turns awaiting execution in arrival order; running marks whether
 // a worker goroutine is draining them. See enqueueTurn/drainTurns (H3).
+//
+// Each pending entry carries its OWN reply target (round 8 F1-Arch): the
+// prior contract stored a SINGLE target per session key in c.targets, which
+// onInbound and RegisterReplyTarget both wrote. Real inbound + a concurrent
+// cron fire on the same session key would stomp the map and produce a
+// mis-delivered reply + a silently-dropped one. With the target traveling
+// with the queued turn, drainTurns is the only writer to c.targets, the
+// write happens immediately before gw.Handle, and the per-turn OnReply
+// reads exactly the target the producer attached.
+type queuedTurn struct {
+	inbound router.InboundMessage
+	tgt     replyTarget
+}
+
 type turnQueue struct {
-	pending []router.InboundMessage
+	pending []queuedTurn
 	running bool
 }
 
@@ -522,10 +557,11 @@ func (c *Connector) onInbound(m BotMessage) {
 		c.persona.TriggeredAsGrantor(m.PersonaMention(), m.ExplicitlyMentionsBot(uid)) {
 		tgt.onBehalfOf = c.persona.UID
 	}
-	// issue #98 auto-reroute, computed ONCE at registration (not on every target()
-	// read): if a thread session's reply target is the bare parent group, rewrite
-	// it to the thread so the reply lands in the sub-topic. Restricted to
-	// group-like targets so a DM is never rewritten into a CommunityTopic.
+	// Per-turn target travels with the queued turn so drainTurns can set
+	// c.targets[key] AT pop-time — the prior contract had onInbound write the
+	// global map directly here, which raced cron's RegisterReplyTarget (round 8
+	// F1-Arch). issue #98 reroute is computed once here so it isn't recomputed
+	// on every target() read.
 	if tgt.channelType != ChannelDM {
 		if rerouted, did := RerouteTarget(key, tgt.channelID); did {
 			c.logf("reroute reply for thread session %s: target %q -> %q (issue #98)", key, tgt.channelID, rerouted)
@@ -533,6 +569,12 @@ func (c *Connector) onInbound(m BotMessage) {
 			tgt.channelType = ChannelCommunityTopic
 		}
 	}
+	// Also record the target now so callers probing c.target(key) immediately
+	// after onInbound (notably the persona tests) observe the right value.
+	// drainTurns re-asserts this from the queued item right before gw.Handle,
+	// so a concurrent EnqueueCron that wrote a different target between this
+	// line and the pop doesn't actually corrupt either turn — the queue item
+	// carries the authoritative target for THIS turn.
 	c.mu.Lock()
 	c.targets[key] = tgt
 	c.mu.Unlock()
@@ -567,13 +609,13 @@ func (c *Connector) onInbound(m BotMessage) {
 	// for the whole (possibly multi-minute) turn (H3). The router still serializes
 	// same-session turns; the per-key queue guarantees they reach the router in
 	// arrival order despite running on a goroutine.
-	c.enqueueTurn(key, inbound)
+	c.enqueueTurn(key, inbound, tgt)
 }
 
 // enqueueTurn appends a turn to the per-session-key serial queue, starting a
 // worker goroutine for the key if none is running. Same-key turns run FIFO; the
 // worker exits when its queue drains, so idle keys hold no goroutine.
-func (c *Connector) enqueueTurn(key string, inbound router.InboundMessage) {
+func (c *Connector) enqueueTurn(key string, inbound router.InboundMessage, tgt replyTarget) {
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
@@ -584,7 +626,7 @@ func (c *Connector) enqueueTurn(key string, inbound router.InboundMessage) {
 		q = &turnQueue{}
 		c.turnQueues[key] = q
 	}
-	q.pending = append(q.pending, inbound)
+	q.pending = append(q.pending, queuedTurn{inbound: inbound, tgt: tgt})
 	start := !q.running
 	q.running = true
 	c.mu.Unlock()
@@ -618,11 +660,22 @@ func (c *Connector) drainTurns(key string) {
 			c.mu.Unlock()
 			return
 		}
-		inbound := q.pending[0]
+		item := q.pending[0]
 		q.pending = q.pending[1:]
+		// Set the per-turn target IMMEDIATELY before releasing the lock and
+		// running gw.Handle, so OnReply (which reads via c.target(key))
+		// observes exactly the target the producer attached. drainTurns is
+		// the sole writer to c.targets, so cron+inbound concurrent enqueues
+		// no longer race (round 8 F1-Arch).
+		c.targets[key] = item.tgt
 		c.mu.Unlock()
 
-		dec, err := c.gateway.Handle(c.ctx(), inbound)
+		// Tests may enqueue without setting a gateway; skip dispatch in
+		// that case so the queue still drains cleanly.
+		if c.gateway == nil {
+			continue
+		}
+		dec, err := c.gateway.Handle(c.ctx(), item.inbound)
 		if err != nil {
 			c.logf("handle turn for %s: %v", key, err)
 		}
@@ -630,9 +683,9 @@ func (c *Connector) drainTurns(key string) {
 		// guard, or it turned out not to be mention-free after all) is still group
 		// chatter the agent should see later — observe it as background. runTurn
 		// already cached it on the Accepted path, so only observe on these drops.
-		if inbound.ChannelType == router.ChannelGroup && !inbound.Mentioned &&
+		if item.inbound.ChannelType == router.ChannelGroup && !item.inbound.Mentioned &&
 			(dec == router.DroppedBot || dec == router.DroppedNotMentioned) {
-			c.gateway.Observe(inbound)
+			c.gateway.Observe(item.inbound)
 		}
 	}
 }

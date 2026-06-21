@@ -301,8 +301,10 @@ func runBot(ctx context.Context, cfg config.Resolved, reg *botRegistry, srv *con
 	// Cron scheduler (#115): when enabled, load <dataDir>/cron.json and fire due
 	// tasks through the gateway as synthetic CronFire messages. The owner uid that
 	// gates create/delete is resolved from the bot registration (owner_uid).
+	// Declared at this scope so the post-Run shutdown chain below can Wait on it.
+	var cm *cron.Manager
 	if cfg.Agent.Cron {
-		cm := cron.NewManager(cron.NewStore(filepath.Join(cfg.DataDir, "cron.json")), "", nil)
+		cm = cron.NewManager(cron.NewStore(filepath.Join(cfg.DataDir, "cron.json")), "", nil)
 		cm.SetLabel(fmt.Sprintf("[%s] ", cfg.BotID))
 		cm.OnFire(func(f cron.Fire) {
 			fireCronTask(ctx, gw, connector, f.Task)
@@ -319,21 +321,29 @@ func runBot(ctx context.Context, cfg config.Resolved, reg *botRegistry, srv *con
 
 	err = connector.Run(ctx)
 	// Shutdown ordering matters: Run has returned because ctx was cancelled,
-	// but drainTurns goroutines + control-bus session.send goroutines may
-	// still be inside gateway.Handle, mid-write to the store. Wait for them
-	// BEFORE the deferred st.Close() fires (defers are LIFO, so the function
-	// returns through Wait first → st.Close last).
+	// but drainTurns goroutines + control-bus session.send goroutines +
+	// cron-fired turns may still be inside gateway.Handle, mid-write to the
+	// store. Wait for ALL of them BEFORE the deferred st.Close() fires
+	// (defers are LIFO, so the function returns through Wait first →
+	// st.Close last). cm.Wait() covers cron fires; cm.Stop() (deferred above)
+	// only halts the scan, it does not drain in-flight turns.
 	connector.WaitTurns()
 	rtBot.target.turnsWG.Wait()
+	if cm != nil {
+		cm.Wait()
+	}
 	return err
 }
 
 // fireCronTask delivers one due cron task through the full turn pipeline. It
-// binds the connector's reply target to the task's session, then hands the
-// task's stored prompt to the gateway as a synthetic CronFire message (which the
-// router accepts past the group @mention gate and the rate limit). Best-effort:
-// a failed fire is logged, never propagated, so the scheduler loop survives.
+// enqueues a synthetic CronFire message onto the connector's per-session worker
+// so it serializes with any concurrent real inbound on the same sessionKey
+// (round 8 F1-Arch: direct gw.Handle here used to race onInbound's target
+// write, mis-delivering one reply and dropping the other). Best-effort: a
+// failed enqueue is logged, never propagated, so the scheduler loop survives.
 func fireCronTask(ctx context.Context, gw *gateway.Gateway, connector *octo.Connector, t cron.Task) {
+	_ = gw // gateway is reached via the connector's drainTurns; reserved for future ctx threading
+	_ = ctx
 	chType := router.ChannelDM
 	octoType := octo.ChannelDM
 	if t.ChannelType == cron.ChannelKind(router.ChannelGroup) {
@@ -353,10 +363,7 @@ func fireCronTask(ctx context.Context, gw *gateway.Gateway, connector *octo.Conn
 		fmt.Fprintf(os.Stderr, "cron: task %s has unroutable coords: %v\n", t.ID, err)
 		return
 	}
-	connector.RegisterReplyTarget(key, t.ChannelID, octoType)
-	if _, err := gw.Handle(ctx, inbound); err != nil {
-		fmt.Fprintf(os.Stderr, "cron: task %s fire failed: %v\n", t.ID, err)
-	}
+	connector.EnqueueCron(key, t.ChannelID, octoType, inbound)
 }
 
 // makeMultiBotHandler routes control-bus commands by botId across the registry.

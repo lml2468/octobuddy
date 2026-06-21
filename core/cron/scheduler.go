@@ -60,6 +60,13 @@ type Manager struct {
 	stopCh chan struct{}
 	onFire func(Fire)
 
+	// firesWG tracks every in-flight onFire goroutine spawned by Tick (round 7
+	// switched to async dispatch so a slow turn never blocks subsequent ticks).
+	// The daemon calls Wait() before closing the store on shutdown so a
+	// cron-fired turn isn't half-flushed when st.Close fires — same shape as
+	// connector.WaitTurns + botTarget.turnsWG (round 5 A3).
+	firesWG sync.WaitGroup
+
 	// fireSync, when true, makes Tick invoke onFire on the caller goroutine
 	// instead of dispatching to a new goroutine. Tests flip this so
 	// `Tick(); checkFireCount()` works without a poll-wait. Production
@@ -238,7 +245,9 @@ func (m *Manager) Start() {
 	}()
 }
 
-// Stop halts the scan. Idempotent under concurrent calls.
+// Stop halts the scan. Idempotent under concurrent calls. Does NOT wait for
+// in-flight onFire goroutines — call Wait() for that (or Wait separately so a
+// graceful shutdown can stop the scan promptly, then drain).
 func (m *Manager) Stop() {
 	m.runMu.Lock()
 	defer m.runMu.Unlock()
@@ -250,6 +259,12 @@ func (m *Manager) Stop() {
 	m.timer = nil
 	m.stopCh = nil
 }
+
+// Wait blocks until every in-flight onFire goroutine spawned by Tick has
+// returned. Call after Stop and BEFORE the daemon closes downstream resources
+// (store, gateway) so a cron turn in mid-flush doesn't race the close.
+// Idempotent: a manager that has never fired returns immediately.
+func (m *Manager) Wait() { m.firesWG.Wait() }
 
 // Tick performs one scan: fire due tasks, advance/drop them, persist. Exposed
 // for tests. Never panics out — a failing onFire is logged and skipped, never
@@ -317,7 +332,11 @@ func (m *Manager) Tick() {
 			if m.fireSync {
 				m.safeFire(f)
 			} else {
-				go m.safeFire(f)
+				m.firesWG.Add(1)
+				go func(f Fire) {
+					defer m.firesWG.Done()
+					m.safeFire(f)
+				}(f)
 			}
 		}
 	}

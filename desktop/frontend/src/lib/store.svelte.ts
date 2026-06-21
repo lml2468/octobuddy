@@ -9,11 +9,15 @@ import { XClawService } from "../../bindings/github.com/lml2468/xclaw/desktop";
 const CONSOLE_UID = "gui-user";
 
 // TURN_MAX_MS caps how long a session may sit with awaiting=true with no
-// terminal event before the sweeper clears it. Picked > the daemon's worst
-// realistic turn (multi-minute deep-research streaming) but < any user
-// patience for "is this still alive?" — 8 min is the dispatchTimeoutSec
-// default plus a small slack. TURN_SWEEP_MS is the poll cadence.
-const TURN_MAX_MS = 8 * 60 * 1000;
+// terminal event before the sweeper clears it. Must stay STRICTLY GREATER
+// than the daemon's `defaultDispatchTimeout` (currently 20 min, an IDLE
+// deadline — reset on every AgentEvent) plus reconnect slack; otherwise a
+// healthy multi-tool turn that streams >8 min would trigger a false-positive
+// "长时间未收到响应" while the reply is still pending. The two values are
+// intentionally not auto-derived (no env-config channel for an FE constant);
+// keep them in sync by hand and review on any daemon-side timeout change.
+// TURN_SWEEP_MS is the poll cadence.
+const TURN_MAX_MS = 22 * 60 * 1000;
 const TURN_SWEEP_MS = 30 * 1000;
 
 export type Role = "user" | "assistant" | "tool";
@@ -284,12 +288,21 @@ class Store {
   // so we fetch right after selecting; the loaded flag prevents refetching.
   // Console is included: the daemon persists its messages just like any other
   // session, so on app relaunch we must fetch them or the chat appears empty.
+  //
+  // Eagerly upserts a placeholder session row if missing so a cross-bot jump
+  // from the CommandPalette (selectBot + selectSession synchronously into a
+  // bot whose roster hasn't loaded yet) doesn't silently no-op the history
+  // fetch. Without this, the transcript stayed blank until the user typed
+  // anything to force a session row.
   private loadHistory(key: string) {
     if (this.preview) return;
     const botId = this.selectedBotId;
     if (!botId) return;
-    const s = this.sessions.find((x) => x.botId === botId && x.key === key);
-    if (!s || s.loaded) return;
+    let s = this.sessions.find((x) => x.botId === botId && x.key === key);
+    if (!s) {
+      s = this.ensureSession(botId, key);
+    }
+    if (s.loaded) return;
     XClawService.History(botId, key, 0);
   }
 

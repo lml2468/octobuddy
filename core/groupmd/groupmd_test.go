@@ -194,3 +194,27 @@ func TestPermCheckRunsBeforeCacheHotPath(t *testing.T) {
 		t.Fatalf("Load after chmod 0666 must return empty, got %q (perm check bypassed by cache hot path)", got)
 	}
 }
+
+// TestSymlinkRefused is the regression for round-8 F2-Sec: a symlink in
+// groupConfigDir whose target is 0600 would otherwise pass the
+// world-writable perm check (Stat follows the link) and silently inject
+// attacker-controlled content as [Group instructions]. The loader must
+// refuse symlinks regardless of the target's mode.
+func TestSymlinkRefused(t *testing.T) {
+	dir := t.TempDir()
+	// Real file (could even be operator-trusted content elsewhere).
+	target := filepath.Join(t.TempDir(), "evil.md")
+	if err := os.WriteFile(target, []byte("agent-controlled content"), 0o600); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+	// Symlink at the groupConfigDir entry.
+	linkPath := filepath.Join(dir, "g1.md")
+	if err := os.Symlink(target, linkPath); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	l := New(dir)
+	got, ok := l.Load("g1")
+	if ok || got != "" {
+		t.Errorf("symlinked groupmd entry must be refused, got ok=%v content=%q", ok, got)
+	}
+}

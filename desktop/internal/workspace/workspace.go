@@ -147,7 +147,7 @@ func readDir(abs, rel string, depth int, count *int) ([]*Node, error) {
 		isSymlink := e.Type()&os.ModeSymlink != 0
 		isDir := e.IsDir() && !isSymlink
 		n := &Node{Name: name, Path: childRel, IsDir: isDir}
-		if isDir && depth < maxDepth && name != ".claude" {
+		if isDir && depth < maxDepth && !skipDir(name) {
 			kids, err := readDir(filepath.Join(abs, name), childRel, depth+1, count)
 			if err == nil {
 				n.Children = kids
@@ -324,4 +324,30 @@ func kindOf(mime string, textual bool) string {
 	default:
 		return "binary"
 	}
+}
+
+// skipDir reports whether the workspace file tree should refuse to descend
+// into the named child directory. Two reasons to skip:
+//
+//   - `.claude` — the per-bot CLI config dir. Always present, never
+//     interesting in a workspace context, and contains skill bundles +
+//     workflows that have their own UIs.
+//   - common credential-bearing dotdirs — the agent has Bash + bypass
+//     permissions and chooses its own files. If it writes `.aws/credentials`
+//     or `~/.ssh/id_rsa` under its cwd (e.g. a `cp ~/.aws/credentials .`
+//     during a research turn), the desktop file pane would expose those
+//     contents to anyone who can screenshot the GUI. This is operator
+//     self-exposure, not RCE, but a viewing pane shouldn't surface secrets
+//     by default. Operators who specifically want to inspect a `.aws/` dir
+//     can still `cat` it via the agent's tools.
+func skipDir(name string) bool {
+	switch name {
+	case ".claude",
+		".aws", ".ssh", ".gnupg", ".gpg",
+		".docker", ".kube",
+		".npmrc", ".pypirc", ".netrc",
+		".config":
+		return true
+	}
+	return false
 }

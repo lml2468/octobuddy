@@ -131,6 +131,21 @@ func (l *Loader) loadFile(id string) (string, bool) {
 	}
 	path := filepath.Join(l.dir, id+".md")
 
+	// Lstat (not Stat) so a symlink at `path` is observed as a symlink rather
+	// than transparently followed. A symlink whose target is mode 0600 root
+	// would otherwise pass the perm check below and inject whatever the
+	// attacker controls — defense-in-depth around the same trust boundary
+	// the perm check guards. Refuse symlinks outright; operators authoring
+	// groupConfigDir content should use regular files.
+	lst, lerr := os.Lstat(path)
+	if lerr == nil && lst.Mode()&os.ModeSymlink != 0 {
+		fmt.Fprintf(os.Stderr,
+			"[groupmd] refusing %s: file is a symlink. groupConfigDir must hold regular files only.\n",
+			path)
+		l.remember(path, cacheEntry{modTime: lst.ModTime().UnixNano(), size: lst.Size()})
+		return "", false
+	}
+
 	st, err := os.Stat(path)
 	if err != nil || !st.Mode().IsRegular() {
 		// Missing/irregular: remember absence so a repeated miss is cheap, but a

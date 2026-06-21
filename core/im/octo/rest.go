@@ -217,6 +217,14 @@ func (c *RESTClient) SendTextAs(ctx context.Context, channelID string, channelTy
 // landed) produces a successful retry with a new id and the user sees the
 // message twice. clientMsgNo MUST be non-empty.
 func (c *RESTClient) SendTextAsWithMsgNo(ctx context.Context, channelID string, channelType ChannelType, content string, mentionUIDs []string, mentionEntities []MentionEntity, mentionAll bool, onBehalfOf, clientMsgNo string) (SendMessageResult, error) {
+	// Lock the F1 fix in the type system rather than in commentary: a caller
+	// passing "" would re-introduce the duplicate-IM-on-retry hazard silently
+	// (octo-server's dedup is keyed on this field; an empty key collides
+	// with every other empty-key send and the dedup behavior becomes
+	// undefined). Refuse here so the regression is loud.
+	if clientMsgNo == "" {
+		return SendMessageResult{}, fmt.Errorf("octo: SendTextAsWithMsgNo requires a non-empty clientMsgNo (server dedup key)")
+	}
 	payload := map[string]any{
 		"type":    int(MsgText),
 		"content": content,

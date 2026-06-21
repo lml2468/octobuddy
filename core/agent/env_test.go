@@ -18,30 +18,54 @@ func writeFakeBin(t *testing.T, body string) string {
 	return p
 }
 
-func TestMergedEnvOverrides(t *testing.T) {
-	t.Setenv("XCLAW_TEST_BASE", "from-os")
-	env := mergedEnv([]string{"XCLAW_TEST_EXTRA=added", "XCLAW_TEST_BASE=overridden"})
-	// os var present, extra added, and the override appears AFTER the os value
-	// (exec uses the last occurrence).
-	var sawBaseOS, sawBaseOverride, sawExtra bool
-	lastBase := ""
+// TestMergedEnvAllowlistsAndOverrides exercises the env-allowlist contract:
+//   - non-allowlisted operator vars are DROPPED before the agent sees them
+//     (round-8 hardening: a prompt-injected agent shouldn't inherit
+//     AWS_*/GH_TOKEN/OPENAI_API_KEY/SSH_AUTH_SOCK from the operator's shell).
+//   - allowlisted vars pass through.
+//   - LC_* family auto-passes (locale).
+//   - `extra` is appended last so overrides win.
+func TestMergedEnvAllowlistsAndOverrides(t *testing.T) {
+	// Set: one allowlisted (LANG), one LC_* family (LC_TIME), one explicitly
+	// non-allowlisted (AWS_SECRET_ACCESS_KEY — the canonical example of what
+	// must NOT leak into the agent).
+	t.Setenv("LANG", "en_US.UTF-8")
+	t.Setenv("LC_TIME", "en_US.UTF-8")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "AKIA-leak-canary")
+
+	env := mergedEnv([]string{"XCLAW_TEST_EXTRA=added", "LANG=override-via-extra"})
+
+	var sawLang, sawLCTime, sawAWS, sawExtra bool
+	lastLang := ""
 	for _, e := range env {
-		switch e {
-		case "XCLAW_TEST_BASE=from-os":
-			sawBaseOS = true
-			lastBase = "from-os"
-		case "XCLAW_TEST_BASE=overridden":
-			sawBaseOverride = true
-			lastBase = "overridden"
-		case "XCLAW_TEST_EXTRA=added":
+		switch {
+		case e == "LANG=en_US.UTF-8":
+			sawLang = true
+			lastLang = "from-os"
+		case e == "LANG=override-via-extra":
+			lastLang = "override-via-extra"
+		case e == "LC_TIME=en_US.UTF-8":
+			sawLCTime = true
+		case e == "AWS_SECRET_ACCESS_KEY=AKIA-leak-canary":
+			sawAWS = true
+		case e == "XCLAW_TEST_EXTRA=added":
 			sawExtra = true
 		}
 	}
-	if !sawBaseOS || !sawBaseOverride || !sawExtra {
-		t.Fatalf("missing entries: base-os=%v override=%v extra=%v", sawBaseOS, sawBaseOverride, sawExtra)
+	if !sawLang {
+		t.Error("LANG (allowlisted) did not pass through")
 	}
-	if lastBase != "overridden" {
-		t.Fatalf("override must come last (win), last base = %q", lastBase)
+	if !sawLCTime {
+		t.Error("LC_TIME (LC_* family) did not pass through")
+	}
+	if sawAWS {
+		t.Error("AWS_SECRET_ACCESS_KEY (non-allowlisted) leaked through — env allowlist regression")
+	}
+	if !sawExtra {
+		t.Error("extra entry did not append")
+	}
+	if lastLang != "override-via-extra" {
+		t.Errorf("extra must come last (win), last LANG = %q", lastLang)
 	}
 }
 

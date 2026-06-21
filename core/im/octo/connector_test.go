@@ -7,6 +7,9 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/lml2468/xclaw/core/persona"
+	"github.com/lml2468/xclaw/core/router"
 )
 
 // TestConnectorAwaitsTokenBeforeRegister proves the await-token guard: with no
@@ -91,4 +94,63 @@ func TestSettingByteBits(t *testing.T) {
 	if !settingTopic(0b00001000) {
 		t.Fatal("topic bit3")
 	}
+}
+
+// TestQueuedTurnsCarryOwnTarget is the regression for round-8 F1-Arch: cron and
+// real inbound used to share c.targets[key], so a concurrent enqueue could
+// stomp one turn's target → the other turn's reply went to the wrong channel
+// AND one reply was silently dropped. The fix attaches the target to each
+// queued item; drainTurns rewrites c.targets[key] right before gw.Handle.
+// This test simulates two items in the queue with DIFFERENT targets and
+// verifies each reads back its own.
+func TestQueuedTurnsCarryOwnTarget(t *testing.T) {
+	c := NewConnector(NewRESTClient("http://x", func() string { return "tk" }))
+	c.setUID("bot1")
+	const key = "dm:bot1:peer"
+	tgtA := replyTarget{channelID: "chanA", channelType: ChannelDM}
+	tgtB := replyTarget{channelID: "chanB", channelType: ChannelDM, onBehalfOf: "u_grantor"}
+	// Two queued items for the same key — order: A then B.
+	c.enqueueTurn(key, router.InboundMessage{ChannelID: "chanA", ChannelType: router.ChannelDM, Text: "A"}, tgtA)
+	c.enqueueTurn(key, router.InboundMessage{ChannelID: "chanB", ChannelType: router.ChannelDM, Text: "B"}, tgtB)
+
+	// Peek at the queue under lock — both items must carry distinct targets.
+	c.mu.Lock()
+	q := c.turnQueues[key]
+	if q == nil || len(q.pending) != 2 {
+		c.mu.Unlock()
+		t.Fatalf("expected 2 queued items, got %v", q)
+	}
+	if q.pending[0].tgt.channelID != "chanA" || q.pending[0].tgt.onBehalfOf != "" {
+		c.mu.Unlock()
+		t.Errorf("item 0 target lost: %+v", q.pending[0].tgt)
+	}
+	if q.pending[1].tgt.channelID != "chanB" || q.pending[1].tgt.onBehalfOf != "u_grantor" {
+		c.mu.Unlock()
+		t.Errorf("item 1 target lost / grantor stripped: %+v", q.pending[1].tgt)
+	}
+	c.mu.Unlock()
+}
+
+// TestEnqueueCronCarriesPersonaGrantor is the regression for the round-8
+// F1-Arch persona slice: cron fires from a persona-OBO bot used to write a
+// target with onBehalfOf="" via the deprecated RegisterReplyTarget, so the
+// cron reply arrived from the bot identity while every other reply in the
+// channel arrived from the grantor (visible persona breakage). EnqueueCron
+// now stamps the persona grantor onto the queued target.
+func TestEnqueueCronCarriesPersonaGrantor(t *testing.T) {
+	c := NewConnector(NewRESTClient("http://x", func() string { return "tk" }))
+	c.SetPersona(persona.Grantor{UID: "u_grantor", Name: "Admin"})
+	const key = "dm:bot1:peer"
+	c.EnqueueCron(key, "cron-channel", ChannelDM, router.InboundMessage{ChannelID: "cron-channel", ChannelType: router.ChannelDM, Text: "daily"})
+	c.mu.Lock()
+	q := c.turnQueues[key]
+	if q == nil || len(q.pending) != 1 {
+		c.mu.Unlock()
+		t.Fatalf("expected 1 queued cron item, got %v", q)
+	}
+	if got := q.pending[0].tgt.onBehalfOf; got != "u_grantor" {
+		c.mu.Unlock()
+		t.Errorf("cron reply target dropped persona grantor: onBehalfOf=%q, want %q", got, "u_grantor")
+	}
+	c.mu.Unlock()
 }
