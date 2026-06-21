@@ -17,6 +17,8 @@
   let dirty = $state(false);
   // Pending navigation held behind the unsaved-changes confirm.
   let pendingLeave = $state<null | (() => void)>(null);
+  // Pending bot removal held behind the destructive-action confirm.
+  let pendingRemove = $state<null | { idx: number; id: string }>(null);
 
   // Guarded navigation/close: if the form has unsaved edits, ask first.
   function leave(fn?: () => void) {
@@ -28,6 +30,15 @@
     const go = pendingLeave;
     pendingLeave = null;
     if (ok && go) go();
+  }
+  function askRemove(i: number) {
+    const b = bots[i]; if (!b) return;
+    pendingRemove = { idx: i, id: b.id || "(未命名)" };
+  }
+  function resolveRemove(ok: boolean) {
+    const p = pendingRemove;
+    pendingRemove = null;
+    if (ok && p) { removeBot(p.idx); dirty = true; }
   }
 
   const current = $derived(bots[sel] ?? null);
@@ -212,7 +223,7 @@
           <label>SOUL.md <textarea bind:value={current.soul} rows="3" placeholder="身份、语气、角色"></textarea></label>
           <label>AGENTS.md <textarea bind:value={current.agents} rows="3" placeholder="规范、可做与不可做"></textarea></label>
 
-          <button class="remove" onclick={() => removeBot(sel)}>删除此 Bot</button>
+          <button class="remove" onclick={() => askRemove(sel)}>删除此 Bot</button>
         </div>
       {/if}
     </div>
@@ -226,6 +237,10 @@
 
     {#if pendingLeave}
       <Confirm message="有未保存的改动,确认离开?" confirmLabel="离开" onresult={resolveLeave} />
+    {/if}
+
+    {#if pendingRemove}
+      <Confirm message={`删除 Bot 「${pendingRemove.id}」?此操作会从下次保存时移除其配置。`} confirmLabel="删除" danger onresult={resolveRemove} />
     {/if}
 
     {#if wizardOpen}

@@ -3,6 +3,7 @@
   import { store } from "../store.svelte";
   import { modal } from "../actions/modal";
   import SettingsHeader from "./SettingsHeader.svelte";
+  import Confirm from "./Confirm.svelte";
 
   let { onclose, onedit, onskills, onusage }: { onclose: () => void; onedit?: () => void; onskills?: () => void; onusage?: () => void } = $props();
 
@@ -30,14 +31,15 @@
   const selInstalled = $derived(botWfs.find((w) => w.name === sel)?.installed ?? false);
   const installedNames = $derived(new Set(botWfs.filter((w) => w.installed).map((w) => w.name)));
 
-  // window.confirm() is a no-op in the Wails webview — use an in-app dialog.
-  let confirmState = $state<{ msg: string; resolve: (v: boolean) => void } | null>(null);
-  function ask(msg: string): Promise<boolean> {
-    return new Promise((resolve) => (confirmState = { msg, resolve }));
+  // window.confirm() is a no-op in the Wails webview — use the shared <Confirm>.
+  type ConfirmReq = { msg: string; danger?: boolean; confirmLabel?: string; resolve: (v: boolean) => void };
+  let confirmState = $state<ConfirmReq | null>(null);
+  function ask(msg: string, opts?: { danger?: boolean; confirmLabel?: string }): Promise<boolean> {
+    return new Promise((resolve) => (confirmState = { msg, resolve, danger: opts?.danger, confirmLabel: opts?.confirmLabel }));
   }
   function answer(v: boolean) { confirmState?.resolve(v); confirmState = null; }
   async function leave(fn?: () => void) {
-    if (dirty && !(await ask("有未保存的改动,确认离开?"))) return;
+    if (dirty && !(await ask("有未保存的改动,确认离开?", { confirmLabel: "离开" }))) return;
     onclose(); fn?.();
   }
 
@@ -80,7 +82,7 @@
   }
 
   async function switchBot(id: string) {
-    if (dirty && !(await ask("放弃未保存的改动?"))) return;
+    if (dirty && !(await ask("放弃未保存的改动?", { confirmLabel: "放弃", danger: true }))) return;
     botId = id; sel = null; content = ""; dirty = false;
     if (isPreview) loadBotPreview(); else await loadBot();
   }
@@ -91,7 +93,7 @@
   }
 
   async function select(name: string) {
-    if (dirty && !(await ask("放弃未保存的改动?"))) return;
+    if (dirty && !(await ask("放弃未保存的改动?", { confirmLabel: "放弃", danger: true }))) return;
     sel = name; error = "";
     try {
       content = isPreview ? (mockBot[botId ?? ""]?.[name]?.src ?? "") : await XClawService.BotWorkflowRead(botId!, name);
@@ -121,7 +123,7 @@
 
   async function removeBotWf(w: WfInfo) {
     const verb = w.installed ? "卸载" : "删除";
-    if (!(await ask(`${verb}「${w.name}」?`))) return;
+    if (!(await ask(`${verb}「${w.name}」?`, { confirmLabel: verb, danger: true }))) return;
     try {
       if (isPreview) { delete mockBot[botId ?? ""][w.name]; loadBotPreview(); }
       else {
@@ -218,18 +220,17 @@
       {/if}
     </div>
 
-    {#if error}<div class="err">⚠️ {error}</div>{/if}
+    {#if error}
+      <footer class="errbar"><span class="err">⚠️ {error}</span><button class="dismiss" onclick={() => (error = "")} aria-label="清除">✕</button></footer>
+    {/if}
 
     {#if confirmState}
-      <div class="confirm-scrim" role="presentation">
-        <div class="confirm" role="alertdialog" aria-label="确认" tabindex="-1">
-          <p>{confirmState.msg}</p>
-          <div class="cbtns">
-            <button onclick={() => answer(false)}>取消</button>
-            <button class="danger" onclick={() => answer(true)}>确认</button>
-          </div>
-        </div>
-      </div>
+      <Confirm
+        message={confirmState.msg}
+        confirmLabel={confirmState.confirmLabel ?? "确认"}
+        danger={confirmState.danger ?? false}
+        onresult={answer}
+      />
     {/if}
   </div>
 </div>
@@ -238,7 +239,7 @@
   /* Mirrors ConfigEditor / SkillsPanel: full-window scrim + glass + shared SettingsHeader. */
   .scrim { position: fixed; inset: 0; z-index: 50; background: var(--window-grad); display: block; }
   .modal { width: 100%; height: 100%; position: relative; display: flex; flex-direction: column; background: var(--glass); backdrop-filter: blur(24px) saturate(180%); -webkit-backdrop-filter: blur(24px) saturate(180%); border: none; border-radius: 0; box-shadow: none; overflow: hidden; color: var(--ink); font-family: var(--ui); }
-  .row:focus-visible, .rowmain:focus-visible, .add:focus-visible, .primary:focus-visible, .inst:focus-visible, .del:focus-visible, .cbtns button:focus-visible { outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent); }
+  .row:focus-visible, .rowmain:focus-visible, .add:focus-visible, .primary:focus-visible, .inst:focus-visible, .del:focus-visible { outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent); }
 
   .botpick { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--ink-soft); -webkit-app-region: no-drag; }
   .botpick select { background: color-mix(in srgb, var(--ink) 5%, var(--surface)); border: 1px solid var(--hairline); border-radius: 8px; padding: 5px 9px; color: var(--ink); font-size: 12px; font-family: var(--mono); outline: none; }
@@ -290,11 +291,10 @@
   textarea.code { flex: 1; resize: none; border: none; outline: none; background: var(--code-bg); color: var(--ink); padding: 12px 14px; font-family: var(--mono); font-size: 12.5px; line-height: 1.6; }
   textarea.code[readonly] { opacity: .85; }
 
-  .err { position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%); background: var(--surface); border: 1px solid color-mix(in srgb, var(--danger) 50%, var(--hairline)); color: var(--danger); padding: 8px 14px; border-radius: 8px; font-size: 12px; box-shadow: var(--shadow-pop); }
-  .confirm-scrim { position: absolute; inset: 0; z-index: 10; background: color-mix(in srgb, var(--ink) 30%, transparent); display: grid; place-items: center; }
-  .confirm { width: min(360px, 80%); background: var(--surface); border: 1px solid var(--hairline); border-radius: var(--radius); box-shadow: var(--shadow-pop); padding: 18px; }
-  .confirm p { margin: 0 0 14px; font-size: 13px; }
-  .cbtns { display: flex; justify-content: flex-end; gap: 8px; }
-  .cbtns button { padding: 7px 14px; border-radius: var(--radius-control); border: 1px solid var(--hairline); background: color-mix(in srgb, var(--ink) 4%, var(--surface)); color: var(--ink); font-size: 12px; }
-  .cbtns .danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+  .err { color: var(--danger); font-size: 12px; }
+  .errbar { display: flex; align-items: center; gap: 8px; padding: 8px 18px; border-top: 1px solid var(--hairline); background: color-mix(in srgb, var(--danger) 6%, var(--surface)); }
+  .errbar .err { flex: 1; }
+  .errbar .dismiss { width: 24px; height: 24px; display: grid; place-items: center; background: none; border: none; border-radius: 6px; color: var(--ink-soft); font-size: 11px; }
+  .errbar .dismiss:hover { background: color-mix(in srgb, var(--ink) 8%, transparent); color: var(--ink); }
+  .errbar .dismiss:focus-visible { outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent); }
 </style>

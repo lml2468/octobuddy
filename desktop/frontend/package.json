@@ -8,7 +8,8 @@
     "build:dev": "vite build --minify false --mode development",
     "build": "vite build --mode production",
     "preview": "vite preview",
-    "check": "svelte-check --tsconfig ./tsconfig.json"
+    "check": "svelte-check --tsconfig ./tsconfig.json",
+    "test:modals": "node tests/modals.spec.mjs"
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.2.9",
@@ -22,6 +23,7 @@
     "@sveltejs/vite-plugin-svelte": "^7.0.0",
     "@tsconfig/svelte": "^5.0.8",
     "@types/dompurify": "^3.0.5",
+    "playwright-core": "^1.61.0",
     "svelte": "^5.46.4",
     "svelte-check": "^4.4.8",
     "tslib": "^2.6.2",

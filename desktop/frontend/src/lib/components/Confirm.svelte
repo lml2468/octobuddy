@@ -1,22 +1,59 @@
 <script lang="ts">
   // Small in-app confirm dialog (window.confirm is a no-op in the Wails webview).
-  // Render conditionally; resolves via the two buttons.
+  // Render conditionally; resolves via the two buttons. Esc=cancel, Enter=confirm.
+  // On mount, focus moves to the primary button so keyboard handlers fire from
+  // inside the dialog — otherwise the outer modal's keydown listener would eat
+  // Escape and close the whole pane instead of just cancelling the confirm.
+  //
+  // The keydown listener is attached via addEventListener (not Svelte's
+  // onkeydown attribute), because Svelte 5 DELEGATES keydown to the app root —
+  // a delegated handler runs AFTER an ancestor's directly-attached listener has
+  // already fired during bubble, so stopPropagation from there would be too
+  // late to prevent the outer modal's Esc → close from firing.
+  import { onMount, tick } from "svelte";
   let { message, confirmLabel = "确认", cancelLabel = "取消", danger = false, onresult }:
     { message: string; confirmLabel?: string; cancelLabel?: string; danger?: boolean; onresult: (ok: boolean) => void } = $props();
 
+  let scrim: HTMLDivElement | undefined;
+  let primary: HTMLButtonElement | undefined;
+
   function onKey(e: KeyboardEvent) {
-    if (e.key === "Escape") { e.stopPropagation(); onresult(false); }
-    else if (e.key === "Enter") { e.stopPropagation(); onresult(true); }
+    if (e.key === "Escape") { e.stopPropagation(); e.preventDefault(); onresult(false); return; }
+    if (e.key === "Enter") { e.stopPropagation(); e.preventDefault(); onresult(true); return; }
+    if (e.key === "Tab") {
+      const btns = Array.from(scrim?.querySelectorAll<HTMLButtonElement>("button") ?? []);
+      if (btns.length === 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const active = document.activeElement as HTMLElement | null;
+      const idx = active ? btns.indexOf(active as HTMLButtonElement) : -1;
+      const len = btns.length;
+      const next = e.shiftKey
+        ? (idx <= 0 ? len - 1 : idx - 1)
+        : (idx < 0 || idx >= len - 1 ? 0 : idx + 1);
+      btns[next].focus();
+    }
   }
+
+  onMount(() => {
+    const opener = (document.activeElement as HTMLElement) ?? null;
+    const node = scrim;
+    node?.addEventListener("keydown", onKey);
+    tick().then(() => primary?.focus());
+    return () => {
+      node?.removeEventListener("keydown", onKey);
+      try { opener?.focus?.(); } catch (_) {}
+    };
+  });
 </script>
 
-<div class="cscrim" role="presentation" onclick={() => onresult(false)} onkeydown={onKey}>
-  <!-- svelte-ignore a11y_click_events_have_key_events (scrim's onkeydown handles keys; this onclick only stops propagation) -->
+<div class="cscrim" bind:this={scrim} role="presentation" onclick={() => onresult(false)}>
+  <!-- svelte-ignore a11y_click_events_have_key_events (keydown attached via addEventListener in onMount; onclick only stops propagation) -->
   <div class="confirm" role="alertdialog" aria-label={message} tabindex="-1" onclick={(e) => e.stopPropagation()}>
     <p>{message}</p>
     <div class="cbtns">
       <button onclick={() => onresult(false)}>{cancelLabel}</button>
-      <button class="primary" class:danger onclick={() => onresult(true)}>{confirmLabel}</button>
+      <button bind:this={primary} class="primary" class:danger onclick={() => onresult(true)}>{confirmLabel}</button>
     </div>
   </div>
 </div>
