@@ -57,16 +57,6 @@ type Connector struct {
 	// different keys run concurrently. Guarded by mu.
 	turnQueues map[string]*turnQueue
 
-	// recentMsgIDs is a bounded FIFO of messageIDs forwarded to onInbound for
-	// THIS bot, used to drop duplicates the server resends after a missed
-	// recvack — both the DUP-flagged retransmit case (caught in socket.go via
-	// the same dedup callback) AND reconnect-replay where the server doesn't
-	// bother setting DUP. Owned by the Connector (not the socket) so the
-	// window survives a WS reconnect, exactly when replays are most likely.
-	// Guarded by mu.
-	recentMsgIDs   map[string]struct{}
-	recentMsgOrder []string
-
 	// toolProgress mirrors the agent's tool invocations to the channel as it runs
 	// (opt-in; see config AgentConfig.ToolProgress). progress holds the per-turn
 	// dedup/cap state, keyed by sessionKey; both are guarded by c.mu.
@@ -169,7 +159,6 @@ func NewConnector(rest *RESTClient) *Connector {
 		progress:      make(map[string]*toolProgressState),
 		typers:        make(map[string]*typingTicker),
 		turnQueues:    make(map[string]*turnQueue),
-		recentMsgIDs:  make(map[string]struct{}, recentMsgIDsCap),
 		reconnectBase: 3 * time.Second,
 		reconnectMax:  60 * time.Second,
 	}
@@ -219,34 +208,6 @@ func (c *Connector) MediaAuth() gateway.MediaAuth {
 // gateway.WithGroupBackfill so cold-start backfill can filter the bot's own
 // messages once the uid is known.
 func (c *Connector) BotUID() string { return c.uid() }
-
-// recentMsgIDsCap bounds the per-bot dedup window. 512 covers any realistic
-// burst of resends after a brief disconnect; the FIFO ages out older ids.
-const recentMsgIDsCap = 512
-
-// markSeenMsgID records a server-assigned messageID as forwarded to onInbound
-// for this bot. Returns true when the id was ALREADY in the window — a server
-// retransmit (DUP-flagged or post-reconnect replay) the socket layer should
-// ack but NOT forward, otherwise a second turn fires for one user message
-// (#146). Empty id is a no-op (cannot dedupe what we can't key).
-func (c *Connector) markSeenMsgID(id string) (seen bool) {
-	if id == "" {
-		return false
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if _, ok := c.recentMsgIDs[id]; ok {
-		return true
-	}
-	if len(c.recentMsgOrder) >= recentMsgIDsCap {
-		drop := c.recentMsgOrder[0]
-		c.recentMsgOrder = c.recentMsgOrder[1:]
-		delete(c.recentMsgIDs, drop)
-	}
-	c.recentMsgIDs[id] = struct{}{}
-	c.recentMsgOrder = append(c.recentMsgOrder, id)
-	return false
-}
 
 // BackfillFetch pulls recent group-channel history for cold-start backfill (cc
 // G4), adapting octo.HistoricalMessage to the IM-agnostic groupctx.BackfillMessage.
@@ -375,10 +336,6 @@ func (c *Connector) connectOnce(ctx context.Context, reg RegisterResponse) error
 	sock := newSocketConn(reg.WSURL, reg.RobotID, reg.IMToken, c.onInbound, func(err error) {
 		c.logf("socket: %v", err)
 	})
-	// dedupCheck is connector-owned so the recent-id window survives reconnects:
-	// the server's most-likely replay moment is right after a WS drop, which is
-	// also when a socket-local map would have been wiped.
-	sock.dedupCheck = c.markSeenMsgID
 	c.mu.Lock()
 	c.sock = sock
 	c.mu.Unlock()

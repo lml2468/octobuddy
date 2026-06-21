@@ -81,9 +81,3 @@ func TestSocketRunStopsOnContextCancel(t *testing.T) {
 		t.Fatal("run did not return after context cancel — ReadMessage was not unblocked")
 	}
 }
-
-// rememberMsgID is the LRU dedup state for the recently-seen messageIDs ring.
-// First insert returns false (new); a second insert of the same id returns true
-// (caller skips forwarding so we don't fire a duplicate turn).
-// Test moved to connector_test.go after the ring graduated from socket-local to
-// Connector-owned (so it survives WS reconnects).

@@ -46,13 +46,6 @@ type socketConn struct {
 	closed bool
 
 	decryptFails map[string]int
-
-	// dedupCheck, when non-nil, gates the forward to onMessage: it receives the
-	// messageID and reports whether this id has already been forwarded for this
-	// bot, so server-side retransmits (RECV with DUP=1 OR replays after a
-	// reconnect/missed recvack) don't fire a second turn for one user message.
-	// Owned by the Connector so the dedup window survives socket reconnects.
-	dedupCheck func(messageID string) (seen bool)
 }
 
 const (
@@ -214,7 +207,7 @@ func (s *socketConn) run(ctx context.Context) error {
 			if pt == pktDisconnect {
 				return errServerDisconnect
 			}
-			s.dispatch(pt, data[0], body)
+			s.dispatch(pt, body)
 			data = data[consumed:]
 		}
 	}
@@ -237,12 +230,12 @@ func (s *socketConn) pingLoop(done chan struct{}) {
 	}
 }
 
-func (s *socketConn) dispatch(pt packetType, header byte, body []byte) {
+func (s *socketConn) dispatch(pt packetType, body []byte) {
 	switch pt {
 	case pktPong:
 		// keepalive ack; nothing to do
 	case pktRecv:
-		s.onRecv(header, body)
+		s.onRecv(body)
 	// pktDisconnect is handled in run (it must end the read loop), not here.
 	default:
 		// SENDACK and others ignored
@@ -254,7 +247,7 @@ func settingTopic(v byte) bool    { return (v>>3)&0x01 == 1 }
 func settingStreamOn(v byte) bool { return (v>>1)&0x01 == 1 }
 
 // onRecv parses a RECV body, decrypts the payload, acks, and forwards.
-func (s *socketConn) onRecv(header byte, body []byte) {
+func (s *socketConn) onRecv(body []byte) {
 	d := &decoder{buf: body}
 	setting, err := d.readByte()
 	if err != nil {
@@ -304,21 +297,6 @@ func (s *socketConn) onRecv(header byte, body []byte) {
 	}
 	delete(s.decryptFails, idStr)
 	_ = s.writeRaw(encodeRecvack(messageID, messageSeq))
-
-	// Drop duplicates the server resends. Two signals catch this:
-	//   1. RECV header bit 3 (DUP) — WuKongIM sets it on retransmits.
-	//      (WuKongIMGoProto common.go: p.DUP = (v >> 3 & 0x01) > 0.)
-	//   2. Connector-owned dedup ring (dedupCheck) — survives socket reconnects
-	//      and catches replays where the server doesn't bother setting DUP.
-	// Either way we still ack (so the server stops retrying) but skip the
-	// forward to onMessage, which would otherwise fire a second turn for one
-	// user message — the symptom of #146.
-	if headerFlags(header)>>3&0x01 == 1 {
-		return
-	}
-	if s.dedupCheck != nil && s.dedupCheck(idStr) {
-		return
-	}
 
 	if s.onMessage != nil {
 		s.onMessage(BotMessage{
