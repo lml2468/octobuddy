@@ -21,8 +21,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/lml2468/xclaw/core/config"
@@ -72,8 +74,49 @@ func AddBot(ctx context.Context, apiURL, apiKey, name string) (BotResult, error)
 		return BotResult{}, fmt.Errorf("请填写 Bot 名称")
 	}
 
+	// Round 14 Sec M2: the wizard's apiURL is operator-typed but can be
+	// social-engineered ("paste this URL"). IsAllowedURL only validates IP
+	// literals, so a hostname like "imds.attacker.tld" that resolves to
+	// 169.254.169.254 (cloud metadata) sails through and our uk_ bearer
+	// would land on the metadata service. AssertPublicURL DNS-resolves and
+	// rejects any address inside the private/loopback/link-local/CGN ranges.
+	// http://localhost paths skip the public-host requirement (dev gateways
+	// are allowed by design — IsAllowedURL above already restricted these
+	// to literal loopback / "localhost").
+	if strings.HasPrefix(apiURL, "https://") {
+		if err := config.AssertPublicURL(ctx, apiURL); err != nil {
+			return BotResult{}, fmt.Errorf("API URL 不可达公网：%w", err)
+		}
+	}
+
 	cli := &http.Client{
 		Timeout: httpTimeout,
+		Transport: &http.Transport{
+			// Dial-time guard defends against DNS rebinding between the
+			// AssertPublicURL resolve above and the actual TCP connect
+			// (the resolver can return a different IP at dial time). For
+			// http://localhost we still allow loopback dials; for any other
+			// host we refuse private/local addresses. Mirrors octocli's
+			// dialControlGuard.
+			DialContext: (&net.Dialer{
+				Timeout:   30 * time.Second,
+				KeepAlive: 30 * time.Second,
+				Control: func(network, address string, _ syscall.RawConn) error {
+					host, _, err := net.SplitHostPort(address)
+					if err != nil {
+						return fmt.Errorf("octoapi dial: bad address %q: %w", address, err)
+					}
+					if !strings.HasPrefix(apiURL, "http://") && config.IsPrivateOrLocalAddress(host) {
+						return fmt.Errorf("octoapi dial: refusing private/local address %s", host)
+					}
+					return nil
+				},
+			}).DialContext,
+			ForceAttemptHTTP2:     true,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ResponseHeaderTimeout: 60 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+		},
 		// Refuse to follow redirects: this POST carries the operator's uk_
 		// User API Key in Authorization. Go strips Authorization only on a
 		// cross-host redirect, so a same-host or sibling-subdomain 302 keeps

@@ -432,11 +432,12 @@ func (g *Gateway) buildGroupPrompt(sessionKey string, msg router.InboundMessage)
 	return b.String()
 }
 
-// resolveSandbox resolves the per-session sandbox (cwd + memory dir) and links
-// the bot's skills/workflows into it. Returns ("", "", nil) when the sandbox is
-// disabled. A non-nil error means the cwd could not be built — the caller MUST
-// abort the turn rather than fall back to the process cwd (which would leak
-// across sessions).
+// resolveSandbox resolves the per-session sandbox (cwd + memory dir). Returns
+// ("", "", nil) when the sandbox is disabled. A non-nil error means the cwd
+// could not be built — the caller MUST abort the turn rather than fall back to
+// the process cwd (which would leak across sessions). Skills + workflows are
+// auto-loaded by the CLI from CLAUDE_CONFIG_DIR (~/.xclaw/<id>/.claude/),
+// not symlinked in per-turn — see CLAUDE.md.
 func (g *Gateway) resolveSandbox(sessionKey string, msg router.InboundMessage) (cwd, memDir string, err error) {
 	if g.cwdBase == "" {
 		return "", "", nil

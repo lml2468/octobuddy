@@ -80,9 +80,18 @@ func listIn(root string) ([]SkillInfo, error) {
 		if strings.HasPrefix(name, ".") {
 			continue
 		}
-		info, statErr := os.Stat(filepath.Join(root, name))
+		info, statErr := os.Lstat(filepath.Join(root, name))
 		if statErr != nil || !info.IsDir() {
 			continue // stray file or unreadable — not a skill
+		}
+		// Refuse symlinked dirs — a `.claude/skills/foo` symlink pointing
+		// elsewhere would let descriptionIn read SKILL.md from anywhere on
+		// disk and surface its first line in the GUI. The dir is operator-
+		// owned, so the threat surface is small, but the rest of the package
+		// (safepath.AssertNoSymlinkEscape in resolveInSkill) is meticulous
+		// about this — match the standard (round 14 G #6).
+		if info.Mode()&os.ModeSymlink != 0 {
+			continue
 		}
 		files, _ := filesIn(root, name)
 		out = append(out, SkillInfo{

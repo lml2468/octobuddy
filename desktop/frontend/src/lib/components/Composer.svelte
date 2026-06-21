@@ -40,7 +40,11 @@
       send();
       return;
     }
-    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+    // Plain Enter sends; Shift / Alt / Option-Enter insert a newline.
+    // Round 14 F #4: previously only Shift was excluded, so Alt+Enter
+    // (VS Code "quick fix" muscle memory) and Option+Enter would silently
+    // force-send a half-drafted message.
+    if (e.key === "Enter" && !e.shiftKey && !e.altKey) { e.preventDefault(); send(); }
   }
 </script>
 

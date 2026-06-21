@@ -12,6 +12,7 @@ import (
 	"github.com/lml2468/xclaw/core/cron"
 	"github.com/lml2468/xclaw/core/gateway"
 	"github.com/lml2468/xclaw/core/router"
+	"github.com/lml2468/xclaw/core/safety"
 	"github.com/lml2468/xclaw/core/store"
 )
 
@@ -245,7 +246,13 @@ func makeHandler(ctx context.Context, deps handlerDeps) control.CommandHandler {
 				ChannelID:   b.ChannelID,
 				ChannelType: cron.ChannelKind(channelTypeFor(b.ChannelType, b.ChannelID)),
 				FromUID:     owner,
-				FromName:    b.FromName,
+				// Sanitize at the store boundary so a malicious FromName
+				// (control chars, bidi overrides, bracket forgery) can't
+				// later resurface as part of a future prompt rendering
+				// (round 14 Sec L2: defense in depth — the prompt path
+				// already sanitizes via groupctx, but the on-disk task
+				// shouldn't carry the unsafe form forward).
+				FromName: safety.SanitizeDisplayName(b.FromName, owner),
 			}
 			task, err := t.cron.Create(cron.CreateParams{
 				Schedule:   b.Schedule,

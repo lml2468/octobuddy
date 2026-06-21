@@ -6,10 +6,10 @@
 // directory exists on disk.
 //
 // Everything here is read-only and defensive: bot IDs are slug-validated,
-// per-file paths are containment-checked (mirroring internal/skills), symlinks
-// are never followed (the daemon symlinks the global skills/workflows catalog
-// into each sandbox's .claude/, which must not be traversed or escaped), and the
-// walk is bounded in depth, entry count, and file size.
+// per-file paths are containment-checked (mirroring internal/skills),
+// symlinks are never followed (round 14 G #3 added an O_NOFOLLOW open
+// for the final component on Unix), and the walk is bounded in depth,
+// entry count, and file size.
 package workspace
 
 import (
@@ -182,6 +182,16 @@ func File(botID, sessionKey, relPath string) (FileContent, error) {
 	if skipFile(filepath.Base(relPath)) {
 		return fc, fmt.Errorf("path is a credential-bearing file: %q", relPath)
 	}
+	// Round 14 Sec M1: Tree() refuses to descend into skipDir entries (.aws,
+	// .ssh, .kube, …), so the user never sees them in the file picker — but
+	// File() relied only on basename matching, so a hand-crafted relPath
+	// like ".aws/credentials" passed every check and read the file. Walk
+	// every path segment through skipDir to close that door too.
+	for _, seg := range strings.Split(filepath.ToSlash(relPath), "/") {
+		if seg != "" && skipDir(seg) {
+			return fc, fmt.Errorf("path traverses a credential-bearing directory: %q", relPath)
+		}
+	}
 	root, exists, err := resolveRoot(botID, sessionKey)
 	if err != nil {
 		return fc, err
@@ -348,7 +358,7 @@ func kindOf(mime string, textual bool) string {
 }
 
 // skipDir reports whether the workspace file tree should refuse to descend
-// into the named child directory. Two reasons to skip:
+// into the named child DIRECTORY. Two reasons to skip:
 //
 //   - `.claude` — the per-bot CLI config dir. Always present, never
 //     interesting in a workspace context, and contains skill bundles +
@@ -362,16 +372,15 @@ func kindOf(mime string, textual bool) string {
 //     by default. Operators who specifically want to inspect a `.aws/` dir
 //     can still `cat` it via the agent's tools.
 //
-// skipDir reports whether the workspace file tree should refuse to descend
-// into the named child DIRECTORY. Use skipFile for credential-bearing
-// FILES (round 10 Sec J2 — the prior skipDir list mixed file names like
-// `.netrc` in but readDir only consulted it for directories, so files
-// slipped through and were readable via File()).
-// skipDir reports whether the workspace file tree should refuse to descend
-// into the named child DIRECTORY. Comparison is case-INSENSITIVE — macOS
-// APFS-default and Windows NTFS resolve `.AWS/` to `.aws/` on read but
-// `os.ReadDir` returns the on-disk casing verbatim, so a case-sensitive
-// switch would silently leak `cp ~/.aws .AWS` (round 11 Sec).
+// File() also walks every path segment of a hand-crafted relPath through
+// this list (round 14 Sec M1), so a request for `.aws/credentials` is
+// refused even though Tree() never lists the parent.
+//
+// Comparison is case-INSENSITIVE — macOS APFS-default and Windows NTFS
+// resolve `.AWS/` to `.aws/` on read but `os.ReadDir` returns the on-disk
+// casing verbatim, so a case-sensitive switch would silently leak
+// `cp ~/.aws .AWS` (round 11 Sec). Use skipFile for credential-bearing
+// FILES (round 10 Sec J2).
 func skipDir(name string) bool {
 	switch strings.ToLower(name) {
 	case ".claude",

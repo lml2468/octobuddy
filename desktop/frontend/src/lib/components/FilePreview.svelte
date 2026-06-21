@@ -47,6 +47,14 @@
     error = "";
     mdMode = "rendered";
     imgFit = true;
+    // Reset the copy-toast state too — a stale "已复制" pill against the
+    // newly-loaded file is confusing, and a running timer would flip it
+    // false against the wrong file (round 14 frontend #5).
+    if (copyTimer !== undefined) {
+      clearTimeout(copyTimer);
+      copyTimer = undefined;
+    }
+    copied = false;
     load(b, k, p);
   });
 

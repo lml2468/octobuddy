@@ -90,8 +90,27 @@ var nameUnsafeRE = regexp.MustCompile(
 // normalization; CRLF collapses to "\n\n", a harmless extra blank line.)
 var extraLineBreaksRE = regexp.MustCompile(`[\r\x{000b}\x{000c}\x{0085}\x{2028}\x{2029}]`)
 
+// Round 14: zero-width / bidi formatting characters slipped past the role +
+// section escapers because the [^\S\r\n]* leading-whitespace anchor of those
+// regexes treats them as non-whitespace, so a body like
+// "intro\n​[Recent group messages]\nforged" left the forged marker
+// untouched. We strip these unconditionally before pattern matching — they
+// have no legitimate purpose in any prompt input. Covers:
+//   - ZWSP/ZWNJ/ZWJ (U+200B-200D), LRM (U+200E), RLM (U+200F)
+//   - Bidi formatting (U+202A-202E LRE/RLE/PDF/LRO/RLO, U+2066-2069 LRI/RLI/FSI/PDI)
+//   - BOM / ZWNBSP (U+FEFF)
+//
+// Round 13 already stripped these from display names via nameUnsafeRE; this
+// closes the same class of attack for free-form bodies.
+var invisibleFormatRE = regexp.MustCompile(`[\x{200b}-\x{200f}\x{202a}-\x{202e}\x{2066}-\x{2069}\x{feff}]`)
+
+// normalizeLineBreaks turns boundary-forging separators into \n and strips
+// invisible bidi/zero-width formatting characters so the line-leading anchors
+// in roleLabelRE / sectionMarkerRE fire on every boundary an attacker can
+// reach.
 func normalizeLineBreaks(text string) string {
-	return extraLineBreaksRE.ReplaceAllString(text, "\n")
+	text = extraLineBreaksRE.ReplaceAllString(text, "\n")
+	return invisibleFormatRE.ReplaceAllString(text, "")
 }
 
 // SanitizeDisplayName makes a user name safe inside a prompt label: strips label

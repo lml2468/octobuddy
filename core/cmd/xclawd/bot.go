@@ -398,6 +398,16 @@ func makeMultiBotHandler(ctx context.Context, reg *botRegistry, started time.Tim
 			if bot == nil {
 				return nil, fmt.Errorf("unknown bot %q", botID)
 			}
+			// A bot whose startup failed (registerFailedBot stub) carries a
+			// nil gateway/store + a populated LastError. Without this check
+			// the resolve-fallback would wire nil into a botTarget, and the
+			// first handler dereferencing `t.gateway` / `t.store` would nil-
+			// deref the whole daemon (round 14 Go HIGH). Test fixtures also
+			// carry nil gateway/store but no LastError, so they keep using
+			// the test-friendly lazy fallback below.
+			if bot.gateway == nil && bot.info().LastError != "" {
+				return nil, fmt.Errorf("bot %q failed to start: %s", botID, bot.info().LastError)
+			}
 			// runBot eager-initializes target (round 13 F1/F2); this
 			// fallback covers tests that build a minimal botRuntime by hand
 			// without going through runBot. Production never sees nil here.

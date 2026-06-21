@@ -100,10 +100,15 @@
     border-radius: 5px; cursor: pointer;
     color: var(--ink-soft);
     background: color-mix(in srgb, var(--ink) 8%, transparent);
-    opacity: 0; transition: opacity .14s ease, background .14s ease;
+    /* When hidden, pass clicks through to the markdown underneath — a link
+       in the top-right corner of a long reply would otherwise be hijacked
+       by the invisible button (round 14 frontend #1). Restored on hover /
+       keyboard focus so the button stays clickable when visible. */
+    opacity: 0; pointer-events: none;
+    transition: opacity .14s ease, background .14s ease;
   }
   .bubble:hover .copy-btn,
-  .copy-btn:focus-visible { opacity: 1; }
+  .copy-btn:focus-visible { opacity: 1; pointer-events: auto; }
   .copy-btn:hover { background: color-mix(in srgb, var(--ink) 16%, transparent); color: var(--ink); }
   .copy-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   .bubble.user .copy-btn {
