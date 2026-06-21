@@ -6,14 +6,17 @@
 #   zsh scripts/release.sh v1.0.0
 #
 # Prerequisites (one-time):
-#   1. Apple Developer ID Application cert in your login Keychain.
-#      Identity string lives in $XCLAW_SIGN_IDENTITY (or pass via env each run):
-#        export XCLAW_SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)"
-#   2. App Store Connect API key registered with notarytool:
+#   1. Apple Developer ID Application cert in your login Keychain. The script
+#      auto-detects it; set XCLAW_SIGN_IDENTITY only when multiple "Developer
+#      ID Application" certs are present and you want to pick one explicitly.
+#   2. App Store Connect API key registered with notarytool under the profile
+#      name "xclaw-notary" (override with XCLAW_NOTARY_PROFILE):
 #        xcrun notarytool store-credentials xclaw-notary \
 #          --key /path/AuthKey_XXXX.p8 --key-id ABCD1234EF --issuer <uuid>
-#      Then: export XCLAW_NOTARY_PROFILE=xclaw-notary
 #   3. `gh auth status` shows you logged in.
+#
+# No env exports in ~/.zshrc needed for the common case — the script picks
+# both up automatically.
 #
 # What it builds + uploads (universal macOS .app + all daemon binaries):
 #   - XClaw-<ver>-macos-universal.zip   (signed + notarized + stapled)
@@ -44,8 +47,43 @@ repo_root="${0:A:h}/.."
 out="$repo_root/output"
 stage="$out/release-$ver"
 
-: "${XCLAW_SIGN_IDENTITY:?set XCLAW_SIGN_IDENTITY to your Developer ID Application identity string}"
-: "${XCLAW_NOTARY_PROFILE:?set XCLAW_NOTARY_PROFILE to the keychain profile from \`xcrun notarytool store-credentials\`}"
+# --- resolve signing identity ---
+# Auto-detect when exactly one "Developer ID Application" cert is in the
+# Keychain — the typical single-developer case. An explicit XCLAW_SIGN_IDENTITY
+# override wins (multi-team setups, switching personal/work certs).
+if [[ -z "${XCLAW_SIGN_IDENTITY:-}" ]]; then
+  identities=("${(@f)$(security find-identity -p codesigning -v 2>/dev/null \
+    | awk -F'"' '/Developer ID Application/{print $2}')}")
+  # awk emits nothing → array gets one empty element; strip.
+  identities=("${(@)identities:#}")
+  case ${#identities[@]} in
+    0)
+      echo "✗ no Developer ID Application identity found in Keychain." >&2
+      echo "  Get one at developer.apple.com → Certificates, import it, then re-run." >&2
+      exit 1
+      ;;
+    1)
+      XCLAW_SIGN_IDENTITY="${identities[1]}"
+      echo "▸ signing identity (auto): $XCLAW_SIGN_IDENTITY"
+      ;;
+    *)
+      echo "✗ multiple Developer ID Application identities in Keychain:" >&2
+      for id in "${identities[@]}"; do echo "    $id" >&2; done
+      echo "  pass the one you want as XCLAW_SIGN_IDENTITY=… and re-run." >&2
+      exit 1
+      ;;
+  esac
+fi
+export XCLAW_SIGN_IDENTITY
+
+# --- resolve notary profile ---
+# Default to a convention ("xclaw-notary") set up once with
+#   xcrun notarytool store-credentials xclaw-notary --key … --key-id … --issuer …
+# We don't probe the keychain item to verify — notarytool will surface a clear
+# error at use-time, and probing would needlessly hit the network.
+: "${XCLAW_NOTARY_PROFILE:=xclaw-notary}"
+export XCLAW_NOTARY_PROFILE
+echo "▸ notary profile: $XCLAW_NOTARY_PROFILE"
 
 command -v gh >/dev/null || { echo "✗ gh CLI required to publish releases"; exit 1; }
 gh auth status >/dev/null 2>&1 || { echo "✗ run \`gh auth login\` first"; exit 1; }
