@@ -190,3 +190,31 @@ func TestRESTClientTokenRotation(t *testing.T) {
 		t.Fatalf("rotated auth = %q", gotAuth)
 	}
 }
+
+// SendMessageResult.MessageID arrives as a JSON string from some octo deploys
+// and a JSON number from others — both must decode to a string. A strict
+// string-only decode caused #bug-2025-06: failed parse → "transient error" →
+// retry with a fresh client_msg_no → user received two copies of every reply.
+func TestSendMessageResultFlexMessageID(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want string
+	}{
+		{"string", `{"message_id":"abc-123","client_msg_no":"x","message_seq":1}`, "abc-123"},
+		{"uint64", `{"message_id":2068704596913459200,"client_msg_no":"x","message_seq":2}`, "2068704596913459200"},
+		{"null", `{"message_id":null,"client_msg_no":"x","message_seq":3}`, ""},
+		{"missing", `{"client_msg_no":"x","message_seq":4}`, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var got SendMessageResult
+			if err := json.Unmarshal([]byte(tc.body), &got); err != nil {
+				t.Fatalf("decode failed: %v", err)
+			}
+			if string(got.MessageID) != tc.want {
+				t.Fatalf("MessageID = %q, want %q", got.MessageID, tc.want)
+			}
+		})
+	}
+}

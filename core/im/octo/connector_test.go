@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -129,5 +130,35 @@ func TestSettingByteBits(t *testing.T) {
 	}
 	if !settingTopic(0b00001000) {
 		t.Fatal("topic bit3")
+	}
+}
+
+// markSeenMsgID is the per-bot dedup window that drops server retransmits
+// before they fire a second turn for one user message (#146). Connector-owned
+// so the window survives WS reconnects.
+func TestConnectorMarkSeenMsgIDDedupsAndBounds(t *testing.T) {
+	c := &Connector{recentMsgIDs: make(map[string]struct{}, recentMsgIDsCap)}
+	if c.markSeenMsgID("100") {
+		t.Fatal("first sighting must be new")
+	}
+	if !c.markSeenMsgID("100") {
+		t.Fatal("second sighting must be a duplicate")
+	}
+	if c.markSeenMsgID("") {
+		t.Fatal("empty id must not be considered seen")
+	}
+	if _, ok := c.recentMsgIDs[""]; ok {
+		t.Fatal("empty id must not enter the ring")
+	}
+	// Cap eviction: once we exceed the cap, the oldest entry ages out and a
+	// re-presented id reads as new again.
+	for i := range recentMsgIDsCap {
+		c.markSeenMsgID(strconv.FormatInt(int64(1000+i), 10))
+	}
+	if len(c.recentMsgIDs) != recentMsgIDsCap {
+		t.Fatalf("ring should be at cap %d, got %d", recentMsgIDsCap, len(c.recentMsgIDs))
+	}
+	if c.markSeenMsgID("100") {
+		t.Fatal("after cap eviction, the oldest id (\"100\") should be new again")
 	}
 }

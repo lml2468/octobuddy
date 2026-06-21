@@ -82,11 +82,40 @@ func (c *RESTClient) Register(ctx context.Context, forceRefresh bool) (RegisterR
 	return out, nil
 }
 
-// SendMessageResult mirrors SendMessageResult (types.ts).
+// SendMessageResult mirrors SendMessageResult (types.ts). message_id is decoded
+// via flexString because the octo IM server sometimes returns it as a JSON
+// number (uint64) and sometimes as a string — a strict string decode used to
+// fail with "cannot unmarshal number ... into string", and our caller treated
+// the error as a transient send failure → retried with a fresh client_msg_no
+// → the user received two copies of every reply (#bug-2025-06).
 type SendMessageResult struct {
-	MessageID   string `json:"message_id"`
-	ClientMsgNo string `json:"client_msg_no"`
-	MessageSeq  int    `json:"message_seq"`
+	MessageID   flexString `json:"message_id"`
+	ClientMsgNo string     `json:"client_msg_no"`
+	MessageSeq  int        `json:"message_seq"`
+}
+
+// flexString accepts either a JSON string or a JSON number and decodes both to
+// a string. Useful for server fields whose type drifts across deploys.
+type flexString string
+
+func (f *flexString) UnmarshalJSON(b []byte) error {
+	b = bytes.TrimSpace(b)
+	if len(b) == 0 || string(b) == "null" {
+		*f = ""
+		return nil
+	}
+	if b[0] == '"' {
+		var s string
+		if err := json.Unmarshal(b, &s); err != nil {
+			return err
+		}
+		*f = flexString(s)
+		return nil
+	}
+	// Bare number: keep the literal so a uint64 messageID doesn't lose precision
+	// the way json.Number → float64 → strconv.FormatFloat would.
+	*f = flexString(string(b))
+	return nil
 }
 
 // SendText posts a Text message to a channel (api.ts sendMessage). mentionUIDs,

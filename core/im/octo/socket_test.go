@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -86,30 +85,5 @@ func TestSocketRunStopsOnContextCancel(t *testing.T) {
 // rememberMsgID is the LRU dedup state for the recently-seen messageIDs ring.
 // First insert returns false (new); a second insert of the same id returns true
 // (caller skips forwarding so we don't fire a duplicate turn).
-func TestRememberMsgIDDedupsAndBounds(t *testing.T) {
-	s := &socketConn{recentMsgIDs: make(map[string]struct{}, recentMsgIDsCap)}
-	if s.rememberMsgID("100") {
-		t.Fatal("first sighting must be new")
-	}
-	if !s.rememberMsgID("100") {
-		t.Fatal("second sighting must be a duplicate")
-	}
-	// Empty id is a no-op (cannot be deduped, never enters the ring).
-	if s.rememberMsgID("") {
-		t.Fatal("empty id must not be considered seen")
-	}
-	if _, ok := s.recentMsgIDs[""]; ok {
-		t.Fatal("empty id must not enter the ring")
-	}
-	// Ring eviction: once we exceed the cap, the oldest entry is forgotten and
-	// re-presenting it must register as new again.
-	for i := 0; i < recentMsgIDsCap; i++ {
-		s.rememberMsgID(strconv.FormatInt(int64(1000+i), 10))
-	}
-	if len(s.recentMsgIDs) != recentMsgIDsCap {
-		t.Fatalf("ring should be at cap %d, got %d", recentMsgIDsCap, len(s.recentMsgIDs))
-	}
-	if s.rememberMsgID("100") {
-		t.Fatal("after cap eviction, the oldest id (\"100\") should be new again")
-	}
-}
+// Test moved to connector_test.go after the ring graduated from socket-local to
+// Connector-owned (so it survives WS reconnects).
