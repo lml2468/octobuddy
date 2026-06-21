@@ -6,18 +6,12 @@
 import { Create as $Create } from "@wailsio/runtime";
 
 /**
- * SkillInfo summarizes a skill for the list view. Installed marks a per-bot entry
- * that is a symlink into the marketplace catalog (vs. a real per-bot bundle).
- * Broken marks an installed symlink whose catalog target no longer resolves to a
- * directory (e.g. the marketplace entry was deleted) — surfaced so the UI can
- * show it and let the user uninstall the orphan.
+ * SkillInfo summarizes a per-bot skill for the list view.
  */
 export class SkillInfo {
     "name": string;
     "description": string;
     "files": number;
-    "installed": boolean;
-    "broken": boolean;
 
     /** Creates a new SkillInfo instance. */
     constructor($$source: Partial<SkillInfo> = {}) {
@@ -29,12 +23,6 @@ export class SkillInfo {
         }
         if (!("files" in $$source)) {
             this["files"] = 0;
-        }
-        if (!("installed" in $$source)) {
-            this["installed"] = false;
-        }
-        if (!("broken" in $$source)) {
-            this["broken"] = false;
         }
 
         Object.assign(this, $$source);

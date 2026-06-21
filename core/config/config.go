@@ -149,18 +149,16 @@ type Resolved struct {
 	OnBehalfOf OnBehalfOf
 
 	// Derived per-bot directories (never from file).
-	DataDir            string // ~/.xclaw/<id>/data       — SQLite + state
-	CwdBase            string // ~/.xclaw/<id>/workspace   — per-session cwd sandboxes
-	MemoryBase         string // ~/.xclaw/<id>/memory      — per-session auto-memory (outside CwdBase)
-	SkillsDir          string // ~/.xclaw/<id>/skills      — per-bot skills (shadow global)
-	GlobalSkillsDir    string // ~/.xclaw/skills           — install-wide skills
-	WorkflowsDir       string // ~/.xclaw/<id>/workflows   — per-bot workflows (shadow global)
-	GlobalWorkflowsDir string // ~/.xclaw/workflows        — install-wide workflows
+	DataDir    string // ~/.xclaw/<id>/data       — SQLite + state
+	CwdBase    string // ~/.xclaw/<id>/workspace   — per-session cwd sandboxes
+	MemoryBase string // ~/.xclaw/<id>/memory      — per-session auto-memory (outside CwdBase)
 	// ClaudeConfigDir is the per-bot CLAUDE_CONFIG_DIR (~/.xclaw/<id>/.claude).
 	// Set as the agent's config root to ISOLATE it from the operator's ~/.claude
 	// (user-scope skills + installed plugins would otherwise leak into every
-	// bot). Empty when agent.inheritUserConfig is set. Built-in CLI skills still
-	// load; the per-bot catalog comes from the sandbox (project scope).
+	// bot). Empty when agent.inheritUserConfig is set. The bot's own skills /
+	// workflows live under it (.claude/skills, .claude/workflows) and are
+	// auto-discovered by the claude CLI as user-scope assets — no per-turn
+	// sandbox symlinking needed.
 	ClaudeConfigDir string
 }
 
@@ -252,10 +250,6 @@ func resolveBots(global File, baseDir string) ([]Resolved, error) {
 		r.DataDir = filepath.Join(botRoot, "data")
 		r.CwdBase = filepath.Join(botRoot, "workspace")
 		r.MemoryBase = filepath.Join(botRoot, "memory")
-		r.SkillsDir = filepath.Join(botRoot, "skills")
-		r.GlobalSkillsDir = filepath.Join(baseDir, "skills")
-		r.WorkflowsDir = filepath.Join(botRoot, "workflows")
-		r.GlobalWorkflowsDir = filepath.Join(baseDir, "workflows")
 		r.ClaudeConfigDir = filepath.Join(botRoot, ".claude")
 
 		// precedence: inlineBot ?? global default

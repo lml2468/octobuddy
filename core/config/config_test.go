@@ -47,8 +47,7 @@ func TestSingleBotDefaults(t *testing.T) {
 	// derived sandbox dirs
 	if b.CwdBase != filepath.Join(dir, "default", "workspace") ||
 		b.MemoryBase != filepath.Join(dir, "default", "memory") ||
-		b.SkillsDir != filepath.Join(dir, "default", "skills") ||
-		b.GlobalSkillsDir != filepath.Join(dir, "skills") {
+		b.ClaudeConfigDir != filepath.Join(dir, "default", ".claude") {
 		t.Fatalf("derived sandbox dirs wrong: %+v", b)
 	}
 }

@@ -71,15 +71,13 @@ type Gateway struct {
 	// Optional model override passed to the driver (empty = driver default).
 	model string
 	// Per-session sandbox roots (set via WithSandbox). When cwdBase is set, each
-	// turn runs in cwdBase/<hash>, with auto-memory under memoryBase/<hash> and
-	// the bot's per-bot skills/workflows symlinked in. Empty cwdBase = no
+	// turn runs in cwdBase/<hash>, with auto-memory under memoryBase/<hash>.
+	// The bot's skills + workflows are NOT linked into the sandbox: they live
+	// under the per-bot CLAUDE_CONFIG_DIR (~/.xclaw/<id>/.claude/{skills,workflows})
+	// and the claude CLI auto-discovers them as user-scope assets — every spawn
+	// already loads them, no per-turn link work needed. Empty cwdBase = no
 	// isolation (inherit proc).
-	//
-	// skillsDir/workflowsDir are the bot's OWN dirs (~/.xclaw/<id>/skills|workflows).
-	// They are the single link source into the sandbox: a marketplace skill reaches
-	// the sandbox only via a symlink the operator "installed" into the per-bot dir
-	// (~/.xclaw/<id>/skills/<name> → ~/.xclaw/skills/<name>), never linked globally.
-	cwdBase, memoryBase, skillsDir, workflowsDir string
+	cwdBase, memoryBase string
 	// mediaAuth, when set, supplies the Authorization header for an inbound-media
 	// download URL (scoped to the IM's apiUrl host). Set via WithMediaAuth by the
 	// IM connector; keeps the gateway IM-agnostic (it never embeds a token).
@@ -186,20 +184,12 @@ func (g *Gateway) WithModel(m string) *Gateway {
 }
 
 // WithSandbox enables per-session filesystem isolation: each turn runs in a
-// hashed subdir of cwdBase, with auto-memory consolidated under memoryBase and
-// the bot's per-bot skills (skillsDir, ~/.xclaw/<id>/skills) symlinked into the
-// sandbox. An empty cwdBase disables isolation.
-func (g *Gateway) WithSandbox(cwdBase, memoryBase, skillsDir string) *Gateway {
+// hashed subdir of cwdBase, with auto-memory consolidated under memoryBase. An
+// empty cwdBase disables isolation. Skills / workflows are NOT plumbed here —
+// they live under the bot's CLAUDE_CONFIG_DIR and are auto-loaded by the CLI.
+func (g *Gateway) WithSandbox(cwdBase, memoryBase string) *Gateway {
 	g.cwdBase = cwdBase
 	g.memoryBase = memoryBase
-	g.skillsDir = skillsDir
-	return g
-}
-
-// WithWorkflows configures the bot's per-bot workflow dir (~/.xclaw/<id>/workflows),
-// the single source linked into the sandbox's .claude/workflows.
-func (g *Gateway) WithWorkflows(workflowsDir string) *Gateway {
-	g.workflowsDir = workflowsDir
 	return g
 }
 
@@ -383,8 +373,7 @@ func (g *Gateway) buildGroupPrompt(sessionKey string, msg router.InboundMessage)
 // the bot's skills/workflows into it. Returns ("", "", nil) when the sandbox is
 // disabled. A non-nil error means the cwd could not be built — the caller MUST
 // abort the turn rather than fall back to the process cwd (which would leak
-// across sessions). Skill/workflow linking is best-effort (a missing skill only
-// degrades capability, never breaks the turn).
+// across sessions).
 func (g *Gateway) resolveSandbox(sessionKey string, msg router.InboundMessage) (cwd, memDir string, err error) {
 	if g.cwdBase == "" {
 		return "", "", nil
@@ -394,17 +383,6 @@ func (g *Gateway) resolveSandbox(sessionKey string, msg router.InboundMessage) (
 	if err != nil {
 		return "", "", fmt.Errorf("resolve sandbox cwd: %w", err)
 	}
-	// Link the bot's per-bot skills dir (~/.xclaw/<id>/skills) as the SINGLE
-	// source: marketplace skills reach the sandbox only via symlinks the operator
-	// installed there, plus the bot's own real skill dirs. The global catalog is
-	// never linked directly (it's a read-only marketplace, not auto-exposed).
-	_ = sandbox.LinkSkillsIntoSandbox(cwd, []sandbox.SkillSource{
-		{Dir: g.skillsDir},
-	})
-	// Same for workflows (.claude/workflows): the per-bot dir is the only source.
-	_ = sandbox.LinkWorkflowsIntoSandbox(cwd, []sandbox.SkillSource{
-		{Dir: g.workflowsDir},
-	})
 	if g.memoryBase != "" {
 		memDir = sandbox.ResolveMemoryDir(g.memoryBase, sctx)
 	}

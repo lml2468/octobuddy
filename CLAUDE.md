@@ -95,30 +95,22 @@ Key invariants to preserve:
   (driver emits `AgentEvent.ResumeInvalid` — e.g. the session predates a
   config-dir change), the gateway swallows the doomed attempt, clears the
   mapping, and retries the turn fresh.
-- **Skills & workflows — marketplace + per-bot install** (`core/sandbox/skill.go`,
-  ported from `skill-linker.ts`): the global dirs `~/.xclaw/skills` (SKILL.md
-  bundles) and `~/.xclaw/workflows` (`*.js`) are a **read-only marketplace**. A
-  bot uses an asset only after it is **installed** into the bot's own dir
-  `~/.xclaw/<id>/skills|workflows` — an install is a **symlink** to the catalog
-  entry — and a bot may also author its own real assets there. Each turn the
-  gateway symlinks **only the per-bot dir** into the session sandbox's `.claude/`
-  (`LinkSkillsIntoSandbox` / `LinkWorkflowsIntoSandbox`, one collect/prune/link
-  core): so a marketplace asset reaches the agent solely via the per-bot symlink,
-  forming a chain `sandbox/.claude/skills/<n>` → `<id>/skills/<n>` → catalog. The
-  gateway link source is single (`{Dir: g.skillsDir}` / `{Dir: g.workflowsDir}`);
-  `SkillSource{Dir,Allow}` still supports an allow-list but it is **no longer
-  used** — there is no global-catalog allow-list and no `skills`/`workflows`
-  config field anymore (legacy keys in `config.json` are silently ignored). Install
-  mechanics live in `desktop/internal/assetlib` (`Install`/`Uninstall`/`Prune`/
-  `PruneInstallsAcrossBots`), shared by the desktop `skills` + `workflows`
-  packages; catalog delete prunes the now-dangling install symlinks across bots,
-  and `listIn` surfaces a dead symlink as `Installed+Broken` so the UI can clear
-  it. Managed from the desktop per-bot Skills/Workflows windows.
+- **Skills & workflows — per-bot only, auto-discovered by the CLI**: each bot
+  owns its skills (SKILL.md bundles) under `~/.xclaw/<id>/.claude/skills/` and
+  its workflows (`*.js`) under `~/.xclaw/<id>/.claude/workflows/`. Because
+  `CLAUDE_CONFIG_DIR` (next bullet) points there, the claude CLI auto-loads
+  them as user-scope assets every spawn — no per-turn sandbox symlinking, no
+  shared marketplace, no install/uninstall concept. The gateway has no
+  knowledge of skills/workflows; CRUD is the desktop's job
+  (`desktop/internal/skills` + `desktop/internal/workflows` with slug +
+  path-traversal validation). Managed from the desktop per-bot Skills /
+  Workflows windows.
 - **Agent config isolation** (`config.DriverEnvWith`): each bot's `claude` runs
   with `CLAUDE_CONFIG_DIR=~/.xclaw/<id>/.claude` so it does NOT inherit the
   operator's `~/.claude` (user-scope skills + installed plugins would otherwise
   leak into every bot). Auth is env-based (`ANTHROPIC_*`), so this is safe; CLI
-  built-in skills still load, and the per-bot catalog comes from the sandbox.
+  built-in skills still load, and the per-bot skills/workflows live under this
+  same dir (`.claude/skills`, `.claude/workflows`) so the CLI finds them too.
   Opt out with `agent.inheritUserConfig: true` (trusted single-operator only).
 - **ClaudeDriver headless invariants** (`core/agent/claude.go`): always spawns
   `claude -p - --output-format stream-json --verbose --permission-mode bypassPermissions`,
@@ -176,7 +168,8 @@ store, gateway, driver, group-context, Octo connector, each under `~/.xclaw/<id>
   (`mentionFreeGroups`, `knownBotUids`, `allowedBotUids`, `botBlocklist`) plus
   `groupConfigDir` and `onBehalfOf` are top-level defaults a bot may override — a
   per-bot value REPLACES the default. (Skills/workflows are **not** config fields;
-  they're installed per-bot on the filesystem — see the marketplace bullet above.)
+  each bot owns its own under `~/.xclaw/<id>/.claude/{skills,workflows}/` — see
+  the skills/workflows bullet above.)
   `core/config.example.json` is the canonical field list.
 - `core/config/` does slug + SSRF validation on URLs — keep that on any new
   config field that holds a URL. `groupConfigDir` files are injected UNSANITIZED
@@ -206,9 +199,7 @@ logic, so swapping the GUI never touches `core/`.
   `internal/`: `control` (UDS/NDJSON client over `core/control/wire`), `core`
   (supervisor: resolve binary → spawn `-control … -exit-with-parent` → stop/restart),
   `configstore` (read/write `~/.xclaw/config.json` + per-bot SOUL/AGENTS),
-  `assetlib` (the shared per-bot install/uninstall/prune symlink primitives),
-  `skills` (marketplace catalog CRUD over `~/.xclaw/skills/` bundles **plus**
-  per-bot `Bot*`/`Install`/`Uninstall` over `~/.xclaw/<id>/skills`) and
+  `skills` (per-bot CRUD over `~/.xclaw/<id>/.claude/skills/` bundles) and
   `workflows` (same, for `*.js`), all with slug + path-traversal validation,
   `octocli` (bundle/install/upgrade the octo-cli
   companion), `secrets` (tokens in the OS credential store via go-keyring,
@@ -238,11 +229,12 @@ logic, so swapping the GUI never touches `core/`.
   the console from the rail gear menu (and tray) via `xclaw:open-editor` / `-skills` /
   `-workflows` / `-usage` events — same scrim + centered card + header/✕ chrome (keep
   them visually consistent). SkillsPanel/WorkflowsPanel are **per-bot**: a bot
-  picker in the header, a "本 Bot 技能/工作流" section (own + installed assets, with
-  install/uninstall and an own-content editor; a dangling install shows a 失效
-  badge and is uninstall-only) and a marketplace section with install/已安装
-  toggles — install/uninstall take effect on the next turn, no RestartCore.
-  ConfigEditor no longer has any skill/workflow checklist. TokenUsage is read-only:
+  picker in the header, a "本 Bot 技能/工作流" section listing the bot's own
+  assets with create/edit/delete (skills also let you add/remove files within a
+  bundle) — changes take effect on the next turn, no RestartCore. There is no
+  shared marketplace; every bot owns its own assets under
+  `~/.xclaw/<id>/.claude/{skills,workflows}/`. ConfigEditor has no skill /
+  workflow checklist. TokenUsage is read-only:
   per-bot cumulative input/output/cached
   tokens + cost + turns, plus an all-bots total, from the privileged `usage.stats`
   control command (backed by core/store's `token_usage` table, accumulated each

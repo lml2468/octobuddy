@@ -275,8 +275,7 @@ func runBot(ctx context.Context, cfg config.Resolved, reg *botRegistry, srv *con
 		WithPersona(grantor, cfg.OnBehalfOf.PersonaPrompt).
 		WithModel(cfg.Agent.Model).
 		WithCommandInfo(cfg.RateLimit.MaxPerMinute, cfg.Context.MaxContextChars).
-		WithSandbox(cfg.CwdBase, cfg.MemoryBase, cfg.SkillsDir).
-		WithWorkflows(cfg.WorkflowsDir).
+		WithSandbox(cfg.CwdBase, cfg.MemoryBase).
 		WithMediaAuth(connector.MediaAuth())
 	connector.SetGateway(gw)
 

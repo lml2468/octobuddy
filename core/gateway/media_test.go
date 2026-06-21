@@ -341,7 +341,7 @@ func TestRunTurn_MediaHintTurnLocal(t *testing.T) {
 	drv := &fakeDriver{threadID: "thr-m", reply: "ok"}
 	cwdBase := t.TempDir()
 	gw := New(drv, st, router.New(router.Config{MaxPerMinute: 100}), newCaptureSink()).
-		WithSandbox(cwdBase, "", "")
+		WithSandbox(cwdBase, "")
 	gw.assertPublic = func(context.Context, string) error { return nil } // allow httptest loopback
 	gw.mediaClient = loopbackMediaClient()                               // bypass dial guard for loopback httptest
 

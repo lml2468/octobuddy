@@ -10,7 +10,7 @@
     "cron": false,
     "_comment_toolProgress": "Opt-in: when true, the bot mirrors each tool it runs to the channel as a brief '🔧 Running <tool>(<params>)…' notice (deduped, capped at 10/turn). Off by default.",
     "toolProgress": false,
-    "_comment_inheritUserConfig": "When true, the agent inherits the operator's ~/.claude (user-scope skills + installed plugins). OFF by default: each bot gets an isolated CLAUDE_CONFIG_DIR (~/.xclaw/<id>/claude) so operator plugins/user-skills don't leak into every bot. Built-in CLI skills still load; the per-bot catalog comes from skills/workflows below. Set true only for a trusted single-operator deployment.",
+    "_comment_inheritUserConfig": "When true, the agent inherits the operator's ~/.claude (user-scope skills + installed plugins). OFF by default: each bot gets an isolated CLAUDE_CONFIG_DIR (~/.xclaw/<id>/.claude) so operator plugins/user-skills don't leak into every bot. The bot's own skills/workflows live under ~/.xclaw/<id>/.claude/{skills,workflows} and the CLI auto-loads them as user-scope; built-in CLI skills still load. Set true only for a trusted single-operator deployment.",
     "inheritUserConfig": false
   },
   "rateLimit": { "maxPerMinute": 5 },
@@ -22,7 +22,7 @@
   "knownBotUids": [],
   "allowedBotUids": [],
   "botBlocklist": [],
-  "_comment_skills": "Skills/workflows are NO LONGER configured here. The global dirs ~/.xclaw/skills/<name>/ (SKILL.md bundles) and ~/.xclaw/workflows/<name>.js are a READ-ONLY marketplace. A bot uses a skill only after it is INSTALLED into the bot's own dir ~/.xclaw/<id>/skills (a symlink to the catalog entry), and the bot may also author its own real skills/workflows there. Only ~/.xclaw/<id>/skills|workflows is linked into the session sandbox (.claude/skills|workflows). Install/uninstall and author per-bot content in the desktop app (gear → per-bot Skills / Workflows). Any leftover top-level or per-bot \"skills\"/\"workflows\" keys in this file are ignored.",
+  "_comment_skills": "Skills/workflows are NOT configured here. Each bot owns its own under ~/.xclaw/<id>/.claude/skills/<name>/ (SKILL.md bundles) and ~/.xclaw/<id>/.claude/workflows/<name>.js — the claude CLI auto-loads them as user-scope via CLAUDE_CONFIG_DIR. There is no shared marketplace, no install concept. Author/edit them in the desktop app (gear → per-bot Skills / Workflows). Any leftover top-level or per-bot \"skills\"/\"workflows\" keys in this file are ignored.",
   "bots": [
     {
       "id": "my-bot",

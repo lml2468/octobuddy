@@ -35,21 +35,21 @@ import * as workflows$0 from "./internal/workflows/models.js";
 import * as workspace$0 from "./internal/workspace/models.js";
 
 /**
- * BotSkillCreate scaffolds a new per-bot OWN skill bundle.
+ * BotSkillCreate scaffolds a new per-bot skill bundle.
  */
 export function BotSkillCreate(botID: string, name: string): $CancellablePromise<void> {
     return $Call.ByID(6569680, botID, name);
 }
 
 /**
- * BotSkillDelete removes one of the bot's OWN skill bundles.
+ * BotSkillDelete removes one of the bot's skill bundles.
  */
 export function BotSkillDelete(botID: string, name: string): $CancellablePromise<void> {
     return $Call.ByID(1487718959, botID, name);
 }
 
 /**
- * BotSkillDeleteFile removes a file within one of the bot's OWN skill bundles.
+ * BotSkillDeleteFile removes a file within one of the bot's skill bundles.
  */
 export function BotSkillDeleteFile(botID: string, name: string, rel: string): $CancellablePromise<void> {
     return $Call.ByID(2790927073, botID, name, rel);
@@ -65,13 +65,6 @@ export function BotSkillFiles(botID: string, name: string): $CancellablePromise<
 }
 
 /**
- * BotSkillInstall symlinks a catalog skill into the bot's dir (effective next turn).
- */
-export function BotSkillInstall(botID: string, name: string): $CancellablePromise<void> {
-    return $Call.ByID(4190706719, botID, name);
-}
-
-/**
  * BotSkillRead reads a file within one of the bot's skill bundles.
  */
 export function BotSkillRead(botID: string, name: string, rel: string): $CancellablePromise<string> {
@@ -79,21 +72,14 @@ export function BotSkillRead(botID: string, name: string, rel: string): $Cancell
 }
 
 /**
- * BotSkillUninstall removes an installed (symlinked) catalog skill from the bot.
- */
-export function BotSkillUninstall(botID: string, name: string): $CancellablePromise<void> {
-    return $Call.ByID(761603566, botID, name);
-}
-
-/**
- * BotSkillWrite writes a file within one of the bot's OWN skill bundles.
+ * BotSkillWrite writes a file within one of the bot's skill bundles.
  */
 export function BotSkillWrite(botID: string, name: string, rel: string, content: string): $CancellablePromise<void> {
     return $Call.ByID(188442547, botID, name, rel, content);
 }
 
 /**
- * BotSkillsList returns a bot's skills (installed marketplace links + own bundles).
+ * BotSkillsList returns a bot's skill bundles.
  */
 export function BotSkillsList(botID: string): $CancellablePromise<skills$0.SkillInfo[]> {
     return $Call.ByID(6714641, botID).then(($result: any) => {
@@ -102,24 +88,17 @@ export function BotSkillsList(botID: string): $CancellablePromise<skills$0.Skill
 }
 
 /**
- * BotWorkflowCreate scaffolds a new per-bot OWN workflow script.
+ * BotWorkflowCreate scaffolds a new per-bot workflow script.
  */
 export function BotWorkflowCreate(botID: string, name: string): $CancellablePromise<void> {
     return $Call.ByID(1139562354, botID, name);
 }
 
 /**
- * BotWorkflowDelete removes one of the bot's OWN workflow scripts.
+ * BotWorkflowDelete removes one of the bot's workflow scripts.
  */
 export function BotWorkflowDelete(botID: string, name: string): $CancellablePromise<void> {
     return $Call.ByID(2940089713, botID, name);
-}
-
-/**
- * BotWorkflowInstall symlinks a catalog workflow into the bot's dir.
- */
-export function BotWorkflowInstall(botID: string, name: string): $CancellablePromise<void> {
-    return $Call.ByID(1797943757, botID, name);
 }
 
 /**
@@ -130,21 +109,14 @@ export function BotWorkflowRead(botID: string, name: string): $CancellablePromis
 }
 
 /**
- * BotWorkflowUninstall removes an installed (symlinked) catalog workflow.
- */
-export function BotWorkflowUninstall(botID: string, name: string): $CancellablePromise<void> {
-    return $Call.ByID(1404902928, botID, name);
-}
-
-/**
- * BotWorkflowWrite writes one of the bot's OWN workflow scripts.
+ * BotWorkflowWrite writes one of the bot's workflow scripts.
  */
 export function BotWorkflowWrite(botID: string, name: string, content: string): $CancellablePromise<void> {
     return $Call.ByID(27652337, botID, name, content);
 }
 
 /**
- * BotWorkflowsList returns a bot's workflows (installed links + own scripts).
+ * BotWorkflowsList returns a bot's workflow scripts.
  */
 export function BotWorkflowsList(botID: string): $CancellablePromise<workflows$0.Info[]> {
     return $Call.ByID(864764999, botID).then(($result: any) => {
@@ -258,102 +230,12 @@ export function SessionsList(botID: string): $CancellablePromise<void> {
 }
 
 /**
- * SkillCreate scaffolds a new catalog skill (starter SKILL.md).
- */
-export function SkillCreate(name: string): $CancellablePromise<void> {
-    return $Call.ByID(1435339055, name);
-}
-
-/**
- * SkillDelete removes a catalog skill bundle entirely.
- */
-export function SkillDelete(name: string): $CancellablePromise<void> {
-    return $Call.ByID(1356761844, name);
-}
-
-/**
- * SkillDeleteFile removes a file from a catalog skill bundle.
- */
-export function SkillDeleteFile(name: string, rel: string): $CancellablePromise<void> {
-    return $Call.ByID(1212423266, name, rel);
-}
-
-/**
- * SkillFiles lists the relative file paths in a catalog skill bundle.
- */
-export function SkillFiles(name: string): $CancellablePromise<string[]> {
-    return $Call.ByID(152150974, name).then(($result: any) => {
-        return $$createType0($result);
-    });
-}
-
-/**
- * SkillRead returns one file's contents from a catalog skill bundle.
- */
-export function SkillRead(name: string, rel: string): $CancellablePromise<string> {
-    return $Call.ByID(3388404043, name, rel);
-}
-
-/**
- * SkillWrite creates/overwrites a file in a catalog skill bundle.
- */
-export function SkillWrite(name: string, rel: string, content: string): $CancellablePromise<void> {
-    return $Call.ByID(2812285130, name, rel, content);
-}
-
-/**
- * SkillsList returns every skill in the global marketplace catalog.
- */
-export function SkillsList(): $CancellablePromise<skills$0.SkillInfo[]> {
-    return $Call.ByID(1013037060).then(($result: any) => {
-        return $$createType2($result);
-    });
-}
-
-/**
  * UsageStats requests a bot's token usage over a range (since = Unix seconds at a
  * local-midnight bound; 0 = all time). The response arrives via EventStream as a
  * usage.stats envelope echoing `since`.
  */
 export function UsageStats(botID: string, since: number): $CancellablePromise<void> {
     return $Call.ByID(440527224, botID, since);
-}
-
-/**
- * WorkflowCreate scaffolds a new catalog workflow.
- */
-export function WorkflowCreate(name: string): $CancellablePromise<void> {
-    return $Call.ByID(867881607, name);
-}
-
-/**
- * WorkflowDelete removes a catalog workflow.
- */
-export function WorkflowDelete(name: string): $CancellablePromise<void> {
-    return $Call.ByID(1678805052, name);
-}
-
-/**
- * WorkflowRead returns a catalog workflow's script source.
- */
-export function WorkflowRead(name: string): $CancellablePromise<string> {
-    return $Call.ByID(555421379, name);
-}
-
-/**
- * WorkflowWrite creates/overwrites a catalog workflow's script.
- */
-export function WorkflowWrite(name: string, content: string): $CancellablePromise<void> {
-    return $Call.ByID(2925081922, name, content);
-}
-
-/**
- * WorkflowsList returns every workflow in the global marketplace catalog.
- */
-export function WorkflowsList(): $CancellablePromise<workflows$0.Info[]> {
-    return $Call.ByID(2169000428).then(($result: any) => {
-        return $$createType4($result);
-    });
 }
 
 /**
