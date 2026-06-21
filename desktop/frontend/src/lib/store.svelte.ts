@@ -141,8 +141,20 @@ class Store {
     // control-socket drop mid-turn left the typing indicator hanging
     // forever and the only escape was sending another message (which
     // simply flipped awaiting=true again, masking the dead turn).
-    setInterval(() => this.sweepStuckTurns(), TURN_SWEEP_MS);
+    this.sweepTimer = setInterval(() => this.sweepStuckTurns(), TURN_SWEEP_MS);
   }
+
+  // dispose runs from Vite's import.meta.hot.dispose so a dev save (HMR)
+  // doesn't stack a fresh setInterval and a fresh xclaw:event subscription
+  // on top of the prior module's still-armed ones. Production never calls
+  // this — the singleton survives for the app's lifetime (round 12 F3).
+  dispose() {
+    if (this.sweepTimer !== undefined) {
+      clearInterval(this.sweepTimer);
+      this.sweepTimer = undefined;
+    }
+  }
+  private sweepTimer: ReturnType<typeof setInterval> | undefined;
 
   // seedPreview populates a mock roster + transcript for visual iteration and
   // screenshots without spawning the daemon (launch with XCLAW_PREVIEW=1).
@@ -561,3 +573,10 @@ class Store {
 }
 
 export const store = new Store();
+
+// Vite HMR: clear the prior module's interval before the new module instantiates
+// its own. Strips the warning otherwise rendered by Svelte 5 about reactive
+// state spread across stale module copies.
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => store.dispose());
+}

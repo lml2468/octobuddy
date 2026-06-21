@@ -30,6 +30,14 @@
     // half-typed pinyin/romaji string — every other message for Chinese,
     // Japanese, Korean users.
     if (isImeComposing(e)) return;
+    // ⌘↩ / Ctrl-↩ is the canonical "force send" — bypass the Shift-Enter
+    // newline path and send even if a newline character is present
+    // (matches Slack/Discord/Linear muscle memory; round 12 F14).
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      send();
+      return;
+    }
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
   }
 </script>

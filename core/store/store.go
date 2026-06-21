@@ -132,24 +132,54 @@ func Open(path string) (*Store, error) {
 //
 // We preserve the existing rows verbatim; pre-round-10 rows are all
 // single-(session_key) so the de-dup-into-composite-PK collision can't fire.
+//
+// Detection uses PRAGMA table_info / index_list rather than substring-matching
+// the DDL text (round 12 G3): sqlite_master.sql is preserved as authored, but
+// different SQLite versions or whitespace-rewritten DDL would defeat a literal
+// substring match — an undetected legacy shape would either keep running with
+// the broken PK or re-run the migration and fail on the second pass because
+// the RENAME-then-rollback path isn't always atomic for DDL.
 func migrateAgentSessions(db *sql.DB) error {
 	// 1. Does the table exist at all? (Fresh DB → skip; schema below creates it.)
-	var tableSQL string
+	var hasTable int
 	err := db.QueryRow(
-		`SELECT sql FROM sqlite_master WHERE type='table' AND name='agent_sessions'`,
-	).Scan(&tableSQL)
+		`SELECT 1 FROM sqlite_master WHERE type='table' AND name='agent_sessions'`,
+	).Scan(&hasTable)
 	if err == sql.ErrNoRows {
 		return nil
 	}
 	if err != nil {
 		return fmt.Errorf("agent_sessions detect: %w", err)
 	}
-	// 2. Already composite? Look for the composite PRIMARY KEY tuple. (The
-	// substring check is robust to whitespace; the schema constant is the
-	// only thing that generates this DDL.)
-	if strings.Contains(tableSQL, "PRIMARY KEY (session_key, agent)") ||
-		strings.Contains(tableSQL, "PRIMARY KEY(session_key, agent)") {
-		return nil
+	// 2. Already composite? Ask SQLite which columns are PK members via
+	// PRAGMA table_info — the `pk` column is 0 for non-PK, 1+ for PK members
+	// in order. Composite = >= 2 PK columns; legacy = exactly 1.
+	rows, err := db.Query(`PRAGMA table_info(agent_sessions)`)
+	if err != nil {
+		return fmt.Errorf("agent_sessions table_info: %w", err)
+	}
+	pkCols := 0
+	for rows.Next() {
+		var (
+			cid, notnull, pk int
+			name, ctype      string
+			dflt             sql.NullString
+		)
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			rows.Close()
+			return fmt.Errorf("agent_sessions table_info scan: %w", err)
+		}
+		if pk > 0 {
+			pkCols++
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("agent_sessions table_info rows: %w", err)
+	}
+	rows.Close()
+	if pkCols >= 2 {
+		return nil // already composite
 	}
 	// 3. Legacy shape — rebuild. Wrap in a tx so a crash mid-migration can't
 	// orphan the data.

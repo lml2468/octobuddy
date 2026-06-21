@@ -1,7 +1,5 @@
-// Package octo implements the Octo IM connector: the WuKongIM binary protocol
-// (WebSocket) plus the Octo REST API, ported wire-compatibly from
-// cc-channel-octo's src/octo. It produces router.InboundMessage values for the
-// gateway and delivers replies via REST sendMessage.
+// Wire enums and payload shapes shared by REST + WebSocket. See doc.go for
+// the package overview and connector.go for the lifecycle entry point.
 package octo
 
 import (

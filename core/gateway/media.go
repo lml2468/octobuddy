@@ -199,8 +199,16 @@ func (g *Gateway) materializeAttachments(ctx context.Context, cwd string, atts [
 		wg.Add(1)
 		go func(i int, att router.Attachment) {
 			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
+			// Bound by mediaConcurrency, but honor ctx so a per-turn cancel
+			// (timeout / shutdown) releases the goroutine immediately
+			// instead of waiting on a busy slot whose holder may be slow
+			// to observe cancellation itself (round 12 G6).
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				return
+			}
 			switch att.Kind {
 			case router.AttachmentImage:
 				rel, err := g.downloadImage(ctx, cwd, att.URL)

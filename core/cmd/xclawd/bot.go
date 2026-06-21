@@ -307,7 +307,7 @@ func runBot(ctx context.Context, cfg config.Resolved, reg *botRegistry, srv *con
 		cm = cron.NewManager(cron.NewStore(filepath.Join(cfg.DataDir, "cron.json")), "", nil)
 		cm.SetLabel(fmt.Sprintf("[%s] ", cfg.BotID))
 		cm.OnFire(func(f cron.Fire) {
-			fireCronTask(ctx, gw, connector, f.Task)
+			fireCronTask(connector, f.Task)
 		})
 		connector.OnOwner(func(ownerUID string) { cm.SetOwnerUID(ownerUID) })
 		rtBot.cron = cm
@@ -350,9 +350,7 @@ func runBot(ctx context.Context, cfg config.Resolved, reg *botRegistry, srv *con
 // (round 8 F1-Arch: direct gw.Handle here used to race onInbound's target
 // write, mis-delivering one reply and dropping the other). Best-effort: a
 // failed enqueue is logged, never propagated, so the scheduler loop survives.
-func fireCronTask(ctx context.Context, gw *gateway.Gateway, connector *octo.Connector, t cron.Task) {
-	_ = gw // gateway is reached via the connector's drainTurns; reserved for future ctx threading
-	_ = ctx
+func fireCronTask(connector *octo.Connector, t cron.Task) {
 	chType := router.ChannelDM
 	octoType := octo.ChannelDM
 	if t.ChannelType == cron.ChannelKind(router.ChannelGroup) {

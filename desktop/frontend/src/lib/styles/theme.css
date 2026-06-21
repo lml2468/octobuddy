@@ -28,6 +28,9 @@
   --in-ink: #1a1a1f;
   --badge: #fa5151;
   --online: #48bb78;        /* online dot — Arc success green (conventional) */
+  --success: #07c160;       /* accent-green success (status pills, dots) */
+  --warning: #f0b429;       /* amber warning (status pills, dots) */
+  --muted:   #c3bbb0;       /* offline/idle dot tint (light theme) */
 
   --hairline: #ece5db;      /* Arc warm hairline */
   --hairline-strong: #ddd3c6;
@@ -108,6 +111,9 @@
   --in-ink: #f3f0f5;
   --badge: #fa5151;
   --online: #48bb78;
+  --success: #2bd47b;
+  --warning: #f0b429;
+  --muted:   #5a5363;
 
   --hairline: rgba(255, 255, 255, 0.10);
   --hairline-strong: rgba(255, 255, 255, 0.16);
@@ -157,6 +163,9 @@
     --in-ink: #f3f0f5;
     --badge: #fa5151;
     --online: #48bb78;
+    --success: #2bd47b;
+    --warning: #f0b429;
+    --muted:   #5a5363;
     --hairline: rgba(255, 255, 255, 0.10);
     --hairline-strong: rgba(255, 255, 255, 0.16);
     --danger: #f08a7a;

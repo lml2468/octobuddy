@@ -15,7 +15,14 @@
   let input: HTMLInputElement;
   let listEl: HTMLDivElement;
 
-  $effect(() => { setTimeout(() => input?.focus(), 40); });
+  // Focus the input one microtask after mount — Svelte needs a tick to commit
+  // the bind:this. setTimeout returns a handle we clear in cleanup so a
+  // double-⌘K that closes the palette within 40 ms doesn't pin a closure to
+  // a detached node (round 12 F9).
+  $effect(() => {
+    const id = setTimeout(() => input?.focus(), 40);
+    return () => clearTimeout(id);
+  });
 
   const ql = $derived(q.trim().toLowerCase());
   const bots = $derived(store.bots.filter((b) => !ql || b.id.toLowerCase().includes(ql)));

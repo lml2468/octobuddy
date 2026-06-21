@@ -327,8 +327,17 @@ func (g *idleGuard) reset() {
 }
 
 func (g *idleGuard) stop() {
-	if g.timer != nil {
-		g.timer.Stop()
+	if g.timer == nil {
+		return
+	}
+	// Only cancel with a nil cause when WE preempted the timer (Stop returns
+	// true). If Stop returns false the AfterFunc has already fired (or is in
+	// flight) and is about to call cancel(errDispatchTimeout); racing it with
+	// cancel(nil) here would mis-classify a fired timer as a clean stop,
+	// confusing context.Cause readers (round 12 G2). cancel(nil) after a
+	// non-nil cancel cause is a no-op, so this is safe either way — but
+	// preferring "don't race" keeps the invariant explicit.
+	if g.timer.Stop() {
 		g.cancel(nil)
 	}
 }

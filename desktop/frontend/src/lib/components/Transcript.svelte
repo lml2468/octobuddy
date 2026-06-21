@@ -11,9 +11,11 @@
 
   const session = $derived(store.currentSession);
   const messages = $derived(session?.messages ?? []);
-  // Bump on new messages, growing text, AND turn state so the view tracks the
-  // working spinner appearing/disappearing too.
-  const tick = $derived(messages.length + (messages.at(-1)?.text.length ?? 0) + (session?.awaiting ? 1 : 0));
+  // Bump on new messages and on turn-state transitions (working spinner
+  // appearing/disappearing). Replies arrive as whole-text pushes today, so
+  // the array's length is the granularity that matters; if a streaming
+  // text path is added later, mix in the last message's text length here.
+  const tick = $derived(messages.length + (session?.awaiting ? 1 : 0));
 
   function onScroll() {
     if (!scroller) return;
@@ -21,12 +23,18 @@
   }
   $effect(() => {
     tick;
-    if (atBottom && scroller) requestAnimationFrame(() => { scroller.scrollTop = scroller.scrollHeight; });
+    if (!atBottom || !scroller) return;
+    // Cancel any prior queued frame so a burst of new messages collapses
+    // to one scroll (round 12 F8); the cleanup also unpins the closure
+    // when the component is destroyed mid-frame.
+    const id = requestAnimationFrame(() => { scroller.scrollTop = scroller.scrollHeight; });
+    return () => cancelAnimationFrame(id);
   });
   $effect(() => {
     store.selectedKey;
     atBottom = true;
-    requestAnimationFrame(() => { if (scroller) scroller.scrollTop = scroller.scrollHeight; });
+    const id = requestAnimationFrame(() => { if (scroller) scroller.scrollTop = scroller.scrollHeight; });
+    return () => cancelAnimationFrame(id);
   });
 </script>
 

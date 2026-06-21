@@ -132,7 +132,7 @@
   }
 </script>
 
-<svelte:window on:keydown={onKey} />
+<svelte:window onkeydown={onKey} />
 
 <section class="preview">
   <header class="bar">
@@ -175,7 +175,10 @@
       {#if file.truncated}
         <div class="msg">PDF 太大,无法内联预览({fmtSize(file.size)})。</div>
       {:else if pdfUrl}
-        <iframe class="pdf" title={path} src={pdfUrl}></iframe>
+        <!-- PDFium is renderer-sandboxed by Chromium, but pin a frame-level
+             sandbox so a PDF 0-day can't script the host webview.
+             allow-same-origin is needed for the blob: URL viewer chrome. -->
+        <iframe class="pdf" title={path} src={pdfUrl} sandbox="allow-same-origin"></iframe>
       {/if}
     {:else if isMarkdown}
       {#if mdMode === "rendered"}

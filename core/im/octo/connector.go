@@ -142,15 +142,6 @@ func (c *Connector) OnStatus(fn func(connected bool, lastErr string)) { c.onStat
 // (re)registration. The owner uid gates owner-only features (cron create/delete).
 func (c *Connector) OnOwner(fn func(ownerUID string)) { c.onOwner = fn }
 
-// RegisterReplyTarget is DEPRECATED — direct map writes race onInbound's
-// per-turn target. Cron callers must use EnqueueCron instead, which carries
-// the target alongside the queued inbound so drainTurns is the sole writer.
-// Kept temporarily as a no-op shim with a loud log so a forgotten caller
-// surfaces in stderr rather than producing a mis-routed reply.
-func (c *Connector) RegisterReplyTarget(sessionKey, channelID string, channelType ChannelType) {
-	c.logf("DEPRECATED: RegisterReplyTarget(%s) is a no-op since round-8 F1-Arch; use EnqueueCron — call ignored", sessionKey)
-}
-
 // EnqueueCron enqueues a cron-fired turn onto the per-session worker so it
 // serializes with real inbound on the same key (round 8 F1-Arch). The
 // target — including any persona on-behalf-of binding — travels with the

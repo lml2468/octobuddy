@@ -72,6 +72,8 @@
   // window AND document — registering on both fired onKey twice per
   // keydown, so the toggle was cancelling itself and the palette never
   // appeared) in the capture phase so iframe focus quirks don't swallow it.
+  // Bound inside $effect with cleanup so dev-mode HMR doesn't stack a fresh
+  // handler on every save (round 12 F1).
   function onKey(e: KeyboardEvent) {
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
       e.preventDefault();
@@ -80,7 +82,10 @@
       showPalette = false;
     }
   }
-  try { document.addEventListener("keydown", onKey, true); } catch {}
+  $effect(() => {
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+  });
 
   // Tray opens the unified Settings modal at a specific tab, or the standalone
   // Token Usage modal. Mutual exclusion: only one top-level modal at a time.
@@ -93,11 +98,17 @@
     showUsage = true;
     showSettings = false;
   }
-  try { Events.On("xclaw:open-settings", (e: any) => {
-    const tab = e?.data?.tab as SettingsTab | undefined;
-    openSettings(tab && TABS.includes(tab) ? tab : "basic");
-  }); } catch {}
-  try { Events.On("xclaw:open-usage", () => openUsage()); } catch {}
+  // Wails Events.On returns an unsubscribe — capture inside $effect so HMR
+  // doesn't keep stacking handlers each save (round 12 F2). Both subscriptions
+  // share the same cleanup boundary.
+  $effect(() => {
+    const offSettings = Events.On("xclaw:open-settings", (e: any) => {
+      const tab = e?.data?.tab as SettingsTab | undefined;
+      openSettings(tab && TABS.includes(tab) ? tab : "basic");
+    });
+    const offUsage = Events.On("xclaw:open-usage", () => openUsage());
+    return () => { try { offSettings?.(); offUsage?.(); } catch {} };
+  });
 
   function pick(prompt: string) { composer?.setDraft(prompt); }
 

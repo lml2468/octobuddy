@@ -154,9 +154,17 @@ func bundledBinary() (path, version string) {
 // to XClaw.app/Contents/Helpers/ on a non-Developer-signed bundle, e.g. an
 // admin user, a tampered .zip downloaded over HTTP, a malicious package
 // extractor — fails closed instead of getting silently installed and
-// executed (round 11 Sec). When the sidecar is missing (dev builds, older
-// app images) install proceeds with a stderr warning so the operator knows
-// the integrity gate is off.
+// executed (round 11 Sec). A production bundle is detected by the presence
+// of the version file (Resources/octo-cli.version, shipped by
+// package-desktop.sh alongside the sidecar); a production bundle MUST carry
+// the sidecar (round 12 Sec S2: missing-sidecar previously fell open). A
+// dev build (no version file, no sidecar) keeps the install path open with
+// a stderr warning so local builds can iterate.
+//
+// Read-once-then-install (round 12 Sec S1): the bundled bytes are read into
+// a buffer, hashed, then handed to installBinary which writes the SAME
+// buffer — closes the TOCTOU window between hash-from-disk and copy-from-disk
+// that an attacker with write access to Contents/Helpers/ could race.
 func EnsureInstalled() error {
 	src, bundledVer := bundledBinary()
 	if src == "" {
@@ -166,13 +174,14 @@ func EnsureInstalled() error {
 	if isFile(BinPath()) && !(bundledVer != "" && compareVersions(bundledVer, installed) > 0) {
 		return nil // already installed and not older than the bundle
 	}
-	if err := verifyBundledSHA(src); err != nil {
+	buf, err := verifyBundledBytes(src, bundledVer != "")
+	if err != nil {
 		return fmt.Errorf("EnsureInstalled: bundled octo-cli integrity check failed: %w", err)
 	}
 	if err := os.MkdirAll(Dir(), 0o755); err != nil {
 		return err
 	}
-	if err := installBinary(src, nil); err != nil {
+	if err := installBinary("", buf); err != nil {
 		return err
 	}
 	if bundledVer != "" {
@@ -181,46 +190,49 @@ func EnsureInstalled() error {
 	return nil
 }
 
-// verifyBundledSHA hashes src and compares to the expected sha256 written in
-// the app bundle's Resources/octo-cli.sha256 sidecar (one hex digest per
-// line; the first token wins so the file can carry an optional filename
-// suffix in shasum -a 256 format). A missing sidecar is treated as
-// "integrity gate disabled" — logged to stderr so the operator knows — but
-// does NOT block install (dev builds and pre-round-11 app images don't ship
-// the sidecar yet; a build that DOES ship one expects it to be honored).
-func verifyBundledSHA(src string) error {
+// verifyBundledBytes reads src into a buffer, hashes the SAME buffer (no
+// re-open between hash and install), and compares to the expected sha256
+// written in the app bundle's Resources/octo-cli.sha256 sidecar (one hex
+// digest per line; the first token wins so the file can carry an optional
+// filename suffix in shasum -a 256 format). Returns the buffer for the
+// caller to install verbatim — never re-read from disk after this point.
+//
+// When isProduction is true the sidecar MUST exist and verify; a missing
+// sidecar is an error (round 12 Sec S2). When isProduction is false (no
+// version file shipped, i.e. dev build), a missing sidecar logs a warning
+// and returns the buffer unverified — local iteration stays unblocked.
+func verifyBundledBytes(src string, isProduction bool) ([]byte, error) {
+	buf, err := os.ReadFile(src)
+	if err != nil {
+		return nil, fmt.Errorf("read bundled binary: %w", err)
+	}
 	exe, err := os.Executable()
 	if err != nil {
-		return nil // no executable path means no bundle — skip
+		// No bundle path — only acceptable in dev. In production this is
+		// unreachable (we already located src via Executable above).
+		return buf, nil
 	}
 	contents := filepath.Dir(filepath.Dir(exe))
 	shaPath := filepath.Join(contents, "Resources", "octo-cli.sha256")
 	raw, err := os.ReadFile(shaPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			fmt.Fprintf(os.Stderr, "[octocli] WARNING: %s missing — installing bundled binary without integrity check (dev build or pre-round-11 app image)\n", shaPath)
-			return nil
+			if isProduction {
+				return nil, fmt.Errorf("production bundle is missing %s — refusing to install unverified binary", shaPath)
+			}
+			fmt.Fprintf(os.Stderr, "[octocli] WARNING: %s missing — installing bundled binary without integrity check (dev build)\n", shaPath)
+			return buf, nil
 		}
-		return fmt.Errorf("read sha256 sidecar: %w", err)
+		return nil, fmt.Errorf("read sha256 sidecar: %w", err)
 	}
 	want := strings.ToLower(strings.TrimSpace(strings.Fields(string(raw))[0]))
 	if len(want) != 64 {
-		return fmt.Errorf("sha256 sidecar malformed: expected 64 hex chars, got %d", len(want))
+		return nil, fmt.Errorf("sha256 sidecar malformed: expected 64 hex chars, got %d", len(want))
 	}
-	f, err := os.Open(src)
-	if err != nil {
-		return fmt.Errorf("open bundled binary: %w", err)
+	if got := sha256hex(buf); got != want {
+		return nil, fmt.Errorf("bundled octo-cli sha256 mismatch: have %s, want %s", got, want)
 	}
-	defer f.Close()
-	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
-		return fmt.Errorf("hash bundled binary: %w", err)
-	}
-	got := hex.EncodeToString(h.Sum(nil))
-	if got != want {
-		return fmt.Errorf("bundled octo-cli sha256 mismatch: have %s, want %s", got, want)
-	}
-	return nil
+	return buf, nil
 }
 
 type ghRelease struct {
@@ -422,6 +434,19 @@ func extractTarGz(archive []byte) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
+		// Round 12 Sec S3: only regular files, never symlinks / hardlinks /
+		// directories with the binName as basename (a malicious archive can
+		// ship a symlink or empty hardlink to silently install a 0-byte
+		// binary or a body the attacker controls).
+		if h.Typeflag != tar.TypeReg {
+			continue
+		}
+		// Reject any traversal segment — the archive should only contain
+		// flat or single-level paths under a well-known directory, and a
+		// `../../../` name is never something we want to honor.
+		if strings.Contains(h.Name, "..") {
+			continue
+		}
 		if filepath.Base(h.Name) == binName() {
 			return io.ReadAll(io.LimitReader(tr, 64<<20))
 		}
@@ -435,6 +460,14 @@ func extractZip(archive []byte) ([]byte, error) {
 		return nil, err
 	}
 	for _, f := range zr.File {
+		// Round 12 Sec S3: skip non-regular entries (directory, symlink) +
+		// any traversal segment in the entry name.
+		if f.FileInfo().IsDir() || f.FileInfo().Mode()&os.ModeSymlink != 0 {
+			continue
+		}
+		if strings.Contains(f.Name, "..") {
+			continue
+		}
 		if filepath.Base(f.Name) == binName() {
 			rc, err := f.Open()
 			if err != nil {

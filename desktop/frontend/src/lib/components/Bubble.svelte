@@ -35,7 +35,26 @@
     <span class="av">
       {#if isUser}<Avatar name="You" size={36} />{:else}<Avatar octopus size={36} />{/if}
     </span>
-    <div class="bubble" class:user={isUser} oncontextmenu={(e) => { e.preventDefault(); copy(); }} role="article">
+    <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+    <div
+      class="bubble"
+      class:user={isUser}
+      oncontextmenu={(e) => { e.preventDefault(); copy(); }}
+      onkeydown={(e) => {
+        // ⌘C / Ctrl-C when the bubble is keyboard-focused copies the message
+        // text (round 12 F6 — right-click is the only mouse affordance and
+        // would otherwise leave keyboard-only users with no way to copy a
+        // reply). Don't intercept when the user has a real text selection
+        // inside the bubble — let the browser's native copy win.
+        if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "c"
+            && !window.getSelection()?.toString()) {
+          e.preventDefault();
+          copy();
+        }
+      }}
+      role="article"
+      tabindex="0"
+    >
       {#if copied}<span class="copied" aria-live="polite">已复制</span>{/if}
       {#if isUser}
         <span class="plain">{message.text}</span>
