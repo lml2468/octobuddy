@@ -5,6 +5,7 @@
 #   zsh scripts/package-desktop.sh                 # current macOS arch, ad-hoc signed
 #   XCLAW_SIGN_IDENTITY="Apple Development: …" zsh scripts/package-desktop.sh
 #   XCLAW_UNIVERSAL=1 …                            # mac universal (arm64+amd64)
+#   XCLAW_VERSION=1.0.0 …                          # stamp CFBundleVersion + CFBundleShortVersionString in the bundle's Info.plist (release.sh sets this)
 #   XCLAW_NOTARY_PROFILE=my-profile …              # notarize via keychain profile (local dev)
 #   XCLAW_NOTARY_KEY_PATH=/path/AuthKey.p8 …       # notarize via App Store Connect API key (CI)
 #     XCLAW_NOTARY_KEY_ID=ABCD1234EF                  + key id
@@ -28,6 +29,7 @@ notary_key_path="${XCLAW_NOTARY_KEY_PATH:-}"
 notary_key_id="${XCLAW_NOTARY_KEY_ID:-}"
 notary_issuer="${XCLAW_NOTARY_ISSUER:-}"
 universal="${XCLAW_UNIVERSAL:-}"
+version="${XCLAW_VERSION:-}"
 entitlements="$desktop/build/darwin/entitlements.plist"
 
 export PATH="$(go env GOPATH)/bin:$PATH"
@@ -79,6 +81,16 @@ else
   ( cd "$desktop" && wails3 task package )
 fi
 [[ -d "$bundle" ]] || { echo "✗ bundle not produced at $bundle"; exit 1; }
+
+# Stamp the bundle's Info.plist with the release version so Finder → Get Info
+# and About dialogs reflect what we actually shipped (the source Info.plist
+# carries a fallback that we leave alone). Done BEFORE signing so the seal
+# covers the final plist content. plutil's -replace is idempotent.
+if [[ -n "$version" ]]; then
+  echo "▸ stamping Info.plist with version $version"
+  plutil -replace CFBundleShortVersionString -string "$version" "$bundle/Contents/Info.plist"
+  plutil -replace CFBundleVersion            -string "$version" "$bundle/Contents/Info.plist"
+fi
 
 echo "▸ embedding xclawd at Contents/Helpers/xclawd…"
 mkdir -p "$bundle/Contents/Helpers"

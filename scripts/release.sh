@@ -71,7 +71,7 @@ fi
 git -C "$repo_root" push origin "$tag"
 
 echo "▸ packaging (universal + sign + notarize)…"
-XCLAW_UNIVERSAL=1 zsh "$repo_root/scripts/package-desktop.sh"
+XCLAW_UNIVERSAL=1 XCLAW_VERSION="$ver" zsh "$repo_root/scripts/package-desktop.sh"
 
 echo "▸ staging release assets → $stage"
 rm -rf "$stage"
