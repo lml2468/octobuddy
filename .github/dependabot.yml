@@ -1,0 +1,53 @@
+# Dependabot keeps the dependency tree current — security patches first,
+# then minor/patch bumps weekly. Three ecosystems matter here:
+#
+#   - go modules in core/ and desktop/ (separate go.mod files; both need
+#     their own directory entry)
+#   - npm in desktop/frontend/
+#   - github-actions workflow definitions
+#
+# Major-version bumps come through as PRs too, but they're flagged so they
+# can be reviewed manually (Wails v3 is pre-1.0 + alpha — a bump there is a
+# real review, not a rubber-stamp).
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /core
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels: ["deps", "go"]
+    groups:
+      patch-and-minor:
+        update-types: ["patch", "minor"]
+
+  - package-ecosystem: gomod
+    directory: /desktop
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels: ["deps", "go", "desktop"]
+    groups:
+      patch-and-minor:
+        update-types: ["patch", "minor"]
+
+  - package-ecosystem: npm
+    directory: /desktop/frontend
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels: ["deps", "frontend"]
+    groups:
+      patch-and-minor:
+        update-types: ["patch", "minor"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    labels: ["deps", "ci"]

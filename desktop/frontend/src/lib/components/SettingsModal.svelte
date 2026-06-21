@@ -15,6 +15,7 @@
   import { store } from "../store.svelte";
   import { modal } from "../actions/modal";
   import { confirm } from "../confirm.svelte";
+  import { errMsg } from "../errors";
   import Avatar from "./Avatar.svelte";
   import BasicInfoPane from "./BasicInfoPane.svelte";
   import OctoIntegrationPane from "./OctoIntegrationPane.svelte";
@@ -63,8 +64,8 @@
       bots = (await XClawService.LoadConfig()) ?? [];
       loadedIds = bots.map((b) => b.id);
       sel = 0;
-    } catch (e: any) {
-      error = String(e);
+    } catch (e) {
+      error = errMsg(e);
     }
   }
 
@@ -94,8 +95,8 @@
       saved = true;
       dirty = false;
       if (restart) { await XClawService.RestartCore(); store.bots = []; XClawService.BotsList(); onclose(); }
-    } catch (e: any) {
-      error = String(e?.message ?? e);
+    } catch (e) {
+      error = errMsg(e);
     } finally {
       busy = false;
     }
@@ -138,8 +139,8 @@
       activeTab = "octo";
       dirty = true;
       wizardOpen = false;
-    } catch (e: any) {
-      wizError = String(e?.message ?? e);
+    } catch (e) {
+      wizError = errMsg(e);
     } finally {
       wizBusy = false;
     }
@@ -174,7 +175,7 @@
 
     <div class="body">
       <aside class="rail">
-        {#each bots as b, i (i)}
+        {#each bots as b, i (b)}
           <button class="botrow" class:sel={i === sel} onclick={() => selectBot(i)}>
             <Avatar name={b.id || "bot"} size={26} />
             <span class="bn">{b.id || "(未命名)"}</span>
@@ -299,7 +300,7 @@
   footer .primary { background: linear-gradient(135deg, var(--grad-a), var(--grad-b)); color: #fff; border: none; box-shadow: 0 4px 14px color-mix(in srgb, var(--grad-a) 45%, transparent); }
   footer .primary:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 8px 22px color-mix(in srgb, var(--grad-a) 52%, transparent); }
   footer .err { color: var(--danger); font-size: 12px; }
-  footer .ok { color: #5aa873; font-size: 12px; }
+  footer .ok { color: var(--online); font-size: 12px; }
   footer button:focus-visible { outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent); }
 
   .wizscrim { position: absolute; inset: 0; z-index: 60; background: color-mix(in srgb, #000 38%, transparent); display: flex; align-items: center; justify-content: center; }

@@ -5,6 +5,7 @@
   // of the basic/octo "save" dirty flag).
   import { XClawService } from "../../../bindings/github.com/lml2468/xclaw/desktop";
   import { confirm } from "../confirm.svelte";
+  import { errMsg } from "../errors";
   import ErrorFooter from "./ErrorFooter.svelte";
 
   let { botId, isPreview = false }: { botId: string; isPreview?: boolean } = $props();
@@ -43,7 +44,7 @@
       }
       if (skills.length && !skills.find((s) => s.name === sel)) selectSkill(skills[0].name);
       else if (!skills.length) { sel = null; files = []; activeFile = null; content = ""; }
-    } catch (e: any) { error = String(e?.message ?? e); }
+    } catch (e) { error = errMsg(e); }
   }
 
   function descOf(skillmd: string): string {
@@ -59,7 +60,7 @@
         : ((await XClawService.BotSkillFiles(botId, name)) ?? []) as string[];
       const first = files.find((f) => f === "SKILL.md") ?? files[0];
       if (first) openFile(first);
-    } catch (e: any) { error = String(e?.message ?? e); }
+    } catch (e) { error = errMsg(e); }
   }
 
   async function openFile(rel: string) {
@@ -68,7 +69,7 @@
     try {
       content = isPreview ? (mockBot[botId]?.[sel!]?.[rel] ?? "") : await XClawService.BotSkillRead(botId, sel!, rel);
       dirty = false;
-    } catch (e: any) { error = String(e?.message ?? e); }
+    } catch (e) { error = errMsg(e); }
   }
 
   async function saveFile() {
@@ -77,7 +78,7 @@
       if (isPreview) { (mockBot[botId][sel])[activeFile] = content; }
       else await XClawService.BotSkillWrite(botId, sel, activeFile, content);
       dirty = false;
-    } catch (e: any) { error = String(e?.message ?? e); }
+    } catch (e) { error = errMsg(e); }
   }
 
   async function addFile() {
@@ -89,7 +90,7 @@
       newFilePath = "";
       await selectSkill(sel);
       openFile(rel);
-    } catch (e: any) { error = String(e?.message ?? e); }
+    } catch (e) { error = errMsg(e); }
   }
 
   async function deleteFile(rel: string) {
@@ -100,7 +101,7 @@
       else await XClawService.BotSkillDeleteFile(botId, sel, rel);
       if (activeFile === rel) { activeFile = null; content = ""; }
       await selectSkill(sel);
-    } catch (e: any) { error = String(e?.message ?? e); }
+    } catch (e) { error = errMsg(e); }
   }
 
   async function createOwn() {
@@ -111,7 +112,7 @@
       else { await XClawService.BotSkillCreate(botId, name); await load(); }
       newName = "";
       selectSkill(name);
-    } catch (e: any) { error = String(e?.message ?? e); }
+    } catch (e) { error = errMsg(e); }
   }
 
   async function removeBotSkill(s: SkillInfo) {
@@ -120,7 +121,7 @@
       if (isPreview) { delete mockBot[botId][s.name]; load(); }
       else { await XClawService.BotSkillDelete(botId, s.name); await load(); }
       if (sel === s.name) { sel = null; files = []; activeFile = null; content = ""; }
-    } catch (e: any) { error = String(e?.message ?? e); }
+    } catch (e) { error = errMsg(e); }
   }
 </script>
 

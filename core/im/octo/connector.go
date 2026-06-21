@@ -82,6 +82,22 @@ type Connector struct {
 	// reconnect/backoff
 	reconnectBase time.Duration
 	reconnectMax  time.Duration
+
+	// receiptCh buffers read-receipt requests for a single worker goroutine
+	// (see receiptWorker). Replaces the prior fan-out where each inbound
+	// message spawned its own short-lived goroutine — under a burst of
+	// messages that produced N concurrent REST POSTs and N goroutine
+	// allocations. Buffered so a slow API back-end can't backpressure the
+	// inbound read loop; full buffer drops the receipt (logged) rather than
+	// blocking.
+	receiptCh chan readReceiptReq
+}
+
+// readReceiptReq is a queued ack request handled by receiptWorker.
+type readReceiptReq struct {
+	channelID   string
+	channelType ChannelType
+	messageID   string
 }
 
 // maxToolNotices caps how many "🔧 Running …" notices a single turn may emit, so
@@ -161,6 +177,7 @@ func NewConnector(rest *RESTClient) *Connector {
 		turnQueues:    make(map[string]*turnQueue),
 		reconnectBase: 3 * time.Second,
 		reconnectMax:  60 * time.Second,
+		receiptCh:     make(chan readReceiptReq, 64),
 	}
 }
 
@@ -256,6 +273,8 @@ func (c *Connector) Run(ctx context.Context) error {
 	c.runCtx = ctx
 	// REST heartbeat loop (30s), separate from the WS ping.
 	go c.heartbeatLoop(ctx)
+	// Single-worker read-receipt sender (see receiptCh comment).
+	go c.receiptWorker(ctx)
 
 	backoff := c.reconnectBase
 	var reg RegisterResponse
@@ -305,9 +324,13 @@ func (c *Connector) Run(ctx context.Context) error {
 		c.setStatus(false, errStr)
 
 		// Connection dropped: back off, then force a fresh registration (token
-		// may have expired) before reconnecting.
+		// may have expired) before reconnecting. Re-check ctx after the sleep so
+		// a shutdown that races the back-off doesn't issue a wasted Register.
 		sleep(ctx, backoff)
 		backoff = minDur(backoff*2, c.reconnectMax)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		if fresh, rerr := c.rest.Register(ctx, true); rerr == nil {
 			reg = fresh
 			c.setUID(reg.RobotID)
@@ -613,17 +636,34 @@ func oboReplyTarget(p MessagePayload, grantorUID string) replyTarget {
 	return replyTarget{channelID: channelID, channelType: chType, onBehalfOf: grantorUID}
 }
 
-// sendReadReceipt acks the message as read, fire-and-forget (api.ts
-// sendReadReceipt). Failures are logged but never block the turn.
+// sendReadReceipt enqueues an ack for the bounded receipt worker (api.ts
+// sendReadReceipt). Failures are logged but never block the turn; if the
+// buffer is saturated (REST back-end is slow and a burst of messages is
+// arriving) the receipt is dropped — read-receipts are best-effort.
 func (c *Connector) sendReadReceipt(m BotMessage) {
 	if m.MessageID == "" {
 		return
 	}
-	go func() {
-		if err := c.rest.SendReadReceipt(c.ctx(), m.ChannelID, m.ChannelType, []string{m.MessageID}); err != nil {
-			c.logf("read receipt for %s: %v", m.MessageID, err)
+	select {
+	case c.receiptCh <- readReceiptReq{m.ChannelID, m.ChannelType, m.MessageID}:
+	default:
+		c.logf("read receipt for %s dropped: queue full", m.MessageID)
+	}
+}
+
+// receiptWorker drains receiptCh serially, ending when ctx is cancelled.
+// One in-flight POST at a time bounds load on the REST API.
+func (c *Connector) receiptWorker(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case r := <-c.receiptCh:
+			if err := c.rest.SendReadReceipt(ctx, r.channelID, r.channelType, []string{r.messageID}); err != nil {
+				c.logf("read receipt for %s: %v", r.messageID, err)
+			}
 		}
-	}()
+	}
 }
 
 // resolveAttachments extracts downloadable media/file attachments from a payload
@@ -933,45 +973,4 @@ func minDur(a, b time.Duration) time.Duration {
 		return a
 	}
 	return b
-}
-
-// splitMessage breaks text into <=max-RUNE segments, preferring paragraph,
-// newline, then space boundaries before a hard cut (stream-relay parity).
-//
-// DEPRECATED / not used in production. OnReply uses splitMessageProtected, which
-// counts in UTF-16 code units (the Octo wire contract) and never cuts through a
-// resolved @mention span. Do NOT call this for outbound delivery — its rune-based
-// length disagrees with the wire's UTF-16 offsets for astral-plane characters.
-// Retained only because its boundary-preference logic is unit-tested.
-func splitMessage(text string, max int) []string {
-	runes := []rune(text)
-	if len(runes) <= max {
-		return []string{text}
-	}
-	var out []string
-	for len(runes) > max {
-		cut := max
-		// prefer a boundary within the window
-		window := string(runes[:max])
-		if i := strings.LastIndex(window, "\n\n"); i > 0 {
-			cut = len([]rune(window[:i]))
-		} else if i := strings.LastIndex(window, "\n"); i > 0 {
-			cut = len([]rune(window[:i]))
-		} else if i := strings.LastIndex(window, " "); i > 0 {
-			cut = len([]rune(window[:i]))
-		}
-		if cut <= 0 {
-			cut = max
-		}
-		out = append(out, strings.TrimRight(string(runes[:cut]), " \n"))
-		runes = runes[cut:]
-		// skip leading whitespace of the next segment
-		for len(runes) > 0 && (runes[0] == '\n' || runes[0] == ' ') {
-			runes = runes[1:]
-		}
-	}
-	if len(runes) > 0 {
-		out = append(out, string(runes))
-	}
-	return out
 }

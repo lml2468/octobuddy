@@ -84,8 +84,8 @@ func (s *socketConn) connect(ctx context.Context) error {
 
 	// Send CONNECT.
 	deviceID := uuid.NewString() + "W"
-	ts := uint64(time.Now().UnixMilli())
-	if err := s.writeRaw(encodeConnect(deviceID, s.uid, s.token, ts, kp.pubKeyBase64())); err != nil {
+	timestampMs := uint64(time.Now().UnixMilli())
+	if err := s.writeRaw(encodeConnect(deviceID, s.uid, s.token, timestampMs, kp.pubKeyBase64())); err != nil {
 		c.Close()
 		return err
 	}

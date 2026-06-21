@@ -46,8 +46,6 @@ func Dir() string {
 	return filepath.Join(home, ".xclaw")
 }
 
-
-
 // Node is a file or directory in the workspace tree. Path is relative to the
 // workspace root, forward-slashed; the root node has Path "". Children is nil for
 // files and for directories whose contents are deliberately not expanded (.claude

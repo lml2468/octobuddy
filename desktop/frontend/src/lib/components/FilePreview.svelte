@@ -2,6 +2,7 @@
   import { XClawService } from "../../../bindings/github.com/lml2468/xclaw/desktop";
   import type { FileContent } from "../../../bindings/github.com/lml2468/xclaw/desktop/internal/workspace/models";
   import { renderMarkdown, highlight, onMarkdownCopyClick } from "../markdown";
+  import { errMsg } from "../errors";
 
   let { botId, sessionKey, path, onclose }: {
     botId: string | null;
@@ -51,8 +52,8 @@
     if (!b || !k) return;
     try {
       file = await XClawService.WorkspaceFile(b, k, p);
-    } catch (e: any) {
-      error = String(e?.message ?? e);
+    } catch (e) {
+      error = errMsg(e);
     }
   }
 
@@ -266,7 +267,7 @@
   /* PDF. */
   .pdf { flex: 1 1 0; width: 100%; height: 100%; border: none; background: var(--chat); }
   /* Rendered HTML: white canvas (pages assume a default page background). */
-  .html { flex: 1 1 0; width: 100%; height: 100%; border: none; background: #fff; }
+  .html { flex: 1 1 0; width: 100%; height: 100%; border: none; background: var(--surface); }
 
   /* Rendered markdown — mirror Bubble's .md styles. */
   .md { flex: 1 1 0; min-height: 0; overflow: auto; padding: 22px var(--gutter, 28px); max-width: 820px; width: 100%; margin: 0 auto; color: var(--ink); font-size: 14px; line-height: 1.6; }

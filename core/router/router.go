@@ -245,6 +245,8 @@ const (
 	RateLimitedSilent            // rejected but already notified this window → stay silent
 )
 
+// String returns the lowercase tag for the routing outcome (used in logs
+// and metrics). Keep these stable — operators grep for them.
 func (d Decision) String() string {
 	switch d {
 	case Accepted:

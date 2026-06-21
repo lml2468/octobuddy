@@ -4,6 +4,7 @@
   // just the script list + editor for one bot. Writes through to disk.
   import { XClawService } from "../../../bindings/github.com/lml2468/xclaw/desktop";
   import { confirm } from "../confirm.svelte";
+  import { errMsg } from "../errors";
   import ErrorFooter from "./ErrorFooter.svelte";
 
   let { botId, isPreview = false }: { botId: string; isPreview?: boolean } = $props();
@@ -36,7 +37,7 @@
       }
       if (wfs.length && !wfs.find((w) => w.name === sel)) select(wfs[0].name);
       else if (!wfs.length) { sel = null; content = ""; }
-    } catch (e: any) { error = String(e?.message ?? e); }
+    } catch (e) { error = errMsg(e); }
   }
 
   function descOf(src: string): string {
@@ -50,7 +51,7 @@
     try {
       content = isPreview ? (mockBot[botId]?.[name] ?? "") : await XClawService.BotWorkflowRead(botId, name);
       dirty = false;
-    } catch (e: any) { error = String(e?.message ?? e); }
+    } catch (e) { error = errMsg(e); }
   }
 
   async function save() {
@@ -59,7 +60,7 @@
       if (isPreview) { mockBot[botId][sel] = content; }
       else await XClawService.BotWorkflowWrite(botId, sel, content);
       dirty = false;
-    } catch (e: any) { error = String(e?.message ?? e); }
+    } catch (e) { error = errMsg(e); }
   }
 
   async function createOwn() {
@@ -70,7 +71,7 @@
       else { await XClawService.BotWorkflowCreate(botId, name); await load(); }
       newName = "";
       select(name);
-    } catch (e: any) { error = String(e?.message ?? e); }
+    } catch (e) { error = errMsg(e); }
   }
 
   async function remove(w: WfInfo) {
@@ -79,7 +80,7 @@
       if (isPreview) { delete mockBot[botId][w.name]; load(); }
       else { await XClawService.BotWorkflowDelete(botId, w.name); await load(); }
       if (sel === w.name) { sel = null; content = ""; dirty = false; }
-    } catch (e: any) { error = String(e?.message ?? e); }
+    } catch (e) { error = errMsg(e); }
   }
 </script>
 

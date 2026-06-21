@@ -154,8 +154,8 @@ func TestSSRFRejection(t *testing.T) {
 		"ftp://x":                 false,
 	}
 	for u, want := range cases {
-		if got := isAllowedURL(u); got != want {
-			t.Fatalf("isAllowedURL(%q) = %v, want %v", u, got, want)
+		if got := IsAllowedURL(u); got != want {
+			t.Fatalf("IsAllowedURL(%q) = %v, want %v", u, got, want)
 		}
 	}
 }

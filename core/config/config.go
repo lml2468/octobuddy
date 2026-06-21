@@ -293,10 +293,10 @@ func resolveBots(global File, baseDir string) ([]Resolved, error) {
 		// validation. octoToken is intentionally NOT required: it may be omitted
 		// from the file and injected at runtime via the control bus (secret.inject)
 		// from the GUI's Keychain. The connector waits for a token before connecting.
-		if r.APIURL != "" && !isAllowedURL(r.APIURL) {
+		if r.APIURL != "" && !IsAllowedURL(r.APIURL) {
 			return nil, fmt.Errorf("bot %q: unsafe apiUrl %q (must be https:// or http://localhost; SSRF protection)", id, r.APIURL)
 		}
-		if r.Agent.GatewayBaseURL != "" && !isAllowedURL(r.Agent.GatewayBaseURL) {
+		if r.Agent.GatewayBaseURL != "" && !IsAllowedURL(r.Agent.GatewayBaseURL) {
 			return nil, fmt.Errorf("bot %q: unsafe gatewayBaseUrl %q (SSRF protection)", id, r.Agent.GatewayBaseURL)
 		}
 		// groupConfigDir files are injected UNSANITIZED into the system prompt, so

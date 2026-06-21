@@ -154,12 +154,6 @@ func latestRelease(ctx context.Context) (ghRelease, error) {
 	return r, nil
 }
 
-// LatestVersion returns the latest published release tag (for update checks).
-func LatestVersion(ctx context.Context) (string, error) {
-	r, err := latestRelease(ctx)
-	return r.TagName, err
-}
-
 // assetName is the GoReleaser archive name for this platform, e.g.
 // "octo-cli_0.6.0_darwin_arm64.tar.gz".
 func assetName(tag string) string {

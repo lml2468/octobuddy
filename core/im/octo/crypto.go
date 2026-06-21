@@ -96,7 +96,7 @@ func aesDecryptPayload(payload, key, iv []byte) ([]byte, error) {
 		return nil, fmt.Errorf("base64 payload: %w", err)
 	}
 	if len(cipherBytes) == 0 || len(cipherBytes)%aes.BlockSize != 0 {
-		return nil, errors.New("ciphertext not a block multiple")
+		return nil, ErrCipherSize
 	}
 	block, err := aes.NewCipher(key)
 	if err != nil {
@@ -108,18 +108,28 @@ func aesDecryptPayload(payload, key, iv []byte) ([]byte, error) {
 	return pkcs7Unpad(plain, aes.BlockSize)
 }
 
+// Decryption sentinel errors. Exposed so callers (and tests) can errors.Is
+// against the failure mode without parsing the message; "invalid pkcs7 padding"
+// is otherwise opaque to upstream metrics / diagnostics.
+var (
+	ErrCipherSize     = errors.New("ciphertext not a block multiple")
+	ErrEmptyPlaintext = errors.New("empty plaintext")
+	ErrPKCS7Length    = errors.New("invalid pkcs7 padding")
+	ErrPKCS7Bytes     = errors.New("invalid pkcs7 padding bytes")
+)
+
 func pkcs7Unpad(b []byte, blockSize int) ([]byte, error) {
 	n := len(b)
 	if n == 0 {
-		return nil, errors.New("empty plaintext")
+		return nil, ErrEmptyPlaintext
 	}
 	pad := int(b[n-1])
 	if pad == 0 || pad > blockSize || pad > n {
-		return nil, errors.New("invalid pkcs7 padding")
+		return nil, ErrPKCS7Length
 	}
 	for _, c := range b[n-pad:] {
 		if int(c) != pad {
-			return nil, errors.New("invalid pkcs7 padding bytes")
+			return nil, ErrPKCS7Bytes
 		}
 	}
 	return b[:n-pad], nil

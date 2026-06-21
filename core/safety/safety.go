@@ -10,8 +10,8 @@
 //
 // Policy (mirrors prompt-safety.ts):
 //   - Names into a label      -> SanitizeDisplayName (strip [ ] and line breaks, cap)
-//   - Bodies inside a label   -> EscapeRoleLabels (neutralize line-leading role labels)
-//   - Assembled blocks        -> EscapeSectionMarkers (neutralize line-leading section headers)
+//   - Bodies inside a label   -> escapeRoleLabels (neutralize line-leading role labels)
+//   - Assembled blocks        -> escapeSectionMarkers (neutralize line-leading section headers)
 //   - SafeText                -> a type only this package can mint, so "raw user
 //     text reached the prompt" is a compile error.
 package safety
@@ -103,15 +103,15 @@ func truncateUTF16(s string, n int) string {
 	return string(utf16.Decode(units[:cut]))
 }
 
-// EscapeRoleLabels neutralizes a line-leading role label in user content so it
+// escapeRoleLabels neutralizes a line-leading role label in user content so it
 // renders as literal text rather than forging a turn boundary.
-func EscapeRoleLabels(content string) string {
+func escapeRoleLabels(content string) string {
 	return roleLabelRE.ReplaceAllString(normalizeLineBreaks(content), "$1\\$2")
 }
 
-// EscapeSectionMarkers neutralizes line-leading section markers in an assembled,
+// escapeSectionMarkers neutralizes line-leading section markers in an assembled,
 // user-influenced block.
-func EscapeSectionMarkers(text string) string {
+func escapeSectionMarkers(text string) string {
 	return sectionMarkerRE.ReplaceAllString(normalizeLineBreaks(text), "$1\\[$2]")
 }
 
@@ -119,7 +119,7 @@ func EscapeSectionMarkers(text string) string {
 // section markers).
 func SanitizePromptBody(text string) string {
 	// Normalize line breaks once, then apply both escapers directly — calling
-	// EscapeRoleLabels + EscapeSectionMarkers would normalize the text twice.
+	// escapeRoleLabels + escapeSectionMarkers would normalize the text twice.
 	t := normalizeLineBreaks(text)
 	t = roleLabelRE.ReplaceAllString(t, "$1\\$2")
 	return sectionMarkerRE.ReplaceAllString(t, "$1\\[$2]")
@@ -135,10 +135,6 @@ func (t SafeText) String() string { return t.s }
 
 // SafeBody mints SafeText from a user body (escapes role labels + section markers).
 func SafeBody(text string) SafeText { return SafeText{SanitizePromptBody(text)} }
-
-// SafeSectioned mints SafeText from already per-line-escaped content needing only
-// section-marker escaping (e.g. rendered history).
-func SafeSectioned(text string) SafeText { return SafeText{EscapeSectionMarkers(text)} }
 
 // TrustedText mints SafeText from operator-trusted text (SOUL.md, config
 // systemPrompt, our own constants) — no escaping, but the type documents the

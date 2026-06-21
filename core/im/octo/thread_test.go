@@ -61,8 +61,8 @@ func TestExtractThreadShortID(t *testing.T) {
 		{"grp_1", ""},             // single underscores are not a separator
 	}
 	for _, c := range cases {
-		if got := ExtractThreadShortID(c.id); got != c.want {
-			t.Errorf("ExtractThreadShortID(%q) = %q, want %q", c.id, got, c.want)
+		if got := extractThreadShortID(c.id); got != c.want {
+			t.Errorf("extractThreadShortID(%q) = %q, want %q", c.id, got, c.want)
 		}
 	}
 }

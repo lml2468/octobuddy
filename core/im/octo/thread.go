@@ -43,11 +43,11 @@ func ExtractParentGroupNo(channelID string) string {
 	return channelID
 }
 
-// ExtractThreadShortID returns the thread short id of channelID, or "" when
+// extractThreadShortID returns the thread short id of channelID, or "" when
 // channelID is not a thread ref (no separator) or has an empty short-id portion
 // ("<groupNo>____"). Mirrors group-md.ts extractThreadShortId, collapsing its
 // null/"" distinction to "" since Go callers test for emptiness either way.
-func ExtractThreadShortID(channelID string) string {
+func extractThreadShortID(channelID string) string {
 	i := strings.Index(channelID, ThreadIDSeparator)
 	if i < 0 {
 		return ""

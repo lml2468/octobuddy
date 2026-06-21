@@ -51,7 +51,7 @@
 
   <fieldset>
     <legend>环境变量</legend>
-    {#each rows as row, i (i)}
+    {#each rows as row, i (row)}
       <div class="envrow">
         <input class="k" bind:value={row.k} oninput={commitEnv} placeholder="KEY" />
         <span>=</span>

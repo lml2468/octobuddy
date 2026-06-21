@@ -10,6 +10,7 @@
   // see configstore.Save's auto-Login + this pane's manual "重新登录" button
   // for the recovery path.
   import { XClawService } from "../../../bindings/github.com/lml2468/xclaw/desktop";
+  import { errMsg } from "../errors";
   import type { BotConfig } from "../../../bindings/github.com/lml2468/xclaw/desktop/internal/configstore/models";
 
   let { bot = $bindable<BotConfig>(), botStatus, ondirty, isPreview = false }:
@@ -52,7 +53,7 @@
       const s = await XClawService.OctoCliStatus(bot.id);
       cliRegistered = !!s?.registered;
       cliRobotId = s?.robotId ?? "";
-    } catch (e: any) { cliError = String(e?.message ?? e); }
+    } catch (e) { cliError = errMsg(e); }
   }
   async function relogin() {
     cliBusy = true; cliError = ""; cliNotice = "";
@@ -67,7 +68,7 @@
         cliRobotId = robotId;
         cliNotice = "已写入 octo-cli profile";
       }
-    } catch (e: any) { cliError = String(e?.message ?? e); }
+    } catch (e) { cliError = errMsg(e); }
     finally { cliBusy = false; }
   }
   async function logout() {
@@ -79,7 +80,7 @@
         cliRegistered = false;
         cliNotice = "已删除 octo-cli profile";
       }
-    } catch (e: any) { cliError = String(e?.message ?? e); }
+    } catch (e) { cliError = errMsg(e); }
     finally { cliBusy = false; }
   }
 </script>

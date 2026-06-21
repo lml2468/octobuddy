@@ -24,6 +24,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/lml2468/xclaw/core/config"
 )
 
 // httpTimeout bounds the provisioning request.
@@ -33,17 +35,16 @@ const httpTimeout = 30 * time.Second
 // client-side for a clearer error than a server 401.
 const userAPIKeyPrefix = "uk_"
 
-// validBaseURL applies the same hygiene configstore enforces on apiUrl: https,
-// or http only for localhost/loopback. Keeps the wizard from POSTing the API key
-// to an arbitrary plaintext host (SSRF / credential-leak guard).
+// validBaseURL applies the same SSRF policy configstore enforces on apiUrl
+// (config.IsAllowedURL): https to any non-private host, or http only to a true
+// loopback host. Reusing the canonical check keeps the wizard honest — a
+// hand-rolled `HasPrefix("http://localhost")` would accept the lookalike host
+// `http://localhost.evil.com` and exfiltrate the operator's uk_ API Key.
 func validBaseURL(s string) error {
-	if strings.HasPrefix(s, "https://") {
-		return nil
+	if !config.IsAllowedURL(s) {
+		return fmt.Errorf("API URL 须为 https://（或 http://localhost）")
 	}
-	if strings.HasPrefix(s, "http://localhost") || strings.HasPrefix(s, "http://127.0.0.1") {
-		return nil
-	}
-	return fmt.Errorf("API URL 须为 https://（或 http://localhost）")
+	return nil
 }
 
 // BotResult is the provisioned bot's identity returned to the wizard.

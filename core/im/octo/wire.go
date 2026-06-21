@@ -101,7 +101,7 @@ func encodeVariableLength(n int) []byte {
 
 // frame wraps a body with a packet header + remaining-length varint.
 func frame(pt packetType, body []byte) []byte {
-	out := []byte{byte(pt)<<4 | 0}
+	out := []byte{byte(pt) << 4}
 	out = append(out, encodeVariableLength(len(body))...)
 	out = append(out, body...)
 	return out
@@ -193,7 +193,7 @@ func encodeConnect(deviceID, uid, token string, clientTimestampMS uint64, client
 }
 
 // encodePing is a single header byte (no body, no varint).
-func encodePing() []byte { return []byte{byte(pktPing)<<4 | 0} }
+func encodePing() []byte { return []byte{byte(pktPing) << 4} }
 
 // encodeRecvack builds a RECVACK (socket.ts encodeRecvackPacket): int64
 // messageID + int32 messageSeq.

@@ -371,7 +371,6 @@ func writeBotFile(id, name, content string) error {
 	return os.WriteFile(path, []byte(content), 0o600)
 }
 
-
 func validURL(s string) error {
 	if strings.HasPrefix(s, "https://") {
 		return nil

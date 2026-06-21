@@ -7,7 +7,7 @@ import (
 	"net/url"
 )
 
-// isAllowedURL implements the SSRF policy (url-policy.ts isAllowedApiUrl):
+// IsAllowedURL implements the SSRF policy (url-policy.ts isAllowedApiUrl):
 //   - https:// to any non-private host (private IP literals rejected)
 //   - http:// only to a loopback host (localhost / 127.0.0.0-8 / ::1)
 //   - any other scheme rejected
@@ -18,7 +18,7 @@ import (
 // config (apiUrl / gatewayBaseUrl), never attacker-supplied; the check is a
 // guardrail against fat-finger misconfig, not a defense against a hostile
 // operator. If untrusted URLs ever flow here, add resolve-time IP re-checking.
-func isAllowedURL(raw string) bool {
+func IsAllowedURL(raw string) bool {
 	u, err := url.Parse(raw)
 	if err != nil {
 		return false
@@ -77,7 +77,7 @@ func IsPrivateOrLocalAddress(addr string) bool {
 // AssertPublicURL validates that raw is an http(s) URL whose host is publicly
 // routable, resolving DNS and rejecting if ANY resolved address is
 // private/loopback/link-local (url-policy.ts assertPublicUrl). Unlike
-// isAllowedURL (operator-config, literal-only), this is the runtime guard for
+// IsAllowedURL (operator-config, literal-only), this is the runtime guard for
 // ATTACKER-SUPPLIED media URLs: an IP literal is checked directly; a hostname is
 // resolved and every returned address must be public.
 //

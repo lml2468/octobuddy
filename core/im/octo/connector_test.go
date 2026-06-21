@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -61,44 +60,6 @@ func TestMentionsBot(t *testing.T) {
 	// no mention
 	if (BotMessage{}).MentionsBot("bot1") {
 		t.Fatal("no mention should be false")
-	}
-}
-
-func TestSplitMessageBoundaries(t *testing.T) {
-	// short text: single segment
-	if got := splitMessage("hello", 100); len(got) != 1 || got[0] != "hello" {
-		t.Fatalf("short: %v", got)
-	}
-	// splits on paragraph boundary
-	text := strings.Repeat("a", 30) + "\n\n" + strings.Repeat("b", 30)
-	segs := splitMessage(text, 40)
-	if len(segs) < 2 {
-		t.Fatalf("expected split, got %d segments", len(segs))
-	}
-	if !strings.HasPrefix(segs[0], "a") || strings.Contains(segs[0], "b") {
-		t.Fatalf("first segment should be the a-run: %q", segs[0])
-	}
-	// every segment within the cap
-	for _, s := range segs {
-		if len([]rune(s)) > 40 {
-			t.Fatalf("segment exceeds cap: %d", len([]rune(s)))
-		}
-	}
-}
-
-func TestSplitMessageHardCut(t *testing.T) {
-	// no boundary at all → hard cut into cap-sized chunks
-	text := strings.Repeat("x", 250)
-	segs := splitMessage(text, 100)
-	if len(segs) != 3 {
-		t.Fatalf("expected 3 hard-cut segments, got %d", len(segs))
-	}
-	total := 0
-	for _, s := range segs {
-		total += len([]rune(s))
-	}
-	if total != 250 {
-		t.Fatalf("hard cut lost data: total=%d", total)
 	}
 }
 

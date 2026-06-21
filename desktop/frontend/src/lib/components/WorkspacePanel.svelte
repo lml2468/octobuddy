@@ -1,6 +1,7 @@
 <script lang="ts">
   import { XClawService } from "../../../bindings/github.com/lml2468/xclaw/desktop";
   import type { Node } from "../../../bindings/github.com/lml2468/xclaw/desktop/internal/workspace/models";
+  import { errMsg } from "../errors";
 
   let { botId, sessionKey, activePath, onopen, onclose }: {
     botId: string | null;
@@ -44,8 +45,8 @@
     loading = true;
     try {
       tree = isPreview ? mockTree : await XClawService.WorkspaceTree(b, k);
-    } catch (e: any) {
-      error = String(e?.message ?? e);
+    } catch (e) {
+      error = errMsg(e);
       tree = null;
     } finally {
       loading = false;
