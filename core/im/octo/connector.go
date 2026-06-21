@@ -162,12 +162,18 @@ func (c *Connector) RegisterReplyTarget(sessionKey, channelID string, channelTyp
 // goroutine that drainTurns owns; the bot's shutdown chain
 // (connector.WaitTurns + cm.Wait) ensures the in-flight turn finishes
 // before the store closes.
-func (c *Connector) EnqueueCron(sessionKey, channelID string, channelType ChannelType, inbound router.InboundMessage) {
+//
+// taskCreatedBy is the uid that authored the task at create-time. Used by
+// the persona-grantor stamp: we only speak `on_behalf_of` the current
+// grantor when the task itself was authored by that grantor's identity.
+// Without this guard (round 9 Sec F1), a task authored under one persona
+// would silently fire `on_behalf_of` a DIFFERENT persona after a grantor
+// rotation — speaking on behalf of someone who never consented. (The
+// owner-transfer drop in cron.SetOwnerUID is the primary defense; this is
+// defense in depth for the persona-vs-owner mismatch case.)
+func (c *Connector) EnqueueCron(sessionKey, channelID string, channelType ChannelType, inbound router.InboundMessage, taskCreatedBy string) {
 	tgt := replyTarget{channelID: channelID, channelType: channelType}
-	// Persona-OBO bots speak as the grantor; without this the cron reply
-	// arrives from the bot identity while every other reply in the channel
-	// arrives from the grantor — the persona illusion breaks visibly.
-	if c.persona.UID != "" {
+	if c.persona.UID != "" && taskCreatedBy == c.persona.UID {
 		tgt.onBehalfOf = c.persona.UID
 	}
 	c.enqueueTurn(sessionKey, inbound, tgt)
@@ -569,34 +575,31 @@ func (c *Connector) onInbound(m BotMessage) {
 			tgt.channelType = ChannelCommunityTopic
 		}
 	}
-	// Also record the target now so callers probing c.target(key) immediately
-	// after onInbound (notably the persona tests) observe the right value.
-	// drainTurns re-asserts this from the queued item right before gw.Handle,
-	// so a concurrent EnqueueCron that wrote a different target between this
-	// line and the pop doesn't actually corrupt either turn — the queue item
-	// carries the authoritative target for THIS turn.
-	c.mu.Lock()
-	c.targets[key] = tgt
-	c.mu.Unlock()
+	// NB: round 8 also wrote c.targets[key] here "for the persona tests" —
+	// that put the race back, just for inbound-during-a-mid-flight-turn
+	// instead of cron-vs-inbound. If the gateway's in-flight Handle for a
+	// PRIOR turn emits OnReply / onToolProgress / startTyping after this
+	// onInbound runs but before its drainTurns pop, those callbacks read
+	// the wrong target. Map writes now ONLY happen in drainTurns
+	// (sole-writer invariant); the persona tests probe the queued item.
 
 	// Acknowledge receipt (fire-and-forget) once we've decided to process it.
 	c.sendReadReceipt(m)
 
-	if c.gateway == nil {
-		return
-	}
 	// A group message that doesn't trigger the bot is background context, not a
 	// turn: observe it so it becomes a later @-mention's delta. (The router
 	// would drop it anyway; observing first preserves group context.) Background
 	// context is stored history, so it carries the plain resolved text WITHOUT
 	// the quoted-reply prefix. Observe is a fast in-memory cache write, so it runs
-	// inline (not worth a worker goroutine).
+	// inline (not worth a worker goroutine). A nil gateway (tests) skips it.
 	//
 	// Exception (G12): in a mention-free channel an unmentioned message IS a turn
 	// — hand it to the gateway so the router applies the mention-free + bot-loop
 	// policy. runTurn caches it into group context itself, so do NOT also Observe.
 	if inbound.ChannelType == router.ChannelGroup && !inbound.Mentioned && !c.mentionFree[m.ChannelID] {
-		c.gateway.Observe(inbound)
+		if c.gateway != nil {
+			c.gateway.Observe(inbound)
+		}
 		return
 	}
 	// Prepend the quoted-reply context to the CURRENT turn only (never stored
@@ -608,7 +611,9 @@ func (c *Connector) onInbound(m BotMessage) {
 	// Dispatch the turn on the per-key worker so the WS read loop is not blocked
 	// for the whole (possibly multi-minute) turn (H3). The router still serializes
 	// same-session turns; the per-key queue guarantees they reach the router in
-	// arrival order despite running on a goroutine.
+	// arrival order despite running on a goroutine. drainTurns skips dispatch
+	// when gateway is nil (tests), but the queue is still populated so the
+	// persona tests can assert via peekQueuedTarget.
 	c.enqueueTurn(key, inbound, tgt)
 }
 
@@ -646,7 +651,19 @@ func (c *Connector) enqueueTurn(key string, inbound router.InboundMessage, tgt r
 // turns from being enqueued) and BEFORE closing the store / gateway / driver.
 //
 // Idempotent: a connector that has never enqueued a turn returns immediately.
-func (c *Connector) WaitTurns() { c.turnsWG.Wait() }
+//
+// Sets the `closed` flag first so any late enqueueTurn call (a cron tick
+// that landed between Run returning and the bot's cm.Stop firing) is
+// refused at the door rather than spawning a fresh drainTurns into a
+// freshly-closed store. The flag was declared + checked in round 8 but
+// never actually set (`grep 'c\.closed =' returned nothing` per the round-9
+// Go audit) — wiring it here closes the last shutdown gap.
+func (c *Connector) WaitTurns() {
+	c.mu.Lock()
+	c.closed = true
+	c.mu.Unlock()
+	c.turnsWG.Wait()
+}
 
 func (c *Connector) drainTurns(key string) {
 	defer c.turnsWG.Done()
@@ -1052,4 +1069,20 @@ func (c *Connector) target(sessionKey string) (replyTarget, bool) {
 	defer c.mu.Unlock()
 	t, ok := c.targets[sessionKey]
 	return t, ok
+}
+
+// peekQueuedTarget returns the target of the FIRST queued turn for sessionKey,
+// or ok=false when no turn is queued. Test-only accessor: production callers
+// read via c.target(sessionKey) (the map drainTurns mutates as it pops). This
+// gives the persona-OBO tests a way to assert "onInbound enqueued a turn with
+// THIS target" without re-introducing the racy in-onInbound map write that
+// round 9 deleted.
+func (c *Connector) peekQueuedTarget(sessionKey string) (replyTarget, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	q := c.turnQueues[sessionKey]
+	if q == nil || len(q.pending) == 0 {
+		return replyTarget{}, false
+	}
+	return q.pending[0].tgt, true
 }

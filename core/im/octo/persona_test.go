@@ -141,7 +141,7 @@ func TestOnInboundOBOSecurityGate(t *testing.T) {
 	c.onInbound(m)
 
 	key := "u_attacker" // DM session key
-	tgt, ok := c.target(key)
+	tgt, ok := c.peekQueuedTarget(key)
 	if !ok {
 		t.Fatal("expected a reply target to be recorded")
 	}
@@ -173,7 +173,7 @@ func TestOnInboundOBOTrustedRelay(t *testing.T) {
 	}
 	c.onInbound(m)
 
-	tgt, ok := c.target("u_admin")
+	tgt, ok := c.peekQueuedTarget("u_admin")
 	if !ok {
 		t.Fatal("expected a reply target")
 	}
@@ -206,7 +206,7 @@ func TestOnInboundOBORelevanceFilterDrops(t *testing.T) {
 	}
 	c.onInbound(m)
 
-	if _, ok := c.target("u_admin"); ok {
+	if _, ok := c.peekQueuedTarget("u_admin"); ok {
 		t.Fatal("irrelevant @AI OBO fan-out must NOT record a session/reply target")
 	}
 }

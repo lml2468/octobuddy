@@ -18,6 +18,12 @@
     clearTimeout(copyTimer);
     copyTimer = setTimeout(() => (copied = false), 1200);
   }
+  // Clear the copy-confirmation timer on unmount. Without this, switching
+  // sessions / resetting the transcript within the 1200 ms window
+  // unmounts the Bubble but the setTimeout still fires, writing to a
+  // detached component's reactive state and pinning the (now-detached)
+  // closure in memory until the timer expires. Latent reactive-write leak.
+  $effect(() => () => clearTimeout(copyTimer));
 </script>
 
 {#if isTool}

@@ -132,16 +132,17 @@ func TestQueuedTurnsCarryOwnTarget(t *testing.T) {
 }
 
 // TestEnqueueCronCarriesPersonaGrantor is the regression for the round-8
-// F1-Arch persona slice: cron fires from a persona-OBO bot used to write a
-// target with onBehalfOf="" via the deprecated RegisterReplyTarget, so the
-// cron reply arrived from the bot identity while every other reply in the
-// channel arrived from the grantor (visible persona breakage). EnqueueCron
-// now stamps the persona grantor onto the queued target.
+// F1-Arch persona slice + round-9 Sec F1 tightening: cron fires from a
+// persona-OBO bot stamp the grantor onto the queued target so the cron
+// reply speaks `on_behalf_of` the same identity as live replies, BUT only
+// when the task was authored by that grantor (post-round-9: prevents a
+// task from a prior grantor firing under a new grantor after rotation).
 func TestEnqueueCronCarriesPersonaGrantor(t *testing.T) {
 	c := NewConnector(NewRESTClient("http://x", func() string { return "tk" }))
 	c.SetPersona(persona.Grantor{UID: "u_grantor", Name: "Admin"})
 	const key = "dm:bot1:peer"
-	c.EnqueueCron(key, "cron-channel", ChannelDM, router.InboundMessage{ChannelID: "cron-channel", ChannelType: router.ChannelDM, Text: "daily"})
+	// Task authored BY the grantor: stamp onBehalfOf.
+	c.EnqueueCron(key, "cron-channel", ChannelDM, router.InboundMessage{ChannelID: "cron-channel", ChannelType: router.ChannelDM, Text: "daily"}, "u_grantor")
 	c.mu.Lock()
 	q := c.turnQueues[key]
 	if q == nil || len(q.pending) != 1 {
@@ -151,6 +152,78 @@ func TestEnqueueCronCarriesPersonaGrantor(t *testing.T) {
 	if got := q.pending[0].tgt.onBehalfOf; got != "u_grantor" {
 		c.mu.Unlock()
 		t.Errorf("cron reply target dropped persona grantor: onBehalfOf=%q, want %q", got, "u_grantor")
+	}
+	c.mu.Unlock()
+
+	// Task authored by a DIFFERENT uid (e.g. prior owner before rotation):
+	// must NOT speak on behalf of the current grantor. This is round-9 Sec F1:
+	// without this guard, a task scheduled before a persona handoff would
+	// silently fire `on_behalf_of` someone who never consented.
+	const key2 = "dm:bot1:other"
+	c.EnqueueCron(key2, "cron-channel", ChannelDM, router.InboundMessage{ChannelID: "cron-channel", ChannelType: router.ChannelDM, Text: "old"}, "u_prior_owner")
+	c.mu.Lock()
+	q = c.turnQueues[key2]
+	if q == nil || len(q.pending) != 1 {
+		c.mu.Unlock()
+		t.Fatalf("expected 1 queued foreign-owner cron item, got %v", q)
+	}
+	if got := q.pending[0].tgt.onBehalfOf; got != "" {
+		c.mu.Unlock()
+		t.Errorf("cron task authored by foreign uid must NOT carry current persona grantor; got onBehalfOf=%q", got)
+	}
+	c.mu.Unlock()
+}
+
+// TestNoTargetMapStompUnderConcurrentEnqueue is the regression for round-9 F1:
+// round 8 kept c.targets[key] = tgt in onInbound "for the persona tests", which
+// put the stomp race BACK — OnReply for an in-flight turn would read whichever
+// target the LAST onInbound wrote, not the one drainTurns popped. With that
+// kept-write deleted, drainTurns is the SOLE writer of c.targets and the
+// race goes away.
+//
+// The test asserts the structural invariant: enqueueTurn (called from
+// onInbound) and EnqueueCron (called from fireCronTask) both store their
+// target ON THE QUEUE ITEM and do not touch c.targets. With no other writer,
+// two queue items for the same key carry their own targets unconditionally.
+// A future regression that re-introduces a parallel writer would show up
+// here as a tgt overwrite.
+func TestNoTargetMapStompUnderConcurrentEnqueue(t *testing.T) {
+	c := NewConnector(NewRESTClient("http://x", func() string { return "tk" }))
+	c.setUID("bot1")
+	const key = "dm:bot1:peer"
+
+	// Pre-seed the queue with running=true so drainTurns doesn't auto-spawn
+	// and steal items before we can peek. This isolates the question we
+	// actually want to answer: do enqueueTurn / EnqueueCron preserve each
+	// caller's tgt without touching the shared c.targets map?
+	c.mu.Lock()
+	c.turnQueues[key] = &turnQueue{running: true}
+	c.mu.Unlock()
+
+	tgtA := replyTarget{channelID: "chanA", channelType: ChannelDM}
+	c.enqueueTurn(key, router.InboundMessage{ChannelID: "chanA", ChannelType: router.ChannelDM, Text: "A"}, tgtA)
+	c.EnqueueCron(key, "chanB", ChannelDM, router.InboundMessage{ChannelID: "chanB", ChannelType: router.ChannelDM, Text: "B"}, "")
+
+	// c.targets MUST be empty: no writer besides drainTurns (which we
+	// prevented from running). A regression that re-adds an onInbound /
+	// EnqueueCron direct-write would fail here.
+	c.mu.Lock()
+	if t0, ok := c.targets[key]; ok {
+		c.mu.Unlock()
+		t.Fatalf("c.targets[%q] should remain unwritten outside drainTurns, got %+v", key, t0)
+	}
+	q := c.turnQueues[key]
+	if q == nil || len(q.pending) != 2 {
+		c.mu.Unlock()
+		t.Fatalf("expected 2 queued items, got %v", q)
+	}
+	if q.pending[0].tgt.channelID != "chanA" || q.pending[0].tgt.onBehalfOf != "" {
+		c.mu.Unlock()
+		t.Errorf("item 0 tgt corrupted by concurrent enqueue: %+v", q.pending[0].tgt)
+	}
+	if q.pending[1].tgt.channelID != "chanB" {
+		c.mu.Unlock()
+		t.Errorf("item 1 tgt corrupted by concurrent enqueue: %+v", q.pending[1].tgt)
 	}
 	c.mu.Unlock()
 }

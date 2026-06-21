@@ -343,8 +343,17 @@ func kindOf(mime string, textual bool) string {
 func skipDir(name string) bool {
 	switch name {
 	case ".claude",
-		".aws", ".ssh", ".gnupg", ".gpg",
-		".docker", ".kube",
+		// Cloud / SaaS credential stores. If the agent runs a Bash command
+		// that copies any of these into its cwd (e.g. a research turn that
+		// `cp ~/.aws/credentials .`), the desktop file pane would expose
+		// the credential by default. Operator self-exposure, not RCE, but
+		// the file viewer shouldn't surface secrets unless explicitly asked.
+		".aws", ".azure", ".gcloud",
+		".ssh", ".gnupg", ".gpg",
+		".docker", ".kube", ".helm",
+		".cloudflared", ".terraform.d",
+		".cargo", ".m2", ".gradle",
+		".snowsql", ".databricks",
 		".npmrc", ".pypirc", ".netrc",
 		".config":
 		return true

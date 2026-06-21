@@ -36,7 +36,6 @@ var envAllowlist = map[string]struct{}{
 	"USER":              {}, // some CLIs read it for prompts/log lines
 	"LOGNAME":           {}, // POSIX alias for USER
 	"PATH":              {}, // resolve `node`, `git`, `claude`, etc.
-	"SHELL":             {}, // some agents shell out for tool invocation
 	"TMPDIR":            {}, // child writes scratch files
 	"TMP":               {}, // Windows analogue
 	"TEMP":              {}, // Windows analogue
@@ -50,6 +49,15 @@ var envAllowlist = map[string]struct{}{
 	"NODE_PATH":         {}, // node module resolution for claude
 	"NODE_OPTIONS":      {}, // operator-tuned node flags
 	"NPM_CONFIG_PREFIX": {}, // npm-installed claude lookups
+	// Corporate proxies — universally honored by node, curl, and the
+	// Anthropic SDK. NOT secrets; dropping them silently breaks claude
+	// connectivity in any proxied enterprise environment.
+	"HTTP_PROXY":  {},
+	"HTTPS_PROXY": {},
+	"NO_PROXY":    {},
+	"http_proxy":  {},
+	"https_proxy": {},
+	"no_proxy":    {},
 }
 
 // mergedEnv returns the agent's spawn environment: the allowlisted subset of

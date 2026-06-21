@@ -300,7 +300,12 @@ class Store {
     if (!botId) return;
     let s = this.sessions.find((x) => x.botId === botId && x.key === key);
     if (!s) {
-      s = this.ensureSession(botId, key);
+      // initialActivity=0 so the placeholder sinks to the bottom of the
+      // lastActivity-sorted sidebar list until the eventual session.history
+      // / sessions.list response folds the persisted updatedAt back in.
+      // Without this, a CommandPalette cross-bot jump into a stale session
+      // would float it permanently to the top (regression from round 8).
+      s = this.ensureSession(botId, key, 0);
     }
     if (s.loaded) return;
     XClawService.History(botId, key, 0);
@@ -474,10 +479,19 @@ class Store {
     return this.selectedBotId ?? this.bots[0]?.id ?? "";
   }
 
-  private ensureSession(botId: string, key: string): Session {
+  // ensureSession returns the existing Session or creates a placeholder. When
+  // initialActivity is omitted, new sessions get lastActivity=Date.now() so
+  // a freshly-arriving turn floats to the top of the sidebar. Callers that
+  // are NOT driven by a real activity event (e.g. CommandPalette jumping
+  // into a stale session, loadHistory pre-creating a row for the response
+  // to fold into) should pass 0 so the bogus Date.now() doesn't permanently
+  // out-sort genuinely-recent sessions — applyHistory + applySessionsList
+  // both `Math.max(s.lastActivity, persisted)`, so a bogus high value
+  // wins forever.
+  private ensureSession(botId: string, key: string, initialActivity = Date.now()): Session {
     let s = this.sessions.find((x) => x.botId === botId && x.key === key);
     if (!s) {
-      s = { botId, key, title: prettyTitle(key), messages: [], awaiting: false, awaitingSince: 0, proc: emptyProc(), inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, costUsd: 0, lastActivity: Date.now() };
+      s = { botId, key, title: prettyTitle(key), messages: [], awaiting: false, awaitingSince: 0, proc: emptyProc(), inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, costUsd: 0, lastActivity: initialActivity };
       this.sessions.push(s);
     }
     // Surface an arriving conversation when nothing is selected yet (first

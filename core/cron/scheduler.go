@@ -89,10 +89,48 @@ func (m *Manager) SetLabel(label string) { m.label = label }
 // SetOwnerUID updates the owner uid (resolved after bot registration). Safe to
 // call from any goroutine — guarded by ownerMu. The scheduler loop does not read
 // it (only Create/Delete do).
+//
+// On an ownership CHANGE (non-empty prior → different non-empty new), drops
+// every task whose CreatedBy isn't the new owner. Rationale (round 9 Sec F1):
+// an octo bot whose owner transfers — legitimate handoff OR an attacker who
+// rotates the bf_ token and re-registers — would otherwise inherit every
+// previously scheduled prompt. Those prompts fire with FromUID = old owner;
+// for persona-OBO bots they fire `on_behalf_of` the OLD persona grantor too,
+// posting messages "on behalf of" someone who never consented. Dropping the
+// foreign-owner tasks at the boundary is the cheapest correct semantic.
+// First-time owner resolution ("" → uid) does NOT prune (the prior empty
+// owner couldn't have created any tasks anyway; the disk file may carry
+// tasks from a prior daemon run that this bot identity legitimately owns).
 func (m *Manager) SetOwnerUID(uid string) {
 	m.ownerMu.Lock()
+	prior := m.ownerUID
 	m.ownerUID = uid
 	m.ownerMu.Unlock()
+	if prior == "" || prior == uid {
+		return
+	}
+	// Owner changed. Drop any tasks created by the prior owner.
+	dropped, err := m.store.Update(func(tasks []Task) ([]Task, bool) {
+		out := make([]Task, 0, len(tasks))
+		changed := false
+		for _, t := range tasks {
+			if t.CreatedBy == uid {
+				out = append(out, t)
+			} else {
+				changed = true
+			}
+		}
+		return out, changed
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%scron: prune tasks after owner change %s→%s: %v\n",
+			m.label, prior, uid, err)
+		return
+	}
+	if removed := len(dropped); removed > 0 {
+		fmt.Fprintf(os.Stderr, "%scron: dropped %d task(s) on owner change %s→%s (foreign CreatedBy)\n",
+			m.label, removed, prior, uid)
+	}
 }
 
 // owner returns the current owner uid under the read lock.

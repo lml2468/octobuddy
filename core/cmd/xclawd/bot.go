@@ -312,7 +312,10 @@ func runBot(ctx context.Context, cfg config.Resolved, reg *botRegistry, srv *con
 		connector.OnOwner(func(ownerUID string) { cm.SetOwnerUID(ownerUID) })
 		rtBot.cron = cm
 		cm.Start()
-		defer cm.Stop()
+		// Note: NO `defer cm.Stop()` here. The explicit shutdown chain below
+		// stops the scheduler BEFORE the connector/store drain so a late tick
+		// can't enqueue work after we've waited it out. A deferred Stop would
+		// run AFTER the function returns, missing the wait.
 		fmt.Printf("[%s] cron scheduler armed (tick %s)\n", cfg.BotID, cron.CronTickInterval)
 	}
 
@@ -320,18 +323,24 @@ func runBot(ctx context.Context, cfg config.Resolved, reg *botRegistry, srv *con
 		cfg.BotID, drv.Name(), cfg.APIURL, cfg.DataDir)
 
 	err = connector.Run(ctx)
-	// Shutdown ordering matters: Run has returned because ctx was cancelled,
-	// but drainTurns goroutines + control-bus session.send goroutines +
-	// cron-fired turns may still be inside gateway.Handle, mid-write to the
-	// store. Wait for ALL of them BEFORE the deferred st.Close() fires
-	// (defers are LIFO, so the function returns through Wait first →
-	// st.Close last). cm.Wait() covers cron fires; cm.Stop() (deferred above)
-	// only halts the scan, it does not drain in-flight turns.
-	connector.WaitTurns()
-	rtBot.target.turnsWG.Wait()
+	// Shutdown ordering (round 9 F2 — the round-8 defer-only chain had two
+	// holes: tick → safeFire → EnqueueCron → enqueueTurn(add to
+	// connector.turnsWG, spawn drainTurns) → return; cm.firesWG was satisfied
+	// the instant EnqueueCron returned, even though the new drainTurns was
+	// mid-gw.Handle. Worse, a tick landing AFTER connector.WaitTurns but
+	// before the function returned could spawn yet another drainTurns into
+	// the freshly-closed store):
+	//
+	//   1. Stop the cron scheduler FIRST so no fresh tick can fire.
+	//   2. Wait for any in-flight safeFire to finish (cm.Wait).
+	//   3. Wait for the connector's drainTurns + control-bus session.send.
+	//   4. THEN the deferred st.Close at the top of the function runs.
 	if cm != nil {
+		cm.Stop()
 		cm.Wait()
 	}
+	connector.WaitTurns()
+	rtBot.target.turnsWG.Wait()
 	return err
 }
 
@@ -363,7 +372,7 @@ func fireCronTask(ctx context.Context, gw *gateway.Gateway, connector *octo.Conn
 		fmt.Fprintf(os.Stderr, "cron: task %s has unroutable coords: %v\n", t.ID, err)
 		return
 	}
-	connector.EnqueueCron(key, t.ChannelID, octoType, inbound)
+	connector.EnqueueCron(key, t.ChannelID, octoType, inbound, t.CreatedBy)
 }
 
 // makeMultiBotHandler routes control-bus commands by botId across the registry.
