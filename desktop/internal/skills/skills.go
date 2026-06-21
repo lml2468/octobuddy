@@ -171,7 +171,7 @@ func writeFileIn(root, name, rel, content string) error {
 	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(full, []byte(content), 0o644)
+	return os.WriteFile(full, []byte(content), 0o600)
 }
 
 func deleteFileIn(root, name, rel string) error {

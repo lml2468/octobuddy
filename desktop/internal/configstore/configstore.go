@@ -54,11 +54,10 @@ func Path() string { return filepath.Join(Dir(), "config.json") }
 
 func botDir(id string) string { return filepath.Join(Dir(), id) }
 
-// First-time scaffold for a newly-created bot. Applied only when the bot
-// directory did not exist before this Save call AND the operator left the
-// corresponding editor field blank — so a deliberate clear by an existing
-// operator still removes the file (writeBotFile's "empty content → remove"
-// semantics are preserved). Kept in English to match the file name + project
+// First-time scaffold for a newly-created bot. Applied only when the file
+// does not already exist (writeOrScaffoldBotFile uses O_CREATE|O_EXCL), so
+// an operator who deliberately authored SOUL.md / AGENTS.md is never
+// overwritten by a re-save. Kept in English to match the file name + project
 // convention; operators in any locale are expected to overwrite these.
 const defaultSoulTemplate = `# Identity
 
@@ -204,6 +203,12 @@ func Save(bots []BotConfig, removedIDs []string) error {
 	if dup := firstDuplicate(bots); dup != "" {
 		return fmt.Errorf("duplicate bot id %q", dup)
 	}
+	if dup := firstDuplicateOctoBotID(bots); dup != "" {
+		// Two bots sharing an OCTO_BOT_ID would share an octo-cli disk profile;
+		// deleting one bot then runs octocli.Logout for the shared robot id and
+		// silently breaks the other bot's auth on its next agent spawn.
+		return fmt.Errorf("OCTO_BOT_ID %q is used by more than one bot — each bot needs a distinct Octo robot id", dup)
+	}
 
 	// Start from the existing File so top-level defaults + unknown keys survive.
 	f, err := readFile()
@@ -270,28 +275,26 @@ func Save(bots []BotConfig, removedIDs []string) error {
 	// Per-bot side effects (idempotent). On failure, config.json already
 	// reflects the intended set and a retry re-applies these.
 	for _, b := range bots {
-		// First-time creation: scaffold SOUL.md / AGENTS.md with starter
-		// templates when the operator left them blank, so the bot dir is never
-		// "naked" after Add-bot. Detected by botDir not existing yet; this
-		// keeps subsequent saves with a deliberately-cleared field as removes.
-		_, statErr := os.Stat(botDir(b.ID))
-		firstTime := os.IsNotExist(statErr)
 		if err := os.MkdirAll(botDir(b.ID), 0o755); err != nil {
 			return err
 		}
-		soul, agents := b.Soul, b.Agents
-		if firstTime {
-			if strings.TrimSpace(soul) == "" {
-				soul = defaultSoulTemplate
-			}
-			if strings.TrimSpace(agents) == "" {
-				agents = defaultAgentsTemplate
-			}
-		}
-		if err := writeBotFile(b.ID, "SOUL.md", soul); err != nil {
+		// SOUL.md / AGENTS.md handling:
+		//   - operator supplied non-empty content   → overwrite (explicit save)
+		//   - operator left field blank             → scaffold the default
+		//     template atomically via O_CREATE|O_EXCL; no-op if a file
+		//     already exists.
+		// The prior implementation stat'd botDir to derive `firstTime` and
+		// then overwrote SOUL.md with the template when that flag was set
+		// AND the operator's field was blank — a TOCTOU window where an
+		// agent that created SOUL.md between our Stat and our write would
+		// have its content silently overwritten. EXCL closes that window.
+		// A blank field on an existing bot is intentionally NOT a delete —
+		// silent deletion of operator-trusted prompt content from an empty
+		// textbox was a footgun.
+		if err := writeOrScaffoldBotFile(b.ID, "SOUL.md", b.Soul, defaultSoulTemplate); err != nil {
 			return err
 		}
-		if err := writeBotFile(b.ID, "AGENTS.md", agents); err != nil {
+		if err := writeOrScaffoldBotFile(b.ID, "AGENTS.md", b.Agents, defaultAgentsTemplate); err != nil {
 			return err
 		}
 		if err := secrets.Set(b.ID, secrets.OctoToken, b.OctoToken); err != nil {
@@ -356,16 +359,27 @@ func readBotFile(id, name string) string {
 	return string(raw)
 }
 
-func writeBotFile(id, name, content string) error {
-	path := filepath.Join(botDir(id), name)
-	if strings.TrimSpace(content) == "" {
-		_ = os.Remove(path) // empty → omit the file
-		return nil
+// writeOrScaffoldBotFile is the safe write path for SOUL.md / AGENTS.md:
+//   - non-empty content → unconditional 0o600 overwrite (explicit operator save)
+//   - empty content     → scaffold tmpl atomically via O_CREATE|O_EXCL|O_WRONLY,
+//     a no-op when the file already exists. Closes a Stat-then-write TOCTOU
+//     where an agent that planted SOUL.md between our Stat and our write
+//     would have been silently overwritten.
+func writeOrScaffoldBotFile(id, name, content, tmpl string) error {
+	if strings.TrimSpace(content) != "" {
+		return os.WriteFile(filepath.Join(botDir(id), name), []byte(content), 0o600)
 	}
-	// 0o600 to match config.json: everything under ~/.xclaw is single-operator
-	// content (SOUL/AGENTS are the bot's identity/behavior prompts), so keep the
-	// permission policy uniform rather than leaving these world-readable.
-	return os.WriteFile(path, []byte(content), 0o600)
+	path := filepath.Join(botDir(id), name)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		if os.IsExist(err) {
+			return nil // already there — operator's prior save wins
+		}
+		return err
+	}
+	defer f.Close()
+	_, err = f.WriteString(tmpl)
+	return err
 }
 
 func validURL(s string) error {
@@ -413,6 +427,23 @@ func firstDuplicate(bots []BotConfig) string {
 			return b.ID
 		}
 		seen[b.ID] = true
+	}
+	return ""
+}
+
+// firstDuplicateOctoBotID returns the first OCTO_BOT_ID that appears in more
+// than one bot's env. See Save for why this is rejected.
+func firstDuplicateOctoBotID(bots []BotConfig) string {
+	seen := map[string]bool{}
+	for _, b := range bots {
+		rid := strings.TrimSpace(b.Env["OCTO_BOT_ID"])
+		if rid == "" {
+			continue
+		}
+		if seen[rid] {
+			return rid
+		}
+		seen[rid] = true
 	}
 	return ""
 }

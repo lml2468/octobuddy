@@ -37,7 +37,10 @@ mkdir -p "$out"
 
 echo "▸ cross-compiling xclawd (zero-cgo)…"
 build_xclawd() { # $1=GOOS $2=GOARCH $3=out
-  ( cd "$core" && CGO_ENABLED=0 GOOS="$1" GOARCH="$2" go build -ldflags "-s -w" -o "$3" ./cmd/xclawd )
+  # -trimpath strips the operator's $HOME / module-cache from binary paths,
+  # -buildvcs=false omits the local git-dirty flag — both required for any
+  # third party trying to reproduce a release artifact byte-for-byte.
+  ( cd "$core" && CGO_ENABLED=0 GOOS="$1" GOARCH="$2" go build -trimpath -buildvcs=false -ldflags "-s -w" -o "$3" ./cmd/xclawd )
 }
 # Daemon binaries for all four platforms (CI picks these up for win/linux).
 build_xclawd darwin  arm64 "$out/xclawd-darwin-arm64"

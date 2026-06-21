@@ -68,8 +68,10 @@
     s.setProperty("--grad-b", b);
   });
 
-  // ⌘K / Ctrl-K toggles the command palette (capture phase + both targets so
-  // iframe focus quirks don't swallow it).
+  // ⌘K / Ctrl-K toggles the command palette. Listen on document (NOT both
+  // window AND document — registering on both fired onKey twice per
+  // keydown, so the toggle was cancelling itself and the palette never
+  // appeared) in the capture phase so iframe focus quirks don't swallow it.
   function onKey(e: KeyboardEvent) {
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
       e.preventDefault();
@@ -78,7 +80,7 @@
       showPalette = false;
     }
   }
-  try { window.addEventListener("keydown", onKey, true); document.addEventListener("keydown", onKey, true); } catch {}
+  try { document.addEventListener("keydown", onKey, true); } catch {}
 
   // Tray opens the unified Settings modal at a specific tab, or the standalone
   // Token Usage modal. Mutual exclusion: only one top-level modal at a time.

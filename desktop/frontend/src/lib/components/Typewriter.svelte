@@ -15,12 +15,32 @@
       shown = Math.min(total, shown + Math.max(1, Math.floor(backlog / 8)));
     }
     if (shown > total) shown = total; // text replaced (shorter) → snap
-    raf = requestAnimationFrame(tick);
+    if (shown < text.length) {
+      // Only keep the rAF loop alive while we have characters left to reveal.
+      // Without this guard, every finalized historical bubble keeps polling
+      // requestAnimationFrame for the lifetime of the transcript — N bubbles
+      // × 60 fps × zero work each. The text-change $effect below re-arms it
+      // whenever new content arrives.
+      raf = requestAnimationFrame(tick);
+    } else {
+      raf = 0;
+    }
   }
 
   $effect(() => {
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
+    // Reading text.length here registers the effect's dependency on the
+    // prop so a fresh stream-delta restarts the loop. The cancel guard
+    // prevents double-scheduling while a previous tick is still pending.
+    void text.length;
+    if (shown < text.length && raf === 0) {
+      raf = requestAnimationFrame(tick);
+    }
+    return () => {
+      if (raf !== 0) {
+        cancelAnimationFrame(raf);
+        raf = 0;
+      }
+    };
   });
 </script>
 

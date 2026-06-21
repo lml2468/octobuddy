@@ -3,6 +3,7 @@
   // conversation list into one translucent panel: brand, ⌘K command-bar,
   // Spaces (bots), conversation tabs, and a settings footer. The window's
   // per-Space gradient blooms behind it.
+  import { onMount } from "svelte";
   import { store } from "../store.svelte";
   import Avatar from "./Avatar.svelte";
   import XMark from "./XMark.svelte";
@@ -30,8 +31,11 @@
     if (cur === "dark" || cur === "light") return cur;
     return matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
   }
+  // Read once at mount. Was `$effect(...)` but that registered zero
+  // reactive deps (currentTheme reads document.documentElement, not state)
+  // so it ran exactly once anyway — onMount is the honest version.
   let theme = $state<"dark" | "light">("dark");
-  $effect(() => { theme = currentTheme(); });
+  onMount(() => { theme = currentTheme(); });
   function toggleTheme() {
     const next = theme === "dark" ? "light" : "dark";
     document.documentElement.setAttribute("data-theme", next);
@@ -175,5 +179,9 @@
   .fbtn:focus-visible { outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent); }
   @media (prefers-reduced-motion: reduce) {
     .cmd-bar:hover { transform: none; }
+    /* Snap the collapse instead of animating 320ms width/flex transitions —
+       theme.css's global reduce-motion neutralizer doesn't override
+       per-component transition properties, so this needs to be local. */
+    .sidebar { transition: none !important; }
   }
 </style>

@@ -35,8 +35,10 @@ specifics. That is the multi-agent foundation: adding a driver is additive.
 | `ClaudeDriver` | `claude -p --output-format stream-json` | line-delimited JSON over stdout (one-shot) |
 
 `ClaudeDriver` satisfies `agent.Driver`. Headless invariants are baked in
-(`--allowedTools * --permission-mode bypassPermissions`): there is no terminal
-to answer approval prompts, so any other mode would hang the turn.
+(`--permission-mode bypassPermissions`): there is no terminal to answer
+approval prompts, so any other mode would hang the turn. Bypass mode grants
+every tool, so no `--allowedTools` flag is passed (claude 2.1+ rejects `*`
+in allow rules).
 
 ## Layout
 
@@ -46,8 +48,7 @@ cmd/xclawd/   daemon entry point — wires store+router+gateway+driver; ships a
 agent/        Driver abstraction (the heart). Everything above depends only on this.
   agent.go    AgentEvent, Request, Capabilities, Driver interface
   claude.go   ClaudeDriver: spawn claude CLI, parse stream-json → AgentEvent
-  replay.go   expose parser for offline replay
-store/        SQLite persistence: sessions + messages + resume map, 7-day TTL
+store/        SQLite persistence: sessions + messages + resume map (no TTL — sessions are persistent; the daemon only reaps idle in-memory router locks)
 router/       sessionKey derivation + per-session serial lock + 3-bucket rate limit
 gateway/      handleMessage orchestration: route → store → driver → sink → persist
 control/      control bus: NDJSON-over-UDS server + gateway EventSink (GUI clients)

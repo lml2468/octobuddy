@@ -121,10 +121,17 @@ func (d *ClaudeDriver) Query(ctx context.Context, req Request) (<-chan AgentEven
 	// parser will pass non-JSON lines through as system/error events).
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
+		_ = stdout.Close()
 		return nil, fmt.Errorf("stderr pipe: %w", err)
 	}
 
 	if err := cmd.Start(); err != nil {
+		// On Start failure cmd.Wait never runs, so Go's normal pipe-close
+		// path never triggers and these descriptors leak until the *Cmd is
+		// GC'd. Under fd exhaustion or repeated start failures this
+		// accumulates quickly — close them explicitly.
+		_ = stdout.Close()
+		_ = stderr.Close()
 		return nil, fmt.Errorf("start %s: %w", d.Bin, err)
 	}
 

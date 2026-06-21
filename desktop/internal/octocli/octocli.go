@@ -265,7 +265,7 @@ func Upgrade(ctx context.Context) (string, error) {
 	// (verified checksum but non-functional binary) has a known-good rollback
 	// point. Best-effort: a missing current binary (first install) just skips it.
 	if cur, rerr := os.ReadFile(BinPath()); rerr == nil {
-		_ = os.WriteFile(BinPath()+".prev", cur, 0o755)
+		_ = os.WriteFile(BinPath()+".prev", cur, 0o700)
 	}
 	if err := installBinary("", bin); err != nil {
 		return "", err
@@ -287,10 +287,13 @@ func installBinary(srcPath string, data []byte) error {
 		data = b
 	}
 	tmp := BinPath() + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o755); err != nil {
+	// 0o700 (not 0o755) on the .tmp: the file is world-executable between the
+	// write and the rename, which is a brief but real window on a multi-user
+	// box. We re-chmod to 0o755 after Rename atomicizes the swap.
+	if err := os.WriteFile(tmp, data, 0o700); err != nil {
 		return err
 	}
-	if err := os.Chmod(tmp, 0o755); err != nil {
+	if err := os.Chmod(tmp, 0o700); err != nil {
 		_ = os.Remove(tmp)
 		return err
 	}

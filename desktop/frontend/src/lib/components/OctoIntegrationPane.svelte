@@ -21,19 +21,31 @@
 
   // OCTO_BOT_ID lives in env, mirrored here for a typed edit + reactive write-back.
   let robotId = $state("");
+  // Tracks the last value we mirrored from bot.env (vs. just typed by the
+  // operator). Without this guard, the seed-effect → commitRobotId chain
+  // would dirty the form just from clicking a different bot.
+  let lastSeededRobotId = "";
   $effect(() => {
     bot.id; // re-seed on bot switch
     robotId = bot.env?.OCTO_BOT_ID ?? "";
+    lastSeededRobotId = robotId;
     editBotId = false;
     refreshCliStatus();
   });
-  function commitRobotId() {
+  // Mirror robotId → bot.env reactively. Was wired via `oninput=commitRobotId`
+  // on the bound input, which reads `robotId` BEFORE Svelte's bind:value has
+  // flushed the new keystroke (the bind and the inline handler both react to
+  // the same input event), so every commit wrote the PRIOR character.
+  // Reading robotId inside $effect runs after the bind has settled.
+  $effect(() => {
+    const v = robotId.trim();
+    if (v === lastSeededRobotId.trim()) return; // not a user edit
     const env = { ...(bot.env ?? {}) };
-    if (robotId.trim()) env.OCTO_BOT_ID = robotId.trim();
+    if (v) env.OCTO_BOT_ID = v;
     else delete env.OCTO_BOT_ID;
     bot.env = env;
     ondirty();
-  }
+  });
 
   // octo-cli profile status (preview-mode mock or live).
   let cliRegistered = $state(false);
@@ -101,7 +113,7 @@
     <label>
       OCTO_BOT_ID（robot id）
       <div class="tokenrow">
-        <input bind:value={robotId} oninput={commitRobotId} readonly={!editBotId} placeholder="例如 27abc1234567_bot" />
+        <input bind:value={robotId} readonly={!editBotId} placeholder="例如 27abc1234567_bot" />
         {#if !editBotId}
           <button class="iconbtn" onclick={() => (editBotId = true)} type="button">修改</button>
         {:else}

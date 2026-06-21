@@ -109,7 +109,7 @@ func writeIn(root, name, content string) error {
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(p, []byte(content), 0o644)
+	return os.WriteFile(p, []byte(content), 0o600)
 }
 
 func createIn(root, name string) error {

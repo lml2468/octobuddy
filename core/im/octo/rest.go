@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -79,7 +80,52 @@ func (c *RESTClient) Register(ctx context.Context, forceRefresh bool) (RegisterR
 	if out.RobotID == "" || out.IMToken == "" || out.WSURL == "" {
 		return RegisterResponse{}, fmt.Errorf("register: incomplete response %+v", out)
 	}
+	// SECURITY: validate the server-supplied ws_url BEFORE the connector dials
+	// it. Without this, a compromised or MitM'd octo-server could return
+	// ws://attacker/ — accepted as plaintext + arbitrary host by the WS
+	// dialer, leaking the bot's IMToken in the CONNECT frame to a host the
+	// operator never trusted. Policy:
+	//   - apiURL is https  → WSURL must be wss (no plaintext downgrade)
+	//   - apiURL is http   → only loopback apiURL allowed by config.IsAllowedURL,
+	//                        so ws://loopback is fine (dev mode)
+	//   - host must match apiURL's hostname exactly (no sibling-subdomain
+	//     hop). Stricter than a same-eTLD+1 check; legitimate deployments
+	//     terminate WS on the same hostname as REST.
+	if err := validateWSURL(out.WSURL, c.apiURL); err != nil {
+		return RegisterResponse{}, fmt.Errorf("register: %w", err)
+	}
 	return out, nil
+}
+
+// validateWSURL enforces scheme + host equality between the server-returned
+// WSURL and the operator-configured apiURL. See Register's SECURITY comment.
+func validateWSURL(rawWSURL, rawAPIURL string) error {
+	wu, err := url.Parse(rawWSURL)
+	if err != nil {
+		return fmt.Errorf("ws_url parse: %w", err)
+	}
+	au, err := url.Parse(rawAPIURL)
+	if err != nil {
+		return fmt.Errorf("api_url parse: %w", err)
+	}
+	switch wu.Scheme {
+	case "wss":
+		// always acceptable
+	case "ws":
+		// only when the configured api_url is plaintext (dev / loopback)
+		if au.Scheme != "http" {
+			return fmt.Errorf("ws_url uses plaintext ws:// but api_url is %s://", au.Scheme)
+		}
+	default:
+		return fmt.Errorf("ws_url has unsupported scheme %q", wu.Scheme)
+	}
+	if wu.Hostname() == "" {
+		return fmt.Errorf("ws_url has no host")
+	}
+	if wu.Hostname() != au.Hostname() {
+		return fmt.Errorf("ws_url host %q does not match api_url host %q (cross-host redirect of credentialed handshake refused)", wu.Hostname(), au.Hostname())
+	}
+	return nil
 }
 
 // SendMessageResult mirrors SendMessageResult (types.ts). message_id is decoded

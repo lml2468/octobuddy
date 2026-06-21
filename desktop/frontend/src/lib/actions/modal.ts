@@ -51,12 +51,15 @@ export function modal(node: HTMLElement, opts: ModalOpts) {
   node.addEventListener("keydown", onKey);
 
   // Focus the first natural control, else the dialog itself.
+  // queueMicrotask (was: setTimeout 40ms) so focus lands within the same
+  // turn the modal mounts — a fast Tab keypress during the 40ms window
+  // previously landed on a button behind the modal.
   const focusable = node.querySelector<HTMLElement>(FOCUSABLE);
   if (focusable) {
-    setTimeout(() => focusable.focus(), 40);
+    queueMicrotask(() => focusable.focus());
   } else {
     node.tabIndex = -1;
-    setTimeout(() => node.focus(), 40);
+    queueMicrotask(() => node.focus());
   }
 
   return {

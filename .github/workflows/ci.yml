@@ -154,3 +154,15 @@ jobs:
       - name: go test
         working-directory: desktop
         run: go test ${{ matrix.race }} ./...
+
+      # govulncheck on the desktop module (Linux only — the scan is OS-independent
+      # and the pinned binary is the same across runners). The core module has its
+      # own gate above; this closes the desktop-side gap so a CVE in a desktop-only
+      # dependency (octocli's archive walkers, go-keyring, the wails runtime)
+      # surfaces on PR.
+      - name: govulncheck
+        if: runner.os == 'Linux'
+        working-directory: desktop
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+          "$(go env GOPATH)/bin/govulncheck" ./...

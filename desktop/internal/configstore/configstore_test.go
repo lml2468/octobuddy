@@ -217,25 +217,38 @@ func TestSaveFirstCreateKeepsOperatorContent(t *testing.T) {
 	}
 }
 
-// A subsequent Save by an existing bot that deliberately clears a field must
-// still remove the file (writeBotFile's "empty → remove" semantics preserved).
-// Without this guard the template would resurrect on every blank save.
-func TestSaveClearsFieldsOnExistingBot(t *testing.T) {
+// A Save that leaves SOUL/AGENTS blank must not silently destroy the file
+// that was scaffolded on first-save (or that an agent legitimately created).
+// Prior behavior treated empty content as "delete the file"; that was a
+// footgun + TOCTOU vector (Stat-then-write would overwrite an agent-planted
+// SOUL.md whenever the operator's field happened to be blank). New
+// semantics: blank field on an existing bot is a NO-OP; the file is
+// preserved. Operators delete files from disk if they really want to.
+func TestSaveBlankFieldsAreNoOpOnExistingBot(t *testing.T) {
 	setup(t)
 	// First Save creates the bot dir + scaffolds templates.
 	if err := Save([]BotConfig{{ID: "ex", APIURL: "https://x.example"}}, nil); err != nil {
 		t.Fatal(err)
 	}
-	// Operator now intentionally clears both fields. botDir exists → not first
-	// time → empty content reaches writeBotFile → files removed.
+	soulPath := filepath.Join(botDir("ex"), "SOUL.md")
+	agentsPath := filepath.Join(botDir("ex"), "AGENTS.md")
+	before, err := os.ReadFile(soulPath)
+	if err != nil {
+		t.Fatalf("template should have scaffolded: %v", err)
+	}
+	// Second Save with blank fields must leave the scaffolded content alone.
 	if err := Save([]BotConfig{{ID: "ex", APIURL: "https://x.example"}}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(botDir("ex"), "SOUL.md")); !os.IsNotExist(err) {
-		t.Errorf("SOUL.md should be removed on subsequent blank save, err=%v", err)
+	after, err := os.ReadFile(soulPath)
+	if err != nil {
+		t.Fatalf("SOUL.md should NOT be removed on blank save: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(botDir("ex"), "AGENTS.md")); !os.IsNotExist(err) {
-		t.Errorf("AGENTS.md should be removed on subsequent blank save, err=%v", err)
+	if string(before) != string(after) {
+		t.Errorf("SOUL.md content changed on blank save")
+	}
+	if _, err := os.Stat(agentsPath); err != nil {
+		t.Errorf("AGENTS.md should NOT be removed on blank save: %v", err)
 	}
 }
 

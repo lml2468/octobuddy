@@ -20,7 +20,7 @@ func TestRegisterRequestAndResponse(t *testing.T) {
 		gotPath = r.URL.Path + "?" + r.URL.RawQuery
 		_, _ = io.ReadAll(r.Body)
 		_ = json.NewEncoder(w).Encode(RegisterResponse{
-			RobotID: "robot1", IMToken: "imtok", WSURL: "wss://x/ws",
+			RobotID: "robot1", IMToken: "imtok", WSURL: "ws://" + r.Host + "/ws",
 			APIURL: "https://x", OwnerUID: "owner", OwnerChannelID: "oc",
 		})
 	}))
@@ -37,7 +37,7 @@ func TestRegisterRequestAndResponse(t *testing.T) {
 	if gotPath != "/v1/bot/register?force_refresh=true" {
 		t.Fatalf("path = %q", gotPath)
 	}
-	if reg.RobotID != "robot1" || reg.IMToken != "imtok" || reg.WSURL != "wss://x/ws" {
+	if reg.RobotID != "robot1" || reg.IMToken != "imtok" {
 		t.Fatalf("response mapped wrong: %+v", reg)
 	}
 }
@@ -162,7 +162,7 @@ func TestRESTClientTokenRotation(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
 		_ = json.NewEncoder(w).Encode(RegisterResponse{
-			RobotID: "r", IMToken: "imtok", WSURL: "wss://x/ws",
+			RobotID: "r", IMToken: "imtok", WSURL: "ws://" + r.Host + "/ws",
 			APIURL: "https://x", OwnerUID: "owner", OwnerChannelID: "oc",
 		})
 	}))
@@ -214,6 +214,32 @@ func TestSendMessageResultFlexMessageID(t *testing.T) {
 			}
 			if string(got.MessageID) != tc.want {
 				t.Fatalf("MessageID = %q, want %q", got.MessageID, tc.want)
+			}
+		})
+	}
+}
+
+func TestValidateWSURL(t *testing.T) {
+	cases := []struct {
+		name, ws, api string
+		ok            bool
+	}{
+		{"wss to same host", "wss://api.example/ws", "https://api.example", true},
+		{"ws to loopback dev", "ws://127.0.0.1:9090/ws", "http://127.0.0.1:8080", true},
+		{"reject plaintext over https api", "ws://api.example/ws", "https://api.example", false},
+		{"reject cross-host (sibling subdomain hop)", "wss://logger.example/ws", "https://api.example", false},
+		{"reject bogus scheme", "http://api.example/ws", "https://api.example", false},
+		{"reject empty host", "wss:///ws", "https://api.example", false},
+		{"reject unparseable", "::not-a-url", "https://api.example", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateWSURL(tc.ws, tc.api)
+			if tc.ok && err != nil {
+				t.Fatalf("want ok, got err: %v", err)
+			}
+			if !tc.ok && err == nil {
+				t.Fatalf("want err, got ok")
 			}
 		})
 	}

@@ -18,7 +18,10 @@
 </script>
 
 {#if current}
-  <div class="strip" role="status" aria-live="polite">
+  <!-- No role="status" / aria-live: a tool-heavy turn fires N events,
+       and SR users do not need every tool name read aloud. The pulse +
+       aria-label below is the silent visual cue. -->
+  <div class="strip">
     <div class="inner">
       <span class="pulse" class:tool={current.kind === "tool"} aria-label={current.kind === "tool" ? "正在调用工具" : "思考中"}></span>
       {#if current.kind === "tool"}

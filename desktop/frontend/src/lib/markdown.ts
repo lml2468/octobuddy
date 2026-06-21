@@ -9,8 +9,19 @@ import DOMPurify from "dompurify";
 DOMPurify.addHook("afterSanitizeAttributes", (node) => {
   if (node.tagName === "A") {
     const el = node as Element;
-    const href = el.getAttribute("href") ?? "";
-    if (href && !/^(https?:|mailto:|#|\/)/i.test(href.trim())) {
+    const href = (el.getAttribute("href") ?? "").trim();
+    // Allow only safe schemes / fragments / SAME-PAGE absolute paths.
+    // A bare leading slash that starts with `//` is the protocol-relative
+    // form (`//evil.com`) which in a remote-rendered context becomes
+    // attacker-origin XHR/navigation — reject. The webview today resolves
+    // it harmlessly to `wails://…` but the rule is defense-in-depth for
+    // any future rendering surface.
+    const safe =
+      /^https?:/i.test(href) ||
+      /^mailto:/i.test(href) ||
+      href.startsWith("#") ||
+      (href.startsWith("/") && !href.startsWith("//"));
+    if (href && !safe) {
       el.removeAttribute("href");
     }
     if (el.getAttribute("target")) {

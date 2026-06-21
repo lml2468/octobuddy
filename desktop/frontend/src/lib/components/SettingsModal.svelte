@@ -215,11 +215,11 @@
         {:else}
           <div class="seg" role="tablist" tabindex="-1" aria-label="设置分区" onkeydown={onTabKey}>
             {#each TABS as t (t.key)}
-              <button role="tab" aria-selected={t.key === activeTab} tabindex={t.key === activeTab ? 0 : -1} class:on={t.key === activeTab} onclick={() => (activeTab = t.key)}>{t.label}</button>
+              <button role="tab" id={"tab-" + t.key} aria-controls="tabpanel-{t.key}" aria-selected={t.key === activeTab} tabindex={t.key === activeTab ? 0 : -1} class:on={t.key === activeTab} onclick={() => (activeTab = t.key)}>{t.label}</button>
             {/each}
           </div>
 
-          <div class="content">
+          <div class="content" role="tabpanel" id={"tabpanel-" + activeTab} aria-labelledby={"tab-" + activeTab}>
             {#if activeTab === "basic"}
               <BasicInfoPane bind:bot={bots[sel]} ondirty={markDirty} ondelete={deleteBot} />
             {:else if activeTab === "octo"}

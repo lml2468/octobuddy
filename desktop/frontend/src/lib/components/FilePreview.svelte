@@ -96,15 +96,27 @@
   let pdfUrl = $state("");
   $effect(() => {
     if (!(isPdf && file && !file.truncated)) { pdfUrl = ""; return; }
-    const bytes = Uint8Array.from(atob(file.content), (c) => c.charCodeAt(0));
-    const url = URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
-    pdfUrl = url;
-    return () => URL.revokeObjectURL(url);
+    // file.content from the Go side is base64; a malformed encoding (truncated
+    // bytes, non-ASCII chars from a backend bug) makes atob throw, and an
+    // unhandled $effect throw tears down the component. Catch + surface as
+    // the preview's own error toast instead.
+    try {
+      const bytes = Uint8Array.from(atob(file.content), (c) => c.charCodeAt(0));
+      const url = URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
+      pdfUrl = url;
+      return () => URL.revokeObjectURL(url);
+    } catch (e) {
+      error = "PDF 解码失败: " + errMsg(e);
+      pdfUrl = "";
+      return;
+    }
   });
   let htmlUrl = $state("");
   $effect(() => {
     if (!(isHtml && file && mdMode === "rendered")) { htmlUrl = ""; return; }
-    const url = URL.createObjectURL(new Blob([file.content], { type: "text/html" }));
+    // text/html;charset=utf-8 so agent-written HTML containing non-ASCII
+    // (Chinese filenames, em-dashes, …) renders correctly inside the iframe.
+    const url = URL.createObjectURL(new Blob([file.content], { type: "text/html;charset=utf-8" }));
     htmlUrl = url;
     return () => URL.revokeObjectURL(url);
   });

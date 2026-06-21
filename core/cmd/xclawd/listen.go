@@ -52,6 +52,11 @@ func serveControlBus(srv *control.Server, path string) (cleanup func()) {
 	}()
 	fmt.Printf("control bus listening on %s\n", path)
 	return func() {
+		// Flip the server's `closed` flag first so the next Accept() returns
+		// nil instead of bubbling "use of closed network connection" up to
+		// the operator's stderr on every graceful shutdown (cosmetic but it
+		// muddied real failures).
+		srv.Close()
 		_ = ln.Close()
 		_ = os.Remove(path)
 	}
