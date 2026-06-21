@@ -427,9 +427,13 @@ func (b *cancelOnCloseBody) Close() error {
 }
 
 // writeCapped streams src into path, deleting the partial file and returning an
-// error if more than max bytes arrive.
+// error if more than max bytes arrive. The file is created 0o600 with O_EXCL —
+// attacker-supplied IM media goes into a uuid-named path, so EXCL guards
+// against a same-name pre-create from a co-located attacker process, and 0o600
+// keeps the contents off other users' eyes on shared hosts where umask is
+// loose (round 13 M4).
 func writeCapped(path string, src io.Reader, max int64) error {
-	f, err := os.Create(path)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|os.O_EXCL, 0o600)
 	if err != nil {
 		return fmt.Errorf("create file: %w", err)
 	}

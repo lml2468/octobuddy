@@ -131,7 +131,21 @@ class Store {
       this.seedPreview();
       return;
     }
-    Events.On("xclaw:event", (e: any) => this.fold(e.data as Envelope));
+    // Wails Events.On returns an unsubscribe handle — capture it so HMR
+    // dispose() can actually unsubscribe (round 13 frontend #1: round-12's
+    // dispose only cleared the setInterval, leaving xclaw:event listeners
+    // to stack on every save and fold() to fire N times per envelope).
+    // Wrap fold() in try/catch so a single malformed envelope can't kill
+    // the bridge listener — bad data appears in lastError instead.
+    this.unsubFold = Events.On("xclaw:event", (e: any) => {
+      try {
+        this.fold(e.data as Envelope);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error("[store] fold failed", err);
+        this.lastError = "[fold] " + msg;
+      }
+    });
     // Prime.
     XClawService.Health();
     XClawService.BotsList();
@@ -147,14 +161,20 @@ class Store {
   // dispose runs from Vite's import.meta.hot.dispose so a dev save (HMR)
   // doesn't stack a fresh setInterval and a fresh xclaw:event subscription
   // on top of the prior module's still-armed ones. Production never calls
-  // this — the singleton survives for the app's lifetime (round 12 F3).
+  // this — the singleton survives for the app's lifetime (round 12 F3,
+  // unsub wired in round 13).
   dispose() {
     if (this.sweepTimer !== undefined) {
       clearInterval(this.sweepTimer);
       this.sweepTimer = undefined;
     }
+    if (this.unsubFold) {
+      try { this.unsubFold(); } catch {}
+      this.unsubFold = undefined;
+    }
   }
   private sweepTimer: ReturnType<typeof setInterval> | undefined;
+  private unsubFold: (() => void) | undefined;
 
   // seedPreview populates a mock roster + transcript for visual iteration and
   // screenshots without spawning the daemon (launch with XCLAW_PREVIEW=1).

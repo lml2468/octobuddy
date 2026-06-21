@@ -208,8 +208,12 @@ func verifyBundledBytes(src string, isProduction bool) ([]byte, error) {
 	}
 	exe, err := os.Executable()
 	if err != nil {
-		// No bundle path — only acceptable in dev. In production this is
-		// unreachable (we already located src via Executable above).
+		// We located src via Executable a moment ago; if it now errors the
+		// process is in an unusual state. Fail closed in production rather
+		// than ship an unverified buffer (round 13 F3).
+		if isProduction {
+			return nil, fmt.Errorf("cannot locate bundle for sidecar lookup: %w", err)
+		}
 		return buf, nil
 	}
 	contents := filepath.Dir(filepath.Dir(exe))
@@ -225,7 +229,13 @@ func verifyBundledBytes(src string, isProduction bool) ([]byte, error) {
 		}
 		return nil, fmt.Errorf("read sha256 sidecar: %w", err)
 	}
-	want := strings.ToLower(strings.TrimSpace(strings.Fields(string(raw))[0]))
+	// Round 13 F4: an empty / whitespace-only sidecar previously panicked on
+	// `strings.Fields(...)[0]`. Treat empty as malformed.
+	parts := strings.Fields(string(raw))
+	if len(parts) == 0 {
+		return nil, fmt.Errorf("sha256 sidecar empty or whitespace-only")
+	}
+	want := strings.ToLower(parts[0])
 	if len(want) != 64 {
 		return nil, fmt.Errorf("sha256 sidecar malformed: expected 64 hex chars, got %d", len(want))
 	}

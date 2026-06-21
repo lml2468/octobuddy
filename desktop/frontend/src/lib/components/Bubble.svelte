@@ -35,27 +35,27 @@
     <span class="av">
       {#if isUser}<Avatar name="You" size={36} />{:else}<Avatar octopus size={36} />{/if}
     </span>
-    <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
     <div
       class="bubble"
       class:user={isUser}
       oncontextmenu={(e) => { e.preventDefault(); copy(); }}
-      onkeydown={(e) => {
-        // ⌘C / Ctrl-C when the bubble is keyboard-focused copies the message
-        // text (round 12 F6 — right-click is the only mouse affordance and
-        // would otherwise leave keyboard-only users with no way to copy a
-        // reply). Don't intercept when the user has a real text selection
-        // inside the bubble — let the browser's native copy win.
-        if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "c"
-            && !window.getSelection()?.toString()) {
-          e.preventDefault();
-          copy();
-        }
-      }}
       role="article"
-      tabindex="0"
     >
       {#if copied}<span class="copied" aria-live="polite">已复制</span>{/if}
+      <!-- Visible focusable copy button — keyboard users tab here, sighted
+           users see it on hover. Right-click still works for muscle memory.
+           Round 13 frontend #4: replaces the prior `tabindex` on the bubble,
+           which screen-readers announced as "article" with no actionable
+           cue. Hidden until hover or focus to keep the chat surface clean. -->
+      <button
+        class="copy-btn"
+        type="button"
+        aria-label="复制消息"
+        title="复制消息"
+        onclick={copy}
+      >
+        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
+      </button>
       {#if isUser}
         <span class="plain">{message.text}</span>
       {:else if message.streaming}
@@ -93,6 +93,24 @@
     padding: 2px 8px; border-radius: 999px; box-shadow: var(--elev-1);
     animation: copied-in 0.14s ease both;
   }
+  .copy-btn {
+    position: absolute; top: 5px; right: 5px; z-index: 1;
+    width: 22px; height: 22px; padding: 0; border: none;
+    display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 5px; cursor: pointer;
+    color: var(--ink-soft);
+    background: color-mix(in srgb, var(--ink) 8%, transparent);
+    opacity: 0; transition: opacity .14s ease, background .14s ease;
+  }
+  .bubble:hover .copy-btn,
+  .copy-btn:focus-visible { opacity: 1; }
+  .copy-btn:hover { background: color-mix(in srgb, var(--ink) 16%, transparent); color: var(--ink); }
+  .copy-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .bubble.user .copy-btn {
+    color: rgba(255, 255, 255, .85);
+    background: rgba(255, 255, 255, .14);
+  }
+  .bubble.user .copy-btn:hover { background: rgba(255, 255, 255, .25); color: #fff; }
   @keyframes copied-in { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
   .bubble.user {
     background: linear-gradient(135deg, var(--grad-a), var(--grad-b)); color: #fff;

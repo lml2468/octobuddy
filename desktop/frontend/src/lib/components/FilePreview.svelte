@@ -33,6 +33,12 @@
   let mdMode = $state<"rendered" | "raw">("rendered");
   let imgFit = $state(true);
   let copied = $state(false);
+  // Track the copy-confirmation timer so it can be cleared on unmount.
+  // Without this, switching files within 1200 ms of clicking 复制 leaves
+  // the setTimeout firing against a detached component's reactive state —
+  // same pattern Bubble.svelte adopted in round 12 (round 13 frontend #6).
+  let copyTimer: ReturnType<typeof setTimeout> | undefined;
+  $effect(() => () => { if (copyTimer !== undefined) clearTimeout(copyTimer); });
 
   // Refetch whenever the target file (or session) changes.
   $effect(() => {
@@ -87,7 +93,8 @@
     if (!file) return;
     navigator.clipboard?.writeText(file.content);
     copied = true;
-    setTimeout(() => (copied = false), 1200);
+    if (copyTimer !== undefined) clearTimeout(copyTimer);
+    copyTimer = setTimeout(() => (copied = false), 1200);
   }
 
   // PDFs and rendered HTML render in an <iframe> via a Blob object URL (revoked on

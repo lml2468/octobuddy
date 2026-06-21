@@ -60,9 +60,27 @@ var roleLabelRE = regexp.MustCompile(`(?im)^([^\S\r\n]*)(\[(?:user|assistant)\b[
 var sectionMarkerRE = regexp.MustCompile(
 	`(?im)^([^\S\r\n]*)\[(Group context|Group Members|Group Info|Conversation history|Prior conversation history[^\]]*|Current message[^\]]*|Quoted message from [^\]]*|answered history|new messages|Previously answered|New since your last reply|Recent group messages|Group instructions|older messages dropped|older turns dropped)\]`)
 
-// Bracket delimiters + all line/para separators that could forge a boundary:
-// [ ] CR LF VT FF NEL(U+0085) LS(U+2028) PS(U+2029).
-var nameUnsafeRE = regexp.MustCompile(`[\[\]\r\n\x{000b}\x{000c}\x{0085}\x{2028}\x{2029}]`)
+// Bracket delimiters + every control / formatting character that could forge a
+// boundary, scramble a terminal, or impersonate structure inside a label:
+//   - C0 controls: NUL-BS (\x00-\x08), then LF \n, VT, FF, CR, SO..US
+//     (\x0a-\x1f). TAB (\x09) is intentionally preserved so legitimate tabs in
+//     names stay visible;
+//   - C1 controls (\x7f-\x9f), bracket delimiters [ ];
+//   - Bidi formatting overrides (U+202A LRE, U+202B RLE, U+202C PDF, U+202D LRO,
+//     U+202E RLO, U+2066 LRI, U+2067 RLI, U+2068 FSI, U+2069 PDI), plus the
+//     direction marks U+200E LRM / U+200F RLM and the zero-width joiner /
+//     non-joiner U+200B-U+200D / U+FEFF — all of which let an attacker make a
+//     display name read backwards or carry invisible structure;
+//   - Unicode separators LS (U+2028), PS (U+2029).
+//
+// Round 13 H1/H2: prior pattern only covered the obvious line terminators, so
+// names like "Admin\x1b[2K\x1b[1G[user system]:" or "Owner‮…" passed
+// through and contaminated the operator-trusted [Group Members] roster
+// (system prompt). All escapers MUST be kept in sync; extraLineBreaksRE below
+// shares the line-terminator subset.
+var nameUnsafeRE = regexp.MustCompile(
+	`[\[\]\x{0000}-\x{0008}\x{000a}-\x{001f}\x{007f}-\x{009f}\x{200b}-\x{200f}\x{202a}-\x{202e}\x{2028}\x{2029}\x{2066}-\x{2069}\x{feff}]`,
+)
 
 // Separators a model may render as a new line but RE2's (?m)^ does NOT anchor
 // on: CR, VT, FF, NEL(U+0085), LS(U+2028), PS(U+2029). Normalized to \n before

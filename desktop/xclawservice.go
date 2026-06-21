@@ -389,7 +389,12 @@ func loadOctoBinding(botID string) (robotID, token, apiURL string, err error) {
 // keychain (never config.json) by the existing path. Self-service replacement
 // for the manual BotFather /newbot flow.
 func (x *XClawService) OctoAddBot(apiURL, apiKey, name string) (octoapi.BotResult, error) {
-	return octoapi.AddBot(context.Background(), apiURL, apiKey, name)
+	// Bound the call so the wizard UI can't strand a request forever — the
+	// octoapi httpClient has a 30 s timeout but no caller-side ceiling
+	// (round 13 arch #7, matching the OctoCliRelogin / Logout pattern).
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return octoapi.AddBot(ctx, apiURL, apiKey, name)
 }
 
 // --- skills: per-bot (~/.xclaw/<id>/.claude/skills) ---

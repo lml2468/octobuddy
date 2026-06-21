@@ -224,7 +224,7 @@ func migrateTokenUsage(db *sql.DB) error {
 	}
 	tx, err := db.Begin()
 	if err != nil {
-		return err
+		return fmt.Errorf("migrate token_usage tx: %w", err)
 	}
 	defer tx.Rollback()
 	if _, err := tx.Exec(

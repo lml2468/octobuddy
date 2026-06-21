@@ -287,7 +287,19 @@ func runBot(ctx context.Context, cfg config.Resolved, reg *botRegistry, srv *con
 		WithMediaAuth(connector.MediaAuth())
 	connector.SetGateway(gw)
 
-	rtBot := &botRuntime{cfg: cfg, gateway: gw, store: st, secrets: sec}
+	// Eager-init the per-bot control-handler target so its embedded turnsWG is
+	// pinned for runBot's shutdown barrier (round 13 F1/F2): the lazy-init in
+	// resolve() left target nil for bots that no control-bus command ever
+	// reached (headless-mode operator, octo+cron-only bot), which then
+	// nil-derefs on `rtBot.target.turnsWG.Wait()` in the shutdown chain. The
+	// resolver still races on first call (two control commands could both see
+	// nil), which would silently split session.send goroutines across two
+	// targets — one outside the wait barrier. Setting it here ensures a single
+	// target shared by every codepath.
+	rtBot := &botRuntime{
+		cfg: cfg, gateway: gw, store: st, secrets: sec,
+		target: &botTarget{id: cfg.BotID, gateway: gw, store: st, secrets: sec},
+	}
 	if reg != nil {
 		reg.add(rtBot)
 	}
@@ -386,8 +398,9 @@ func makeMultiBotHandler(ctx context.Context, reg *botRegistry, started time.Tim
 			if bot == nil {
 				return nil, fmt.Errorf("unknown bot %q", botID)
 			}
-			// Lazy-allocate the shared target so tests that build a
-			// minimal botRuntime by hand don't have to remember to set it.
+			// runBot eager-initializes target (round 13 F1/F2); this
+			// fallback covers tests that build a minimal botRuntime by hand
+			// without going through runBot. Production never sees nil here.
 			if bot.target == nil {
 				bot.target = &botTarget{
 					id:      bot.cfg.BotID,

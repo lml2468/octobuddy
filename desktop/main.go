@@ -34,6 +34,16 @@ var (
 func main() {
 	preview = os.Getenv("XCLAW_PREVIEW") != ""
 
+	// All the desktop's per-bot data lives under ~/.xclaw/<id>/. If HOME is
+	// unset (rare but real on misconfigured launchd / systemd units) every
+	// `home, _ := os.UserHomeDir()` site below silently lands at "/.xclaw"
+	// or even ".xclaw" relative to CWD — config writes, octo-cli installs,
+	// secret reads all scatter to the wrong place. Fail loudly at startup
+	// rather than corrupting on first use (round 13 arch #3).
+	if _, err := os.UserHomeDir(); err != nil {
+		log.Fatalf("xclaw: cannot resolve user home directory: %v", err)
+	}
+
 	services := []application.Service{}
 	if !preview {
 		bridge = NewXClawService()
