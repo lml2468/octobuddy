@@ -51,9 +51,10 @@ one contract:
 - **Prompt-injection defense** — a non-overridable security prefix, a
   current-message anchor, and a sanitized rolling group-context window guard every
   group turn.
-- **Skills** — assign each bot a curated set of [Claude Code skills](docs/screenshot-skills.png)
-  from a shared catalog; they're linked into the session sandbox so the agent can
-  use them. Managed in-app.
+- **Per-bot skills + workflows** — each bot owns its own [Claude Code skills](https://docs.claude.com/en/docs/claude-code/skills)
+  (SKILL.md bundles) and `Workflow` scripts under `~/.xclaw/<id>/.claude/`; the
+  CLI auto-loads them as user-scope assets every spawn. Author and edit them
+  in-app — no shared marketplace, no install step.
 - **Batteries** — per-bot scheduled tasks (cron), operator group instructions,
   on-behalf-of persona clones, opt-in tool-progress notices, and a bundled
   `octo-cli` companion with one-click upgrade.
@@ -65,9 +66,9 @@ one contract:
 
 ## Screenshots
 
-| Chat | Manage Skills |
+| Chat | Per-bot Skills |
 |---|---|
-| <img src="docs/screenshot-chat.png" alt="Chat" width="420"> | <img src="docs/screenshot-skills.png" alt="Manage Skills" width="420"> |
+| <img src="docs/screenshot-chat.png" alt="Chat" width="420"> | <img src="docs/screenshot-skills.png" alt="Per-bot Skills" width="420"> |
 
 ## Architecture
 
@@ -81,9 +82,10 @@ one contract:
 ```
 
 Inbound message → **router** (mention gate · bot-loop guard · sessionKey · rate
-limit · per-session lock) → **store** (resume id) → **sandbox** (cwd + memory +
-skills) → **buildSystemPrompt** (security prefix + SOUL/AGENTS + roster) →
-**driver.Query** → stream `AgentEvent`s → assemble reply → persist + send.
+limit · per-session lock) → **store** (resume id) → **sandbox** (cwd + memory) →
+**buildSystemPrompt** (security prefix + SOUL/AGENTS + roster) →
+**driver.Query** → stream `AgentEvent`s (each resets a per-turn idle deadline)
+→ assemble reply → persist + send.
 
 See [`CLAUDE.md`](CLAUDE.md) for the full pipeline, invariants, and security model.
 
@@ -123,11 +125,12 @@ the daemon already cross-compiles for all three.
 A single `~/.xclaw/config.json` configures every bot — see the fully-commented
 [`core/config.example.json`](core/config.example.json). Shared top-level
 `apiUrl`/`agent`/`rateLimit`/`context` defaults, a `bots[]` array where each entry
-overrides them, optional group-gating lists, per-bot `skills`, and `onBehalfOf`
-persona clones. A bot's persona/behavior lives in `SOUL.md` + `AGENTS.md` under
-`~/.xclaw/<id>/`, not in config. Tokens are **never** stored here — the desktop app
-keeps them in the OS keychain. Everything is editable in-app (gear → Edit Bots /
-Manage Skills).
+overrides them, optional group-gating lists, and `onBehalfOf` persona clones. A
+bot's persona/behavior lives in `SOUL.md` + `AGENTS.md` under `~/.xclaw/<id>/`,
+not in config. Tokens are **never** stored here — the desktop app keeps them in
+the OS keychain. Skills + workflows live on the filesystem under each bot's
+`~/.xclaw/<id>/.claude/`, not in config. Everything is editable in-app (gear →
+Edit Bots / Manage Skills / Workflows).
 
 ## Project layout
 
@@ -135,7 +138,8 @@ Manage Skills).
 core/      Go gateway daemon (xclawd): agent driver, router, gateway pipeline,
            SQLite store, sandbox, safety, config, cron, im/octo connector.
 desktop/   Wails v3 app: Go bridge (supervisor · control client · configstore ·
-           skills · octocli · secrets) + Svelte 5 frontend (lib/components, store).
+           skills · workflows · octocli · secrets) + Svelte 5 frontend
+           (lib/components, store, modals routed through a global confirm()).
 proto/     The control-bus contract (NDJSON envelope schema). See proto/README.md.
 scripts/   run-dev.sh · package-desktop.sh (cross-compile + embed + sign).
 ```
