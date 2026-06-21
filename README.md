@@ -123,11 +123,12 @@ the daemon already cross-compiles for all three.
 
 ### Releases
 
-Tagged releases (push a `vX.Y.Z` tag) are built, codesigned with Developer ID,
-notarized, and published on the [Releases page](https://github.com/lml2468/xclaw/releases)
-with a universal macOS `.app.zip` + headless `xclawd` binaries for linux-amd64,
-linux-arm64, and windows-amd64. See [`docs/RELEASE.md`](docs/RELEASE.md) for
-the one-time secret setup and the release checklist.
+Cut from a single mac with `zsh scripts/release.sh vX.Y.Z` — the script
+codesigns with your Developer ID, notarizes via App Store Connect API key,
+and publishes a [GitHub Release](https://github.com/lml2468/xclaw/releases)
+with a universal macOS `.app.zip` + headless `xclawd` binaries for
+linux-amd64, linux-arm64, and windows-amd64. See
+[`docs/RELEASE.md`](docs/RELEASE.md) for one-time setup.
 
 ## Configuration
 

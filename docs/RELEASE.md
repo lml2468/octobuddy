@@ -1,95 +1,111 @@
 # Releasing XClaw
 
-This is the operator-facing checklist for cutting a signed, notarized release.
-The CI does all the building/signing/notarization; you supply the secrets once
-and then push a tag.
+This is the operator-facing checklist for cutting a signed + notarized
+release. XClaw releases are built locally on your Mac (no CI involved) — the
+operator already has the Developer ID cert + Apple notary credential on
+hand, and a single-operator product doesn't get much from offloading the
+build to GitHub runners.
+
+Everything is wrapped in `scripts/release.sh`. Once the one-time setup below
+is done, cutting a release is `zsh scripts/release.sh v1.0.0`.
 
 ## One-time setup
 
-You need three Apple things, all from one paid Apple Developer account
-(`developer.apple.com`):
+### 1. Apple Developer ID Application certificate
 
-1. A **Developer ID Application** certificate (NOT "Apple Development" — that's
-   for testing only and won't notarize). Generate it in
-   `developer.apple.com → Certificates`, download the `.cer`, open it to import
-   into your login Keychain, then in Keychain Access right-click the resulting
-   private key → Export → `.p12` (set a password — you'll need it for the
-   secret below).
-2. An **App Store Connect API key** for notarization. Go to
-   `appstoreconnect.apple.com → Users and Access → Integrations → App Store
-   Connect API`, create a key with the **Developer** role, download the `.p8`
-   (it's only downloadable ONCE — save it). Note the **Key ID** and the
-   **Issuer UUID** shown on the page.
-3. Your **signing identity string**, of the form
-   `Developer ID Application: Your Name (TEAMID)`. Find it with:
+You need a paid Apple Developer account (`developer.apple.com`).
+
+1. Generate a **Developer ID Application** certificate in
+   `developer.apple.com → Certificates`. NOT "Apple Development" — that's
+   testing-only and won't notarize.
+2. Open the downloaded `.cer` to import into your login Keychain.
+3. Find your identity string:
    ```bash
    security find-identity -p codesigning -v
    ```
+   You want the line that looks like
+   `Developer ID Application: Your Name (TEAMID)`.
+4. Export it for the release script:
+   ```bash
+   echo 'export XCLAW_SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)"' >> ~/.zshrc
+   ```
 
-### Repo secrets
+### 2. App Store Connect API key for notarization
 
-Set under repo `Settings → Secrets and variables → Actions`:
+1. Go to
+   `appstoreconnect.apple.com → Users and Access → Integrations → App Store
+   Connect API`.
+2. Create a key with the **Developer** role; download the `.p8` (only
+   downloadable ONCE — save it somewhere safe).
+3. Note the **Key ID** (e.g. `ABCD1234EF`) and the **Issuer UUID**.
+4. Register with `notarytool`:
+   ```bash
+   xcrun notarytool store-credentials xclaw-notary \
+     --key /path/to/AuthKey_XXXX.p8 \
+     --key-id ABCD1234EF \
+     --issuer <issuer-uuid>
+   ```
+5. Export the profile name for the release script:
+   ```bash
+   echo 'export XCLAW_NOTARY_PROFILE=xclaw-notary' >> ~/.zshrc
+   ```
 
-| Secret | Value |
-|---|---|
-| `APPLE_SIGN_IDENTITY` | the full identity string (`Developer ID Application: Name (TEAMID)`) |
-| `APPLE_CERT_P12_B64`  | `base64 -i cert.p12 \| pbcopy` from the exported `.p12` |
-| `APPLE_CERT_PWD`      | the password you set when exporting the `.p12` |
-| `APPLE_NOTARY_KEY_B64`| `base64 -i AuthKey_XXXX.p8 \| pbcopy` from the App Store Connect key |
-| `APPLE_NOTARY_KEY_ID` | the Key ID (e.g. `ABCD1234EF`) |
-| `APPLE_NOTARY_ISSUER` | the Issuer UUID |
-
-### Smoke-test locally first
-
-Build + sign + notarize on your laptop with the same env vars before pushing a
-tag. The CI does the same thing; passing locally is a good sanity check.
+### 3. GitHub CLI
 
 ```bash
-# Local notary via a stored keychain profile (one-time):
-xcrun notarytool store-credentials xclaw-notary \
-  --key /path/AuthKey_XXXX.p8 --key-id ABCD1234EF --issuer <uuid>
-
-XCLAW_SIGN_IDENTITY="Developer ID Application: …" \
-XCLAW_NOTARY_PROFILE=xclaw-notary \
-XCLAW_UNIVERSAL=1 \
-zsh scripts/package-desktop.sh
-
-# Inspect the notarized .app
-spctl --assess --type execute -vv desktop/bin/xclaw.app
-codesign --verify --deep --strict --verbose=2 desktop/bin/xclaw.app
+brew install gh
+gh auth login
 ```
 
 ## Cutting a release
 
 1. Make sure `main` is green on CI.
-2. Pick the version (semver — `vMAJOR.MINOR.PATCH`).
-3. Tag and push:
+2. Make sure the working tree is clean (the script refuses otherwise).
+3. Pick a semver tag (`vMAJOR.MINOR.PATCH`).
+4. Run:
    ```bash
-   git tag v1.0.0
-   git push origin v1.0.0
+   zsh scripts/release.sh v1.0.0
    ```
-4. Watch the workflow: `gh run watch` or
-   `https://github.com/lml2468/xclaw/actions/workflows/release.yml`.
-5. When it goes green, the release appears at
+   The script will:
+   - Tag HEAD (if not already tagged) and push the tag.
+   - Build the universal `.app`, embed `xclawd` + `octo-cli`, sign inside-out
+     with your Developer ID, notarize via the API key, staple, re-zip.
+   - Cross-compile `xclawd` for darwin/linux/windows (5 binaries).
+   - Stage everything under versioned filenames + a `checksums.txt`.
+   - `gh release create` with auto-generated notes.
+5. End-to-end takes ~5–15 min (mostly notary queue wait).
+6. The release lands at
    `https://github.com/lml2468/xclaw/releases/tag/v1.0.0` with:
-   - `XClaw-<ver>-macos-universal.zip` — signed + notarized .app, both archs
-   - `xclawd-<ver>-{darwin-arm64,darwin-amd64,linux-amd64,linux-arm64,windows-amd64.exe}` — headless daemon binaries for non-Mac platforms
+   - `XClaw-<ver>-macos-universal.zip` — signed + notarized .app (both archs)
+   - `xclawd-<ver>-{darwin-arm64,darwin-amd64,linux-amd64,linux-arm64,windows-amd64.exe}`
+     — headless daemon binaries for non-Mac platforms
    - `checksums.txt` — SHA256 of every asset above
-6. Hand-edit the release body if you want a human summary at the top
-   (auto-generated notes are good enough most of the time).
+7. Hand-edit the release body if you want a human summary at the top
+   (auto-generated notes are usually good enough).
+
+## Verifying a build locally before cutting a tag
+
+If you want to sanity-check the .app without releasing it:
+
+```bash
+XCLAW_UNIVERSAL=1 zsh scripts/package-desktop.sh
+spctl --assess --type execute -vv desktop/bin/xclaw.app
+codesign --verify --deep --strict --verbose=2 desktop/bin/xclaw.app
+```
 
 ## Troubleshooting
 
-- **"User interaction is not allowed" during codesign** — the temp keychain
-  wasn't unlocked or the partition list wasn't set. Both happen in the
-  `Import Apple Developer ID cert` step; check the step's log.
+- **"User interaction is not allowed" during codesign** — your login keychain
+  is locked or the cert's partition list excludes `codesign`. Unlock the
+  keychain and retry.
 - **`notarytool` returns `Invalid`** — download the log it points at and fix
-  whichever helper failed. Most common cause: a helper (xclawd, octo-cli)
-  wasn't signed with the hardened runtime; the script signs both inside-out.
+  whichever helper failed. Most common: a helper (xclawd, octo-cli) wasn't
+  signed with the hardened runtime; the script signs both inside-out so this
+  usually means a stale build artifact crept in. Try
+  `rm -rf desktop/bin && zsh scripts/release.sh …` again.
 - **"The provided entity includes an attribute with a value that has already
   been used"** when re-tagging the same version — Apple's notary service
-  remembers the .zip digest. Bump the patch version and re-tag; don't try to
-  re-use a tag.
-- **Releases page is missing daemon binaries** — check `STAGE=...` step
-  output. If the asset names changed (e.g. someone tweaked
-  `package-desktop.sh`), the `cp` step will fail loudly.
+  remembers the .zip digest. Bump the patch version and re-tag.
+- **Tag already exists at a different commit** — the script refuses to move
+  a tag silently. Either bump the version or delete the tag locally and on
+  origin first if you really mean to redo it.
