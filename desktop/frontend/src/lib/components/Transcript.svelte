@@ -33,7 +33,7 @@
 <div class="scroller" bind:this={scroller} onscroll={onScroll}>
   <div class="stack">
     {#if store.lastError}
-      <div class="err" role="alert" aria-live="polite">{store.lastError}</div>
+      <div class="err" role="alert">{store.lastError}</div>
     {/if}
 
     {#if messages.length === 0}

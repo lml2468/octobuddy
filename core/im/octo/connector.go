@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/lml2468/xclaw/core/agent"
@@ -41,7 +42,10 @@ type Connector struct {
 	// runCtx is the context passed to Run; the sink/inbound callbacks (which the
 	// gateway.Sink interface does not thread a context through) tie their work to
 	// it, so a cancelled Run aborts in-flight turns and outbound REST calls.
-	runCtx context.Context
+	// Stored as atomic.Pointer because Run writes it once at startup while the
+	// receipt worker / heartbeat / callback goroutines read it concurrently —
+	// the plain field was a data race under -race.
+	runCtx atomic.Pointer[context.Context]
 
 	mu      sync.Mutex
 	targets map[string]replyTarget   // sessionKey → where to send the reply
@@ -270,7 +274,7 @@ func (c *Connector) SetMentionFreeGroups(channelIDs []string) {
 // until ctx is cancelled. The initial registration is retried with backoff so a
 // transient API outage at startup doesn't kill the bot.
 func (c *Connector) Run(ctx context.Context) error {
-	c.runCtx = ctx
+	c.setCtx(ctx)
 	// REST heartbeat loop (30s), separate from the WS ping.
 	go c.heartbeatLoop(ctx)
 	// Single-worker read-receipt sender (see receiptCh comment).
@@ -302,7 +306,7 @@ func (c *Connector) Run(ctx context.Context) error {
 				}
 				c.setStatus(false, err.Error())
 				sleep(ctx, backoff)
-				backoff = minDur(backoff*2, c.reconnectMax)
+				backoff = min(backoff*2, c.reconnectMax)
 				continue
 			}
 			reg = r
@@ -327,7 +331,7 @@ func (c *Connector) Run(ctx context.Context) error {
 		// may have expired) before reconnecting. Re-check ctx after the sleep so
 		// a shutdown that races the back-off doesn't issue a wasted Register.
 		sleep(ctx, backoff)
-		backoff = minDur(backoff*2, c.reconnectMax)
+		backoff = min(backoff*2, c.reconnectMax)
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -375,10 +379,16 @@ func (c *Connector) connectOnce(ctx context.Context, reg RegisterResponse) error
 // ctx returns the Run context, falling back to Background if a callback somehow
 // fires before Run set it (defensive — a nil context would panic downstream).
 func (c *Connector) ctx() context.Context {
-	if c.runCtx != nil {
-		return c.runCtx
+	if p := c.runCtx.Load(); p != nil {
+		return *p
 	}
 	return context.Background()
+}
+
+// setCtx stores ctx as the runCtx. Used by Run at startup and by tests that
+// invoke methods on the connector outside of a Run() call.
+func (c *Connector) setCtx(ctx context.Context) {
+	c.runCtx.Store(&ctx)
 }
 
 // setUID / uid guard botUID with c.mu: Run rewrites it on (re)registration while
@@ -966,11 +976,4 @@ func (c *Connector) target(sessionKey string) (replyTarget, bool) {
 	defer c.mu.Unlock()
 	t, ok := c.targets[sessionKey]
 	return t, ok
-}
-
-func minDur(a, b time.Duration) time.Duration {
-	if a < b {
-		return a
-	}
-	return b
 }

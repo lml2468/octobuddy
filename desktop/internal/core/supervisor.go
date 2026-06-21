@@ -73,7 +73,7 @@ func ResolveBinary() (string, error) {
 	// branch above resolves first via the app's own executable path, so a hostile
 	// cwd can't substitute a binary for an installed app.
 	if dir, err := os.Getwd(); err == nil {
-		for i := 0; i < 6; i++ {
+		for range 6 {
 			cand := filepath.Join(dir, "core", ".xclawd-dev")
 			if isExec(cand) {
 				return cand, nil

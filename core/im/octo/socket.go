@@ -3,6 +3,7 @@ package octo
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"sync"
@@ -100,8 +101,14 @@ func (s *socketConn) connect(ctx context.Context) error {
 
 func (s *socketConn) close() {
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return
+	}
 	s.closed = true
-	s.mu.Unlock()
+	// Close the underlying conn under the same lock as the flag flip so a
+	// concurrent writeRaw can't observe closed=false and then race past
+	// s.conn.Close() into WriteMessage on a half-closed conn.
 	if s.conn != nil {
 		_ = s.conn.Close()
 	}
@@ -111,7 +118,7 @@ func (s *socketConn) writeRaw(b []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed || s.conn == nil {
-		return fmt.Errorf("socket closed")
+		return ErrSocketClosed
 	}
 	return s.conn.WriteMessage(websocket.BinaryMessage, b)
 }
@@ -216,6 +223,11 @@ func (s *socketConn) run(ctx context.Context) error {
 // errServerDisconnect is returned by run when the server sends a DISCONNECT
 // packet, so Run's reconnect path re-registers instead of hanging on a dead WS.
 var errServerDisconnect = fmt.Errorf("server sent disconnect")
+
+// ErrSocketClosed is returned by writeRaw after the socket has been closed.
+// Exported as a sentinel so callers (connector outbound retry, tests) can
+// errors.Is against it to distinguish from a WebSocket I/O failure.
+var ErrSocketClosed = errors.New("socket closed")
 
 func (s *socketConn) pingLoop(done chan struct{}) {
 	t := time.NewTicker(wsPingInterval)

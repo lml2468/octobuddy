@@ -72,7 +72,19 @@ func AddBot(ctx context.Context, apiURL, apiKey, name string) (BotResult, error)
 		return BotResult{}, fmt.Errorf("请填写 Bot 名称")
 	}
 
-	cli := &http.Client{Timeout: httpTimeout}
+	cli := &http.Client{
+		Timeout: httpTimeout,
+		// Refuse to follow redirects: this POST carries the operator's uk_
+		// User API Key in Authorization. Go strips Authorization only on a
+		// cross-host redirect, so a same-host or sibling-subdomain 302 keeps
+		// the key (a server-side bug or compromise at the operator's
+		// octo-server host could exfiltrate the key to a sibling path). The
+		// endpoint is single-shot (no legitimate redirect contract), so any
+		// 3xx is itself the failure signal.
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
 
 	reqBody := map[string]any{"name": name}
 	var out struct {
@@ -109,6 +121,11 @@ func postJSON(ctx context.Context, cli *http.Client, url, apiKey string, body, o
 
 	// Cap the read so a misbehaving endpoint can't balloon memory.
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	// A 3xx is treated as failure (see CheckRedirect above): we never want
+	// the wizard to silently follow a redirect with the bearer attached.
+	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		return fmt.Errorf("API URL 拒绝直接 POST（HTTP %d 重定向）", resp.StatusCode)
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		if resp.StatusCode == http.StatusUnauthorized {
 			return fmt.Errorf("API Key 无效或已失效")
@@ -128,13 +145,36 @@ func postJSON(ctx context.Context, cli *http.Client, url, apiKey string, body, o
 }
 
 // serverMsg extracts octo-server's error message field ({"msg":"…"}) for a
-// human-readable failure, if present.
+// human-readable failure, if present. The value is untrusted server output —
+// control chars are stripped and length is clamped so a hostile or
+// MITM-tampered response can't smuggle ANSI escapes / very large text into
+// the UI's error toast.
 func serverMsg(data []byte) string {
 	var e struct {
 		Msg string `json:"msg"`
 	}
-	if json.Unmarshal(data, &e) == nil {
-		return strings.TrimSpace(e.Msg)
+	if json.Unmarshal(data, &e) != nil {
+		return ""
 	}
-	return ""
+	return sanitizeServerText(e.Msg)
+}
+
+// sanitizeServerText strips control chars (except TAB/LF) and caps the result
+// at 256 chars. Exposed as a separate helper so future server-string
+// surfaces use the same fence.
+func sanitizeServerText(s string) string {
+	s = strings.TrimSpace(s)
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		if r == '\t' || r == '\n' || (r >= 0x20 && r != 0x7f) {
+			b.WriteRune(r)
+		}
+	}
+	out := b.String()
+	const maxLen = 256
+	if len(out) > maxLen {
+		out = out[:maxLen] + "…"
+	}
+	return out
 }

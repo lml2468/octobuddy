@@ -51,6 +51,11 @@ type Manager struct {
 	ownerMu  sync.RWMutex
 	ownerUID string
 
+	// runMu guards the timer/stopCh pair against concurrent Start/Stop calls
+	// (e.g. control-bus handlers running on different goroutines). Without it
+	// the `if m.timer != nil` guard is a TOCTOU and a doubled Stop would
+	// double-close stopCh.
+	runMu  sync.Mutex
 	timer  *time.Ticker
 	stopCh chan struct{}
 	onFire func(Fire)
@@ -203,34 +208,41 @@ func (m *Manager) Delete(id, requestUID string) error {
 // path). Must be set before Start.
 func (m *Manager) OnFire(fn func(Fire)) { m.onFire = fn }
 
-// Start arms the periodic scan. Idempotent; runs until Stop or until the loop's
-// stop channel is closed.
+// Start arms the periodic scan. Idempotent under concurrent calls; runs until
+// Stop or until the loop's stop channel is closed.
 func (m *Manager) Start() {
+	m.runMu.Lock()
+	defer m.runMu.Unlock()
 	if m.timer != nil {
 		return
 	}
 	m.timer = time.NewTicker(CronTickInterval)
 	m.stopCh = make(chan struct{})
+	stopCh := m.stopCh
+	timerCh := m.timer.C
 	go func() {
 		for {
 			select {
-			case <-m.stopCh:
+			case <-stopCh:
 				return
-			case <-m.timer.C:
+			case <-timerCh:
 				m.Tick()
 			}
 		}
 	}()
 }
 
-// Stop halts the scan.
+// Stop halts the scan. Idempotent under concurrent calls.
 func (m *Manager) Stop() {
+	m.runMu.Lock()
+	defer m.runMu.Unlock()
 	if m.timer == nil {
 		return
 	}
 	m.timer.Stop()
 	close(m.stopCh)
 	m.timer = nil
+	m.stopCh = nil
 }
 
 // Tick performs one scan: fire due tasks, advance/drop them, persist. Exposed

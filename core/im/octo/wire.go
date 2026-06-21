@@ -114,7 +114,14 @@ type decoder struct {
 	pos int
 }
 
-var errShort = errors.New("octo: short read")
+// Parse-failure sentinels. Exported so callers can errors.Is against the
+// failure mode (metrics, reconnect classification, tests).
+var (
+	errShort             = errors.New("octo: short read")
+	ErrUnknownPacketType = errors.New("octo: unknown packet type")
+	ErrVarintTooLong     = errors.New("octo: varint too long")
+	ErrFrameBodyTooLarge = errors.New("octo: frame body too large")
+)
 
 func (d *decoder) readByte() (byte, error) {
 	if d.pos >= len(d.buf) {
@@ -221,7 +228,7 @@ func nextFrame(buf []byte) (pt packetType, body []byte, consumed int, ok bool, e
 	// let the caller reconnect rather than consuming `total` bytes of garbage and
 	// cascading into the next frame (L24).
 	if pt < pktConnect || pt > pktDisconnect {
-		return 0, nil, 0, false, fmt.Errorf("octo: unknown packet type %d", pt)
+		return 0, nil, 0, false, fmt.Errorf("%w %d", ErrUnknownPacketType, pt)
 	}
 
 	// PING/PONG are single-byte packets with no length/body.
@@ -238,7 +245,7 @@ func nextFrame(buf []byte) (pt packetType, body []byte, consumed int, ok bool, e
 			return 0, nil, 0, false, nil // incomplete varint
 		}
 		if i-1 >= maxVarlenBytes {
-			return 0, nil, 0, false, fmt.Errorf("octo: varint too long")
+			return 0, nil, 0, false, ErrVarintTooLong
 		}
 		digit := buf[i]
 		i++
@@ -249,7 +256,7 @@ func nextFrame(buf []byte) (pt packetType, body []byte, consumed int, ok bool, e
 		}
 	}
 	if remLen > maxFrameBodyBytes {
-		return 0, nil, 0, false, fmt.Errorf("octo: frame body too large (%d > %d)", remLen, maxFrameBodyBytes)
+		return 0, nil, 0, false, fmt.Errorf("%w (%d > %d)", ErrFrameBodyTooLarge, remLen, maxFrameBodyBytes)
 	}
 	total := i + remLen
 	if total > len(buf) {

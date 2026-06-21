@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -27,16 +28,61 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
+	"time"
+
+	"github.com/lml2468/xclaw/core/config"
 )
 
 const repo = "Mininglamp-OSS/octo-cli"
 
+// userAgent is sent on every HTTP request so the server can attribute traffic
+// (also lets GitHub's anti-abuse return clearer errors than "blank UA").
+const userAgent = "xclaw-desktop/octocli (+https://github.com/lml2468/xclaw)"
+
 // Injectable seams for tests. Production uses the real GitHub API over the
-// default HTTP client; tests point these at an httptest server.
+// hardened HTTP client (dial-time SSRF guard); tests point these at an
+// httptest server.
 var (
-	httpClient = http.DefaultClient
+	httpClient = newSafeClient()
 	apiBase    = "https://api.github.com"
 )
+
+// newSafeClient returns an HTTP client whose dialer rejects connections to
+// private/loopback/link-local/CGN addresses (mirrors core/gateway's media
+// downloader). The download URLs (GitHub API + asset CDN) are public, but
+// they redirect to S3 / Fastly hosts — a poisoned DNS or compromised mirror
+// could redirect to 169.254.169.254 (cloud metadata) or a private internal
+// address; this dial guard turns that into a connect-refused.
+func newSafeClient() *http.Client {
+	return &http.Client{
+		Transport: &http.Transport{
+			DialContext: (&net.Dialer{
+				Timeout:   30 * time.Second,
+				KeepAlive: 30 * time.Second,
+				Control:   dialControlGuard,
+			}).DialContext,
+			ForceAttemptHTTP2:     true,
+			MaxIdleConns:          8,
+			MaxConnsPerHost:       4,
+			IdleConnTimeout:       30 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ResponseHeaderTimeout: 60 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+		},
+	}
+}
+
+func dialControlGuard(network, address string, _ syscall.RawConn) error {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return fmt.Errorf("octocli dial: bad address %q: %w", address, err)
+	}
+	if config.IsPrivateOrLocalAddress(host) {
+		return fmt.Errorf("octocli dial: refusing private/local address %s", host)
+	}
+	return nil
+}
 
 func binName() string {
 	if runtime.GOOS == "windows" {
@@ -136,7 +182,7 @@ func latestRelease(ctx context.Context) (ghRelease, error) {
 		return r, err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("User-Agent", "xclaw-desktop")
+	req.Header.Set("User-Agent", userAgent)
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return r, err
@@ -256,7 +302,7 @@ func download(ctx context.Context, url string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "xclaw-desktop")
+	req.Header.Set("User-Agent", userAgent)
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, err
@@ -409,9 +455,42 @@ func Login(ctx context.Context, robotID, token, apiURL string) error {
 	cmd.Stdin = strings.NewReader(token)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("octo-cli auth login (%s): %w (output: %s)", robotID, err, strings.TrimSpace(string(out)))
+		return fmt.Errorf("octo-cli auth login (%s): %w (output: %s)", robotID, err, redactChildOutput(out))
 	}
 	return nil
+}
+
+// redactChildOutput truncates and redacts a child process's CombinedOutput
+// before it is bubbled into an error returned to the desktop process. The
+// concrete risk: octo-cli (or any helper invoked here in future) could echo a
+// bearer token in a verbose-mode error path — currently it does not, but a
+// regression would otherwise plumb the token straight into our logs and the
+// SaveConfig UI error toast. The redactor strips any whitespace-delimited
+// token-shaped fragment (bf_, uk_, sk_, sk-, ANTHROPIC_*=…) and clamps the
+// result to 256 chars.
+func redactChildOutput(out []byte) string {
+	s := strings.TrimSpace(string(out))
+	// Token-shaped substrings. Conservative: replace the whole word with
+	// "<redacted>" rather than partial masking.
+	words := strings.Fields(s)
+	for i, w := range words {
+		stripped := strings.TrimFunc(w, func(r rune) bool {
+			return r == '"' || r == '\'' || r == ',' || r == '.' || r == ':' || r == ';' || r == '(' || r == ')'
+		})
+		if strings.HasPrefix(stripped, "bf_") ||
+			strings.HasPrefix(stripped, "uk_") ||
+			strings.HasPrefix(stripped, "sk_") ||
+			strings.HasPrefix(stripped, "sk-") ||
+			strings.HasPrefix(stripped, "ANTHROPIC_") {
+			words[i] = "<redacted>"
+		}
+	}
+	s = strings.Join(words, " ")
+	const maxLen = 256
+	if len(s) > maxLen {
+		s = s[:maxLen] + "…"
+	}
+	return s
 }
 
 // Logout removes the per-robot-id profile from octo-cli's credential store.
@@ -433,7 +512,7 @@ func Logout(ctx context.Context, robotID string) error {
 		if strings.Contains(string(out), "no profile found") {
 			return nil
 		}
-		return fmt.Errorf("octo-cli auth logout (%s): %w (output: %s)", robotID, err, strings.TrimSpace(string(out)))
+		return fmt.Errorf("octo-cli auth logout (%s): %w (output: %s)", robotID, err, redactChildOutput(out))
 	}
 	return nil
 }

@@ -125,7 +125,7 @@ func parseCronExpression(expr string) *parsedCron {
 		return nil
 	}
 	sets := make([]map[int]bool, 5)
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		set := parseField(fields[i], fieldRanges[i].min, fieldRanges[i].max)
 		if set == nil {
 			return nil
@@ -260,7 +260,7 @@ func computeNextRun(schedule string, from time.Time) (time.Time, bool) {
 	}
 	// Start at the next whole minute boundary after from, in the clock's zone.
 	cursor := from.Truncate(time.Minute).Add(time.Minute)
-	for i := 0; i < maxScanMinutes; i++ {
+	for range maxScanMinutes {
 		if parsed.matches(cursor) {
 			return cursor, true
 		}

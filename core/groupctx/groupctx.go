@@ -7,7 +7,9 @@
 package groupctx
 
 import (
-	"sort"
+	"cmp"
+	"maps"
+	"slices"
 	"strings"
 	"sync"
 	"unicode/utf16"
@@ -309,11 +311,7 @@ func (g *GroupContext) MemberMap(channelID string) map[string]string {
 	if len(src) == 0 {
 		return nil
 	}
-	out := make(map[string]string, len(src))
-	for name, uid := range src {
-		out[name] = uid
-	}
-	return out
+	return maps.Clone(src)
 }
 
 // IsMember reports whether uid is a known member of the channel. Mirrors
@@ -372,11 +370,11 @@ func (g *GroupContext) Members(channelID string) []Member {
 	for uid, name := range m {
 		out = append(out, Member{UID: uid, Name: name})
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Name != out[j].Name {
-			return out[i].Name < out[j].Name
+	slices.SortFunc(out, func(a, b Member) int {
+		if c := cmp.Compare(a.Name, b.Name); c != 0 {
+			return c
 		}
-		return out[i].UID < out[j].UID
+		return cmp.Compare(a.UID, b.UID)
 	})
 	return out
 }

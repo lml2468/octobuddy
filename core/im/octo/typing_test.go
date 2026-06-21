@@ -15,7 +15,7 @@ import (
 func newTypingTestConnector(ctx context.Context, interval time.Duration) (*Connector, *int32) {
 	var count int32
 	c := NewConnector(NewRESTClient("http://unused", func() string { return "t" }))
-	c.runCtx = ctx
+	c.setCtx(ctx)
 	c.typingInterval = interval
 	c.sendTyping = func(context.Context, string, ChannelType) error {
 		atomic.AddInt32(&count, 1)

@@ -54,11 +54,11 @@
 
 <div class="cscrim" bind:this={scrim} role="presentation" onclick={() => onresult(false)}>
   <!-- svelte-ignore a11y_click_events_have_key_events (keydown attached via addEventListener in onMount; onclick only stops propagation) -->
-  <div class="confirm" role="alertdialog" aria-label={message} tabindex="-1" onclick={(e) => e.stopPropagation()}>
-    <p>{message}</p>
+  <div class="confirm" role="alertdialog" aria-label="确认" aria-describedby="confirm-msg" tabindex="-1" onclick={(e) => e.stopPropagation()}>
+    <p id="confirm-msg">{message}</p>
     <div class="cbtns">
-      <button onclick={() => onresult(false)}>{cancelLabel}</button>
-      <button bind:this={primary} class="primary" class:danger onclick={() => onresult(true)}>{confirmLabel}</button>
+      <button type="button" onclick={() => onresult(false)}>{cancelLabel}</button>
+      <button type="button" bind:this={primary} class="primary" class:danger onclick={() => onresult(true)}>{confirmLabel}</button>
     </div>
   </div>
 </div>

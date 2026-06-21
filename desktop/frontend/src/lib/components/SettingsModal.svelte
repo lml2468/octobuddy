@@ -162,6 +162,28 @@
     { key: "skills",    label: "技能" },
     { key: "workflows", label: "工作流" },
   ];
+
+  // Arrow-key tab navigation per WAI-ARIA APG tablist pattern (←/→ cycle
+  // visible tabs; Home/End jump to the ends). Pairs with the roving
+  // tabindex above (only the active tab is in the tab order; others are -1)
+  // so screen-reader keyboard users don't fall through 4 buttons with Tab.
+  function onTabKey(e: KeyboardEvent) {
+    const cur = TABS.findIndex((t) => t.key === activeTab);
+    if (cur < 0) return;
+    let next = cur;
+    if (e.key === "ArrowRight") next = (cur + 1) % TABS.length;
+    else if (e.key === "ArrowLeft") next = (cur - 1 + TABS.length) % TABS.length;
+    else if (e.key === "Home") next = 0;
+    else if (e.key === "End") next = TABS.length - 1;
+    else return;
+    e.preventDefault();
+    activeTab = TABS[next].key;
+    // Move focus to the newly-selected tab so the user can keep arrowing.
+    queueMicrotask(() => {
+      const btns = (e.currentTarget as HTMLElement | null)?.querySelectorAll<HTMLButtonElement>('button[role="tab"]');
+      btns?.[next]?.focus();
+    });
+  }
 </script>
 
 <div class="scrim" onclick={leave} role="presentation">
@@ -191,9 +213,9 @@
             <p>还没有 Bot。点左边的 <strong>+ 新增 Bot</strong> 开始。</p>
           </div>
         {:else}
-          <div class="seg" role="tablist" aria-label="设置分区">
+          <div class="seg" role="tablist" tabindex="-1" aria-label="设置分区" onkeydown={onTabKey}>
             {#each TABS as t (t.key)}
-              <button role="tab" aria-selected={t.key === activeTab} class:on={t.key === activeTab} onclick={() => (activeTab = t.key)}>{t.label}</button>
+              <button role="tab" aria-selected={t.key === activeTab} tabindex={t.key === activeTab ? 0 : -1} class:on={t.key === activeTab} onclick={() => (activeTab = t.key)}>{t.label}</button>
             {/each}
           </div>
 

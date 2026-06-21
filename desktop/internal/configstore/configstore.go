@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -149,16 +150,12 @@ func resolveBot(f config.File, b config.BotEntry) BotConfig {
 	if b.Agent != nil {
 		bc.Model = firstNonEmpty(b.Agent.Model, topModel)
 		bc.GatewayBaseURL = firstNonEmpty(b.Agent.GatewayBaseURL, topGW)
-		for k, v := range b.Agent.Env {
-			bc.Env[k] = v
-		}
+		maps.Copy(bc.Env, b.Agent.Env)
 	} else {
 		bc.Model, bc.GatewayBaseURL = topModel, topGW
 	}
 	if len(bc.Env) == 0 {
-		for k, v := range topEnv {
-			bc.Env[k] = v
-		}
+		maps.Copy(bc.Env, topEnv)
 	}
 
 	bc.Soul = readBotFile(b.ID, "SOUL.md")
@@ -401,15 +398,7 @@ func inheritStr(v, def string) string {
 }
 
 func envEqual(a, b map[string]string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for k, v := range a {
-		if bv, ok := b[k]; !ok || bv != v {
-			return false
-		}
-	}
-	return true
+	return maps.Equal(a, b)
 }
 
 func agentEmpty(a config.AgentConfig) bool {

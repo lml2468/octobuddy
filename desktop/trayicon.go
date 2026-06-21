@@ -36,7 +36,7 @@ func xMarkTemplatePNG() []byte {
 
 	inside := func(q [4][2]float64, px, py float64) bool {
 		sign := 0
-		for i := 0; i < 4; i++ {
+		for i := range 4 {
 			x1, y1 := q[i][0], q[i][1]
 			x2, y2 := q[(i+1)%4][0], q[(i+1)%4][1]
 			cross := (x2-x1)*(py-y1) - (y2-y1)*(px-x1)

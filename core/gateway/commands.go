@@ -50,7 +50,8 @@ type parsedCommand struct {
 // merely mentions "/reset" mid-sentence is NOT treated as a command — it must
 // lead. Mirrors commands.ts parseCommand.
 func parseCommand(body string) (parsedCommand, bool) {
-	firstLine := strings.TrimSpace(strings.SplitN(body, "\n", 2)[0])
+	firstLine, _, _ := strings.Cut(body, "\n")
+	firstLine = strings.TrimSpace(firstLine)
 	m := commandRE.FindStringSubmatch(firstLine)
 	if m == nil {
 		return parsedCommand{}, false

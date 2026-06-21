@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/lml2468/xclaw/core/control"
@@ -63,13 +64,19 @@ func makeHandler(ctx context.Context, deps handlerDeps) control.CommandHandler {
 			if err != nil {
 				return nil, err
 			}
-			// Never log b.Value.
+			// Never log b.Value, and never bubble the underlying secret-store
+			// error verbatim to the control bus — a future keyring lib that
+			// includes the value in its error message would otherwise leak
+			// the secret to the connected GUI. Log the real cause server-side
+			// only; return a neutral error to the caller.
 			if b.Clear {
 				if err := t.secrets.Clear(b.Kind); err != nil {
-					return nil, err
+					log.Printf("[secret] clear %s/%s: %v", b.BotID, b.Kind, err)
+					return nil, fmt.Errorf("secret.inject clear failed for %s/%s", b.BotID, b.Kind)
 				}
 			} else if err := t.secrets.Set(b.Kind, b.Value); err != nil {
-				return nil, err
+				log.Printf("[secret] set %s/%s: %v", b.BotID, b.Kind, err)
+				return nil, fmt.Errorf("secret.inject set failed for %s/%s", b.BotID, b.Kind)
 			}
 			return control.OKBody{OK: true}, nil
 

@@ -59,7 +59,7 @@ func (f *fakeSendServer) notices() []string {
 // reply target registered for sessionKey "s" so notices have somewhere to go.
 func newProgressConnector(f *fakeSendServer, on bool) *Connector {
 	c := NewConnector(NewRESTClient(f.srv.URL, func() string { return "t" }))
-	c.runCtx = context.Background()
+	c.setCtx(context.Background())
 	c.SetToolProgress(on)
 	c.targets["s"] = replyTarget{channelID: "chan", channelType: ChannelGroup}
 	return c

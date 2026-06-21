@@ -34,6 +34,7 @@
       bind:value={draft}
       rows="1"
       placeholder="给 agent 发消息…"
+      aria-label="消息"
       oninput={autogrow}
       onkeydown={onKey}
     ></textarea>

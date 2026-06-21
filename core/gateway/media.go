@@ -251,7 +251,8 @@ func (g *Gateway) downloadImage(ctx context.Context, cwd, rawURL string) (string
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("download failed HTTP %d", resp.StatusCode)
 	}
-	rawType := strings.ToLower(strings.TrimSpace(strings.SplitN(resp.Header.Get("Content-Type"), ";", 2)[0]))
+	ct, _, _ := strings.Cut(resp.Header.Get("Content-Type"), ";")
+	rawType := strings.ToLower(strings.TrimSpace(ct))
 	ext, ok := allowedImageTypes[rawType]
 	if !ok {
 		if rawType == "" {

@@ -322,7 +322,7 @@ func TestOnReplyEmptyFallback(t *testing.T) {
 	defer srv.Close()
 
 	c := NewConnector(NewRESTClient(srv.URL, func() string { return "tok" }))
-	c.runCtx = context.Background()
+	c.setCtx(context.Background())
 	c.targets["k"] = replyTarget{channelID: "ch", channelType: ChannelDM}
 
 	c.OnReply("k", "   ") // whitespace-only → empty
@@ -346,7 +346,7 @@ func TestOnReplyNoTargetSilent(t *testing.T) {
 	}))
 	defer srv.Close()
 	c := NewConnector(NewRESTClient(srv.URL, func() string { return "tok" }))
-	c.runCtx = context.Background()
+	c.setCtx(context.Background())
 	c.OnReply("missing", "hello") // no target registered
 	if called {
 		t.Error("expected no REST call when target is unknown")
