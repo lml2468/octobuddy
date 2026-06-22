@@ -245,3 +245,37 @@ func TestClaudeArgsNoSettingsWithoutMemoryDir(t *testing.T) {
 		t.Fatal("--settings should be absent when MemoryDir is empty")
 	}
 }
+
+// maskToken redacts API tokens for the [selfcheck] log line. Keeps enough
+// surface to recognize WHICH token is in play without exposing the secret;
+// "UNSET" and "SHORT(...)" branches must scream loudly so an operator can
+// spot a misconfigured fresh install at a glance.
+func TestMaskToken(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"", "UNSET"},
+		{"abc", "SHORT(abc)"},
+		{"sk-1234567890abcdef", "sk-123...cdef"},
+		{"bf_aaaaaaaaaaaaaaaaaaaaaaaaaaaa", "bf_aaa...aaaa"},
+	}
+	for _, c := range cases {
+		if got := maskToken(c.in); got != c.want {
+			t.Errorf("maskToken(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// isDirWritable is the cwd guard inside the selfcheck line. Read-only mounts
+// and wrong-owner dirs both manifest as failed first turns; the line should
+// flag them. Empty / nonexistent dirs are reported as not writable.
+func TestIsDirWritable(t *testing.T) {
+	if isDirWritable("") {
+		t.Fatal("empty dir reported writable")
+	}
+	if isDirWritable("/does/not/exist/xclaw-test") {
+		t.Fatal("nonexistent dir reported writable")
+	}
+	dir := t.TempDir()
+	if !isDirWritable(dir) {
+		t.Fatal("tempdir reported not writable")
+	}
+}

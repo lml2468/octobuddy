@@ -3,14 +3,19 @@ package main
 import (
 	"context"
 	"embed"
+	"io"
 	"log"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 
 	"github.com/lml2468/xclaw/desktop/internal/autostart"
 	"github.com/lml2468/xclaw/desktop/internal/control"
+	"github.com/lml2468/xclaw/desktop/internal/logfile"
 	"github.com/lml2468/xclaw/desktop/internal/octocli"
 )
 
@@ -29,6 +34,12 @@ var (
 	bridge  *XClawService
 	preview bool
 	baseURL = "/"
+	// logPath is where the combined desktop+daemon log lives — set during
+	// main() once the home dir is verified and consumed by the tray menu's
+	// "查看日志" action so it shows the user the same file we're writing to.
+	// Empty when XCLAW_PREVIEW is on (preview mode skips persistent logging
+	// since there's no daemon to surface and the dev console is right there).
+	logPath string
 )
 
 func main() {
@@ -40,13 +51,32 @@ func main() {
 	// or even ".xclaw" relative to CWD — config writes, octo-cli installs,
 	// secret reads all scatter to the wrong place. Fail loudly at startup
 	// rather than corrupting on first use.
-	if _, err := os.UserHomeDir(); err != nil {
+	home, err := os.UserHomeDir()
+	if err != nil {
 		log.Fatalf("xclaw: cannot resolve user home directory: %v", err)
+	}
+
+	// Persistent logging: tee log.Print (our own log lines) and the daemon's
+	// stdout+stderr to ~/.xclaw/logs/xclaw.log, rotated at 5 MiB. Without
+	// this, the only way an end user (or you, helping them remotely) can see
+	// "[gateway] terminal agent error: ..." or "[selfcheck] auth=UNSET" is
+	// to relaunch from a terminal — which they will not. log file path is
+	// also exposed via the tray menu's "查看日志" action.
+	var logSink io.Writer = os.Stderr
+	if !preview {
+		w, err := logfile.New(filepath.Join(home, ".xclaw", "logs"), "xclaw.log", 5<<20)
+		if err != nil {
+			log.Printf("xclaw: persistent log unavailable (%v) — logging to stderr only", err)
+		} else {
+			logPath = w.Path()
+			logSink = w.Tee(os.Stderr)
+			log.SetOutput(logSink)
+		}
 	}
 
 	services := []application.Service{}
 	if !preview {
-		bridge = NewXClawService()
+		bridge = NewXClawService(logSink)
 		services = append(services, application.NewService(bridge))
 		// Install the bundled octo-cli baseline into ~/.xclaw/bin before the
 		// daemon (and its agent) spawn, so it's on the agent's PATH from turn one.
@@ -199,9 +229,43 @@ func setupSystemTray() {
 		}()
 	})
 
+	// Diagnostics: open the persistent log file. The label says "查看日志"
+	// because that's where users (and you, when helping a user remotely) go
+	// first when "出错了，请稍后重试" shows up — the line containing the real
+	// reason ([gateway] terminal agent error / [selfcheck] auth=UNSET / ...)
+	// lives there and only there once the app is launched normally. Disabled
+	// in preview mode where there's no log file to point at.
+	menu.AddSeparator()
+	logItem := menu.Add("查看日志")
+	if logPath == "" {
+		logItem.SetEnabled(false)
+	} else {
+		logItem.OnClick(func(*application.Context) { openLogInConsole(logPath) })
+	}
+
 	menu.AddSeparator()
 	menu.Add("Quit XClaw").OnClick(func(*application.Context) { app.Quit() })
 	tray.SetMenu(menu)
+}
+
+// openLogInConsole reveals the persistent log file in macOS Console.app on
+// darwin (so users can scroll, search, and tail live) and falls back to the
+// platform's default opener on linux/windows. Errors get logged — which means
+// they land in the same file the user just tried to open, which is fine: the
+// next time they manage to open it they'll see WHY the prior attempt failed.
+func openLogInConsole(path string) {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", "-a", "Console", path)
+	case "windows":
+		cmd = exec.Command("cmd", "/C", "start", "", path)
+	default:
+		cmd = exec.Command("xdg-open", path)
+	}
+	if err := cmd.Start(); err != nil {
+		log.Printf("xclaw: open log %q failed: %v", path, err)
+	}
 }
 
 // octoInfoLabel is the (disabled) tray row showing the installed octo-cli version.

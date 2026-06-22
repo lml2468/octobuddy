@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -135,6 +136,15 @@ type Supervisor struct {
 	SocketPath string
 	ConfigPath string // when non-empty, run -config mode
 
+	// Output captures the daemon's stdout+stderr. nil means inherit the
+	// desktop's os.Stderr (legacy behavior; tests and silent runs).
+	// Set this to the desktop's persistent log file in production so end users
+	// can `cat ~/.xclaw/logs/xclaw.log` after a crash without having to relaunch
+	// from a terminal. Both streams point at the same Writer so daemon stdout
+	// (banner, "config mode: N bot(s)") and stderr ([gateway] errors,
+	// [selfcheck] lines) interleave by timestamp.
+	Output io.Writer
+
 	mu        sync.Mutex
 	cmd       *exec.Cmd
 	exited    chan struct{} // closed when the reaper goroutine has Wait()ed on cmd
@@ -180,9 +190,13 @@ func (s *Supervisor) startLocked() error {
 	}
 
 	cmd := exec.Command(s.BinPath, args...)
-	cmd.Stdin = tokenR     // daemon reads the token as the first line of stdin
-	cmd.Stdout = os.Stderr // surface daemon logs in the app's stderr during dev
-	cmd.Stderr = os.Stderr
+	cmd.Stdin = tokenR // daemon reads the token as the first line of stdin
+	out := s.Output
+	if out == nil {
+		out = os.Stderr
+	}
+	cmd.Stdout = out // surface daemon banner + selfcheck + gateway errors
+	cmd.Stderr = out
 	cmd.Env = envWithOctoBin() // put ~/.xclaw/bin on PATH so the agent can call octo-cli
 	if err := cmd.Start(); err != nil {
 		tokenR.Close()

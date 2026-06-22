@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"sync"
 	"time"
@@ -36,6 +37,11 @@ type XClawService struct {
 	sup          *core.Supervisor
 	client       *control.Client
 	shuttingDown bool
+	// daemonOut is where the daemon's stdout+stderr land. nil means inherit
+	// os.Stderr (the legacy default). main() supplies the rotating xclaw.log
+	// tee so daemon banner / gateway errors / selfcheck lines survive past the
+	// app's stderr.
+	daemonOut io.Writer
 	// epoch is a generation counter for daemon (re)connect cycles. RestartCore
 	// and each reconnect run bump it; an in-flight reconnect loop bails as soon
 	// as it sees a newer epoch, so a manual restart can't be fought (and undone)
@@ -52,8 +58,11 @@ type XClawService struct {
 // itself producing a large event, which a re-dial won't fix — so don't loop on it.
 const maxOversizedRedials = 3
 
-// NewXClawService constructs the bridge (ServiceStartup wires it).
-func NewXClawService() *XClawService { return &XClawService{} }
+// NewXClawService constructs the bridge (ServiceStartup wires it). daemonOut
+// receives the daemon's stdout+stderr; pass nil to inherit os.Stderr.
+func NewXClawService(daemonOut io.Writer) *XClawService {
+	return &XClawService{daemonOut: daemonOut}
+}
 
 // ServiceStartup spawns xclawd and connects the control bus.
 func (x *XClawService) ServiceStartup(ctx context.Context, _ application.ServiceOptions) error {
@@ -69,7 +78,7 @@ func (x *XClawService) ServiceStartup(ctx context.Context, _ application.Service
 	// -config and picks up the freshly-written roster, instead of remaining
 	// stuck in the synthetic single-bot REPL fallback.
 	cfg := core.ConfigPath()
-	x.sup = &core.Supervisor{BinPath: bin, SocketPath: core.SocketPath(), ConfigPath: cfg}
+	x.sup = &core.Supervisor{BinPath: bin, SocketPath: core.SocketPath(), ConfigPath: cfg, Output: x.daemonOut}
 	if err := x.sup.Start(); err != nil {
 		// Start may have spawned the daemon process before the socket-wait
 		// timed out — Supervisor returns the error but leaves s.cmd set, so
