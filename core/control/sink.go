@@ -61,9 +61,13 @@ func (s *EventSink) OnReply(sessionKey string, text string) {
 // accepted turn so attached GUI clients can render it in the chat
 // transcript. Carries fromUid/fromName for group sessions where multiple
 // humans share one session and the GUI needs to attribute messages.
-// Console-originated turns also emit this; the GUI dedupes via sessionKey
-// (its CONSOLE_UID is locally known and the optimistic-add already
-// covered it).
+//
+// CronFire is forwarded so the renderer can distinguish a real human
+// inbound from a scheduled-task trigger — without it, Console cron fires
+// would hit the CONSOLE_UID dedupe path (intended for Composer-typed
+// messages with an optimistic local push) and disappear from the chat
+// entirely, AND IM-rendered cron fires would look like a real human
+// suddenly @-mentioned the bot with the prompt text.
 func (s *EventSink) OnUserMessage(sessionKey string, msg router.InboundMessage) {
 	s.srv.Broadcast("session.user_message", SessionUserMessageBody{
 		BotID:      s.botID,
@@ -72,5 +76,6 @@ func (s *EventSink) OnUserMessage(sessionKey string, msg router.InboundMessage) 
 		FromUID:    msg.FromUID,
 		FromName:   msg.FromName,
 		Ts:         time.Now().Unix(),
+		CronFire:   msg.CronFire,
 	})
 }

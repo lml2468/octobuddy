@@ -33,6 +33,12 @@ export interface Message {
   role: Role;
   text: string;
   ts: number;
+ // cron is true when a user-role message was synthesized by the daemon's
+ // scheduler (cron task fired), not typed by a human in the Composer or
+ // sent from an IM client. The renderer badges these with a "[定时任务]"
+ // marker so the operator can tell at a glance that a prompt came from
+ // automation. Optional / undefined for legacy non-cron messages.
+  cron?: boolean;
 }
 
 // ProcStep is one process item shown in the status strip: a tool call or a
@@ -533,18 +539,25 @@ class Store {
  // The inbound user message — emitted by the daemon at the start of every
  // accepted turn so IM-originated sessions render the user side of the
  // conversation, not just the bot's reply. Console-originated turns ALSO
- // fire this event (the daemon doesn't distinguish), so dedupe by sessionKey:
- // the Composer's send() already optimistically pushed the message before
- // hitting the wire, and we'd render two copies otherwise. Mark the session
- // as awaiting so the typing indicator engages for IM turns the same way it
- // did for Console (Composer.send did it manually there).
+ // fire this event (the daemon doesn't distinguish at the wire layer), so
+ // we dedupe by sessionKey: the Composer's send() already optimistically
+ // pushed the message before hitting the wire, and we'd render two copies
+ // otherwise. EXCEPT for scheduler-fired Console messages — those have NO
+ // optimistic local push (they originate server-side from cron), so the
+ // dedupe must defer to the cron flag rather than the sessionKey alone.
+ // Without that branch a Console cron task would fire, the bot would
+ // reply, and the operator would see only the reply with no prompt in
+ // sight. Same logic for IM-rendered cron fires: marked with the cron
+ // flag so the bubble can be badged "[定时任务]" instead of looking
+ // indistinguishable from a real human inbound.
         const key = env.body?.sessionKey ?? "";
-        if (key === CONSOLE_UID || key === "console") break;
+        const cron = !!env.body?.cronFire;
+        if (!cron && (key === CONSOLE_UID || key === "console")) break;
         const s = this.route(env);
         if (!s) break;
         const text = env.body?.text ?? "";
         const ts = env.body?.ts ? Number(env.body.ts) : Date.now() / 1000;
-        s.messages.push({ id: newId(), role: "user", text, ts });
+        s.messages.push({ id: newId(), role: "user", text, ts, cron });
         s.awaiting = true;
         s.awaitingSince = Date.now();
         s.lastActivity = Date.now();

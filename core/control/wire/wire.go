@@ -331,6 +331,14 @@ type SessionUserMessageBody struct {
 	FromUID    string `json:"fromUid,omitempty"`
 	FromName   string `json:"fromName,omitempty"`
 	Ts         int64  `json:"ts"`
+	// CronFire is true when this user_message represents a scheduled-task
+	// trigger rather than a real human inbound. The renderer uses it to (a)
+	// override the Composer-typed dedupe — a cron Console fire shares the
+	// CONSOLE_UID sessionKey but has NO optimistic local push to dedupe
+	// against, so the existing "skip CONSOLE_UID" path would otherwise hide
+	// the prompt — and (b) badge the bubble with a "[定时任务]" prefix so the
+	// operator can tell at a glance that a message came from the scheduler.
+	CronFire bool `json:"cronFire,omitempty"`
 }
 
 type SessionActivityBody struct {

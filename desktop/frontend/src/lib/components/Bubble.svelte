@@ -79,6 +79,14 @@
       >
         <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
       </button>
+      {#if message.cron}
+        <!-- Corner badge for scheduler-fired prompts. Positioned outside
+             the bubble's top-left so it reads as metadata (a stamp on
+             the message) rather than content (a prefix that the user
+             might mistake for part of what the agent saw). The bubble
+             itself carries the plain prompt unchanged. -->
+        <span class="cron-tag" aria-label="定时任务">cron</span>
+      {/if}
       {#if isUser}
         <span class="plain">{message.text}</span>
       {:else}
@@ -148,6 +156,35 @@
   }
   .bubble.user .plain { color: #fff; }
   .plain { white-space: pre-wrap; word-break: break-word; }
+ /* "定时任务" corner badge — overlays the bubble's top-left corner,
+    sticking outside by a few pixels so it reads as a stamp/postmark on
+    the message rather than as content. Translucent green accent against
+    the green user bubble; on light theme drops to a darker tone for
+    contrast. position: absolute relies on the bubble being relative
+    (it is — see .bubble's `position: relative` already). */
+  .cron-tag {
+    position: absolute;
+    top: -8px;
+    left: -8px;
+    z-index: 2;
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 1;
+    letter-spacing: 0.03em;
+    padding: 3px 7px;
+    border-radius: 999px;
+    background: var(--accent);
+    color: #fff;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18), 0 0 0 2px var(--surface);
+    pointer-events: none;
+    user-select: none;
+  }
+ /* On a USER bubble (right-aligned, row-reverse), the visual "top-left"
+    of the bubble in DOM order is actually its top-right on screen because
+    the row is reversed. Flip the badge horizontally so it lands at the
+    visible top-left corner. */
+  .row.user .cron-tag { left: auto; right: -8px; }
 
   .tool {
     align-self: center; margin: 3px auto;
