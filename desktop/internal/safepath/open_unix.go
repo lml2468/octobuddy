@@ -32,11 +32,11 @@ func OpenNoFollow(path string) (*os.File, error) {
 // plant `bundle/SKILL.md → ~/.ssh/authorized_keys` and have the operator's
 // next GUI save clobber the target. Returns ErrSymlinkLeaf in that case.
 //
-// Not atomic on its own — callers that need crash-safety should still route
-// through atomicfile.Write (which uses a temp + rename and is itself
-// symlink-safe by virtue of writing a fresh path then renaming over the
-// destination). This helper is for the simpler "open a target and write to
-// it" case that needs only the symlink refusal.
+// Not atomic on its own. For crash-safety (a kill -9 between O_TRUNC and the
+// final byte leaves a partial file) callers SHOULD route through
+// safepath.AtomicWriteNoFollow below, which combines the symlink refusal
+// with atomicfile's temp+rename. This bare helper is for the rare case
+// where the caller needs the open semantics without atomicity (none today).
 func WriteNoFollow(path string, data []byte, perm os.FileMode) error {
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|syscall.O_NOFOLLOW, perm)
 	if err != nil {

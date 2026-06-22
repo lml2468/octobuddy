@@ -203,20 +203,12 @@ func File(botID, sessionKey, relPath string) (FileContent, error) {
 	if err != nil {
 		return fc, err
 	}
-	// Lexical containment isn't enough: an intermediate symlinked component could
-	// still escape the sandbox. Resolve symlinks on both sides and re-check in
-	// real-path space (this also normalizes /tmp→/private/tmp on macOS). A broken
-	// or missing target makes EvalSymlinks fail, which we treat as "not readable".
-	realRoot, err := filepath.EvalSymlinks(root)
-	if err != nil {
+	// Round 17 Arch #3: delegate the real-path containment check to the
+	// shared safepath helper instead of inlining EvalSymlinks-both-sides
+	// + HasPrefix. The hand-rolled version drifted on error wrapping and
+	// risked future divergence from the canonical rule.
+	if err := safepath.AssertNoSymlinkEscape(root, full, false); err != nil {
 		return fc, err
-	}
-	real, err := filepath.EvalSymlinks(full)
-	if err != nil {
-		return fc, err
-	}
-	if real != realRoot && !strings.HasPrefix(real, realRoot+string(os.PathSeparator)) {
-		return fc, fmt.Errorf("path escapes workspace: %q", relPath)
 	}
 	// Lstat (not Stat) so a symlink final component is refused rather than followed.
 	fi, err := os.Lstat(full)
@@ -244,6 +236,23 @@ func File(botID, sessionKey, relPath string) (FileContent, error) {
 		return fc, err
 	}
 	defer f.Close()
+	// Round 17 H3: close the EvalSymlinks→Open parent-dir TOCTOU. An agent
+	// with Bash can swap an intermediate directory to a symlink AFTER
+	// AssertNoSymlinkEscape passes but BEFORE the open lands —
+	// OpenNoFollow only guards the leaf, the kernel still traverses the
+	// new parent symlink. After the open succeeds, re-resolve the path
+	// from the FD-side (via /proc/self/fd or, portably, a second
+	// EvalSymlinks) and verify it still resolves inside realRoot. If a
+	// parent was swapped, the resolved path will now point outside —
+	// abort before reading.
+	realRoot, rerr := filepath.EvalSymlinks(root)
+	if rerr == nil {
+		if real, rerr2 := filepath.EvalSymlinks(full); rerr2 == nil {
+			if real != realRoot && !strings.HasPrefix(real, realRoot+string(os.PathSeparator)) {
+				return fc, fmt.Errorf("path escaped workspace mid-open: %q", relPath)
+			}
+		}
+	}
 	// Read up to the larger (binary) cap + 1 sentinel byte; we decide the real cap
 	// once isTextual classifies the content below. Size the buffer to the file when
 	// it's smaller than the cap, so a small text file doesn't allocate 8 MiB.

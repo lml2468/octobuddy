@@ -207,9 +207,11 @@ func writeFileIn(root, name, rel, content string) error {
 	// Round 16 Go #1 / Sec H2: bare os.WriteFile would follow a symlink at
 	// the final component and clobber whatever it pointed at (an agent with
 	// Bash plants `bundle/SKILL.md → ~/.zshrc`, next GUI save overwrites
-	// .zshrc). WriteNoFollow refuses the leaf symlink atomically at open
-	// time.
-	if err := safepath.WriteNoFollow(full, []byte(content), 0o600); err != nil {
+	// .zshrc). Round 17 Go #4: upgraded from WriteNoFollow to
+	// AtomicWriteNoFollow so a crash mid-write can't leave a partial
+	// SKILL.md / bundle file behind — matches the round-15 crash-safety
+	// upgrade for SOUL/AGENTS.
+	if err := safepath.AtomicWriteNoFollow(full, []byte(content), 0o600); err != nil {
 		if errors.Is(err, safepath.ErrSymlinkLeaf) {
 			return fmt.Errorf("refusing to write through symlink: %q", rel)
 		}
@@ -237,12 +239,20 @@ func createIn(root, name string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
+	// Round 17 Sec H1: between the Lstat above and this MkdirAll, an
+	// agent with Bash can plant `<root>/<name> → /tmp/payload` —
+	// MkdirAll on an existing symlink-to-dir silently no-ops, and the
+	// next WriteNoFollow's O_NOFOLLOW only guards the leaf "SKILL.md",
+	// not the parent traversal. Re-verify the dir resolves inside root
+	// before writing into it.
+	if err := safepath.AssertNoSymlinkEscape(root, dir, true); err != nil {
+		return fmt.Errorf("refusing to create skill in tampered location %q: %w", name, err)
+	}
 	tmpl := fmt.Sprintf("---\nname: %s\ndescription: One line on when the agent should use this skill.\n---\n\n# %s\n\nDescribe what this skill does and how to use it.\n", name, name)
-	// Round 16 Go #2: bare os.WriteFile would follow a symlink at the
-	// SKILL.md leaf, letting an agent that planted the symlink before our
-	// MkdirAll clobber its target. WriteNoFollow refuses the symlink
-	// atomically at open time.
-	if err := safepath.WriteNoFollow(filepath.Join(dir, "SKILL.md"), []byte(tmpl), 0o644); err != nil {
+	// Round 16 Go #2 / round 17 Go #4: AtomicWriteNoFollow refuses
+	// SKILL.md if it's a symlink AND atomically commits via temp+rename
+	// so a crash mid-write can't leave a partial frontmatter file behind.
+	if err := safepath.AtomicWriteNoFollow(filepath.Join(dir, "SKILL.md"), []byte(tmpl), 0o644); err != nil {
 		if errors.Is(err, safepath.ErrSymlinkLeaf) {
 			return fmt.Errorf("refusing to write through symlink in new skill %q", name)
 		}

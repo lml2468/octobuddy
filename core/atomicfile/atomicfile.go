@@ -105,12 +105,18 @@ func Write(path string, data []byte, perm os.FileMode) (err error) {
 			cutoff := now.Add(-orphanTmpAge)
 			scanned := 0
 			for _, e := range entries {
+				if !strings.HasPrefix(e.Name(), tmpPrefix) {
+					continue
+				}
+				// Count only tmp-prefix candidates against the cap (round
+				// 17 R17-M1): incrementing scanned BEFORE the prefix
+				// check let an agent that planted hundreds of non-matching
+				// decoys ahead of a real orphan exhaust the budget before
+				// the orphan was even examined, INVERTING the DoS-
+				// mitigation into "never reap actual evidence".
 				scanned++
 				if scanned > maxReapScan {
 					break
-				}
-				if !strings.HasPrefix(e.Name(), tmpPrefix) {
-					continue
 				}
 				info, ierr := e.Info()
 				if ierr != nil || info.ModTime().After(cutoff) {

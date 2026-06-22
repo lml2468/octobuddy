@@ -133,10 +133,10 @@ func writeIn(root, name, content string) error {
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return err
 	}
-	// Round 16 Go #3: was os.WriteFile — followed leaf symlinks. WriteNoFollow
-	// refuses the symlink at open time so an agent-planted
-	// `bundle/foo.js → ~/.zshrc` can't be clobbered by an operator save.
-	if err := safepath.WriteNoFollow(p, []byte(content), 0o600); err != nil {
+	// Round 17 Go #4: AtomicWriteNoFollow combines the round-16 symlink
+	// refusal with atomicfile's temp+fsync+rename, so a crash mid-write
+	// can't leave a half-written workflow script behind.
+	if err := safepath.AtomicWriteNoFollow(p, []byte(content), 0o600); err != nil {
 		if errors.Is(err, safepath.ErrSymlinkLeaf) {
 			return fmt.Errorf("refusing to write through symlink: %q", name)
 		}

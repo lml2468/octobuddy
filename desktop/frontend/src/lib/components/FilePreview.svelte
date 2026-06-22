@@ -162,21 +162,21 @@
     <span class="spacer"></span>
 
     {#if isMarkdown || isHtml}
-      <div class="seg">
-        <button class:on={mdMode === "rendered"} onclick={() => (mdMode = "rendered")}>渲染</button>
-        <button class:on={mdMode === "raw"} onclick={() => (mdMode = "raw")}>源码</button>
+      <div class="seg" role="group" aria-label="渲染模式">
+        <button type="button" class:on={mdMode === "rendered"} aria-pressed={mdMode === "rendered"} onclick={() => (mdMode = "rendered")}>渲染</button>
+        <button type="button" class:on={mdMode === "raw"} aria-pressed={mdMode === "raw"} onclick={() => (mdMode = "raw")}>源码</button>
       </div>
     {/if}
     {#if isImage}
-      <div class="seg">
-        <button class:on={imgFit} onclick={() => (imgFit = true)}>适应</button>
-        <button class:on={!imgFit} onclick={() => (imgFit = false)}>原始</button>
+      <div class="seg" role="group" aria-label="图片尺寸">
+        <button type="button" class:on={imgFit} aria-pressed={imgFit} onclick={() => (imgFit = true)}>适应</button>
+        <button type="button" class:on={!imgFit} aria-pressed={!imgFit} onclick={() => (imgFit = false)}>原始</button>
       </div>
     {/if}
     {#if canCopy}
-      <button class="icon txt" onclick={copyAll}>{copied ? "已复制" : "复制"}</button>
+      <button type="button" class="icon txt" onclick={copyAll}>{copied ? "已复制" : "复制"}</button>
     {/if}
-    <button class="icon" title="关闭 (Esc)" aria-label="关闭预览" onclick={onclose}>
+    <button type="button" class="icon" title="关闭 (Esc)" aria-label="关闭预览" onclick={onclose}>
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
     </button>
   </header>

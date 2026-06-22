@@ -590,8 +590,13 @@ class Store {
       s.messages = persisted;
       return;
     }
-    const seen = new Set(persisted.map((m) => `${m.role}\x00${m.text}\x00${Math.round(m.ts)}`));
-    const localOnly = s.messages.filter((m) => !seen.has(`${m.role}\x00${m.text}\x00${Math.round(m.ts)}`));
+    // Round 17 FE #4: use Math.floor so the local fractional-second ts
+    // (send writes Date.now()/1000) matches the daemon's integer-
+    // truncated time.Now().Unix() — the prior Math.round straddled the
+    // 1-second boundary and the dedupe failed for local 1000.789 vs
+    // server 1000.
+    const seen = new Set(persisted.map((m) => `${m.role}\x00${m.text}\x00${Math.floor(m.ts)}`));
+    const localOnly = s.messages.filter((m) => !seen.has(`${m.role}\x00${m.text}\x00${Math.floor(m.ts)}`));
     s.messages = persisted.concat(localOnly);
   }
 

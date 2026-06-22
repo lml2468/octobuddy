@@ -350,6 +350,17 @@ func (m *Manager) Wait() { m.firesWG.Wait() }
 // read-modify-write fires due tasks and persists the survivor set in one pass,
 // so a concurrent create/delete can't lose updates.
 func (m *Manager) Tick() {
+	// Round 17 Go #1: refuse to fire while no bot owner has been resolved
+	// yet (connector.Run hasn't successfully registered with octo-server,
+	// or the bot is between OwnerUID rotations). The SetOwnerUID prune
+	// runs from OnOwner — between cm.Start and the first OnOwner callback
+	// there's a window where a tick could fire persisted tasks under the
+	// PRIOR owner's identity (round 9 F1 partial re-open). Holding fires
+	// until owner is known closes that window. Tasks aren't lost: the
+	// next Tick after OwnerUID arrives fires them normally.
+	if m.OwnerUID() == "" {
+		return
+	}
 	now := m.now()
 	nowMS := unixMS(now)
 	var fires []Fire

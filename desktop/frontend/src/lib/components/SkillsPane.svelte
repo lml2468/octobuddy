@@ -65,23 +65,39 @@
 
   async function selectSkill(name: string) {
     sel = name; activeFile = null; content = ""; dirty = false; error = "";
+    // Generation counter (round 17 FE #2): clicking skill A → B fast,
+    // A's slower BotSkillFiles response used to land second and overwrite
+    // B's files list — then auto-openFile(first) read A's SKILL.md into
+    // B's editor, and a "保存" wrote A's content into B's file. Discard
+    // any response whose target skill is no longer selected.
+    const gen = ++selectGen;
+    const capturedBot = botId;
     try {
-      files = isPreview
-        ? Object.keys(mockBot[botId]?.[name] ?? {}).sort()
-        : ((await XClawService.BotSkillFiles(botId, name)) ?? []) as string[];
+      const next = isPreview
+        ? Object.keys(mockBot[capturedBot]?.[name] ?? {}).sort()
+        : ((await XClawService.BotSkillFiles(capturedBot, name)) ?? []) as string[];
+      if (gen !== selectGen || capturedBot !== botId || sel !== name) return;
+      files = next;
       const first = files.find((f) => f === "SKILL.md") ?? files[0];
       if (first) openFile(first);
-    } catch (e) { error = errMsg(e); }
+    } catch (e) { if (gen === selectGen) error = errMsg(e); }
   }
+  let selectGen = 0;
 
   async function openFile(rel: string) {
     if (dirty && !(await confirm({ message: "放弃未保存的改动?", confirmLabel: "放弃", danger: true }))) return;
     activeFile = rel; error = "";
+    // Same generation guard for file reads (round 17 FE #2).
+    const gen = ++openGen;
+    const capturedBot = botId, capturedSel = sel;
     try {
-      content = isPreview ? (mockBot[botId]?.[sel!]?.[rel] ?? "") : await XClawService.BotSkillRead(botId, sel!, rel);
+      const text = isPreview ? (mockBot[capturedBot]?.[capturedSel!]?.[rel] ?? "") : await XClawService.BotSkillRead(capturedBot, capturedSel!, rel);
+      if (gen !== openGen || capturedBot !== botId || capturedSel !== sel || activeFile !== rel) return;
+      content = text;
       dirty = false;
-    } catch (e) { error = errMsg(e); }
+    } catch (e) { if (gen === openGen) error = errMsg(e); }
   }
+  let openGen = 0;
 
   async function saveFile() {
     if (!sel || !activeFile) return;

@@ -53,6 +53,13 @@
   let cliBusy = $state(false);
   let cliError = $state("");
   let cliNotice = $state("");
+  // Generation counter (round 17 FE #3): switching bots A → B fast,
+  // A's slower OctoCliStatus response landed second and overwrote
+  // cliRegistered/cliRobotId while B was displayed — the dot
+  // misrepresented B's profile and a subsequent "登出" acted on the
+  // wrong identity. Discard any response whose bot is no longer
+  // current.
+  let cliStatusGen = 0;
   async function refreshCliStatus() {
     cliError = "";
     cliNotice = "";
@@ -61,8 +68,11 @@
       cliRobotId = bot.env?.OCTO_BOT_ID ?? "";
       return;
     }
+    const gen = ++cliStatusGen;
+    const capturedId = bot.id;
     try {
-      const s = await XClawService.OctoCliStatus(bot.id);
+      const s = await XClawService.OctoCliStatus(capturedId);
+      if (gen !== cliStatusGen || capturedId !== bot.id) return;
       cliRegistered = !!s?.registered;
       cliRobotId = s?.robotId ?? "";
     } catch (e) { cliError = errMsg(e); }
