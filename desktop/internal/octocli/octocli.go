@@ -35,6 +35,7 @@ import (
 	"github.com/lml2468/xclaw/core/atomicfile"
 	"github.com/lml2468/xclaw/core/config"
 	"github.com/lml2468/xclaw/desktop/internal/octoapi"
+	"github.com/lml2468/xclaw/desktop/internal/safepath"
 )
 
 const repo = "Mininglamp-OSS/octo-cli"
@@ -118,8 +119,14 @@ func InstalledVersion() string {
 	return strings.TrimSpace(string(b))
 }
 
+// writeVersion records the installed octo-cli version. Round 19 Sec #2:
+// routed through safepath.SafeWrite so an agent-planted
+// `~/.xclaw/bin/octo-cli.version → ~/Library/LaunchAgents/x.plist` can't
+// hijack the write into operator-launched plists. (The bare
+// os.WriteFile would have followed the symlink and written
+// attacker-chosen content under the operator's uid.)
 func writeVersion(v string) {
-	_ = os.WriteFile(versionFile(), []byte(strings.TrimSpace(v)+"\n"), 0o644)
+	_ = safepath.SafeWrite(Dir(), "octo-cli.version", []byte(strings.TrimSpace(v)+"\n"), 0o644)
 }
 
 // bundledBinary returns the octo-cli shipped inside the app bundle
@@ -344,8 +351,11 @@ func Upgrade(ctx context.Context) (string, error) {
 	// Snapshot the current binary as .prev before replacing it, so a bad upgrade
 	// (verified checksum but non-functional binary) has a known-good rollback
 	// point. Best-effort: a missing current binary (first install) just skips it.
+	// Round 19 Sec #2: routed through safepath so an agent-planted
+	// `~/.xclaw/bin/octo-cli.prev → <attacker-writable-path>` can't redirect
+	// the 0o700-mode write (executable!) to a path of the attacker's choosing.
 	if cur, rerr := os.ReadFile(BinPath()); rerr == nil {
-		_ = os.WriteFile(BinPath()+".prev", cur, 0o700)
+		_ = safepath.SafeWrite(Dir(), binName()+".prev", cur, 0o700)
 	}
 	if err := installBinary("", bin); err != nil {
 		return "", err

@@ -386,10 +386,16 @@ func mergeCtx(dst *ContextConfig, src *ContextConfig) {
 // soul assembles the bot's operator-trusted system prompt from two files in its
 // dir: SOUL.md (identity/persona) followed by AGENTS.md (behavior norms). Each
 // is trimmed; missing/empty files are skipped. Returns "" if neither exists.
+//
+// Round 19 Sec #1: opens with O_NOFOLLOW so an agent (Bash + bypass) that
+// plants `~/.xclaw/<id>/SOUL.md → /Users/victim/.aws/credentials` cannot
+// redirect the trusted-prompt source. The bytes from the symlink target
+// would otherwise have been injected verbatim as TrustedText into every
+// system prompt, leaking the file contents on next reply.
 func soul(botRoot string) string {
 	var parts []string
 	for _, name := range []string{"SOUL.md", "AGENTS.md"} {
-		data, err := os.ReadFile(filepath.Join(botRoot, name))
+		data, err := readNoFollow(filepath.Join(botRoot, name))
 		if err != nil {
 			continue
 		}
@@ -399,6 +405,12 @@ func soul(botRoot string) string {
 	}
 	return strings.Join(parts, "\n\n")
 }
+
+// readNoFollow is defined per-OS (config_read_unix.go / config_read_windows.go).
+// On Unix it opens with O_NOFOLLOW so a symlinked SOUL.md / AGENTS.md is
+// refused at open time. On Windows there's no O_NOFOLLOW analogue; the
+// fallback Lstats first then opens, with the documented small TOCTOU
+// window (Windows symlinks require admin/Developer Mode).
 
 // assertGroupConfigDirOutsideCwd enforces that groupConfigDir (whose files are
 // injected UNSANITIZED into the system prompt) is neither the agent-writable

@@ -270,10 +270,28 @@ func BotCreate(botID, name string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(root, 0o755); err != nil {
+	// Round 19 Sec #4: the prior `os.MkdirAll(root, 0o755)` followed any
+	// symlinked intermediate component — an agent that planted
+	// `~/.xclaw/<id>/.claude → /etc` would silently get `/etc/skills`
+	// created before the SafeMkdirAll guard inside createIn could refuse.
+	// Walk from $HOME via dirfd so every component is O_NOFOLLOW-checked.
+	if err := ensureBotSkillsDir(botID); err != nil {
 		return err
 	}
 	return createIn(root, name)
+}
+
+// ensureBotSkillsDir creates ~/.xclaw/<botID>/.claude/skills via the
+// dirfd-walk SafeMkdirAll so every intermediate component is symlink-refused.
+// Skipping a regular MkdirAll here closes round 19 Sec #4.
+func ensureBotSkillsDir(botID string) error {
+	if !safepath.ValidSlug(botID) {
+		return fmt.Errorf("invalid bot id %q", botID)
+	}
+	home, _ := os.UserHomeDir()
+	// `~/` is operator-trusted (operator shell == operator's own dirs);
+	// every component below is agent-reachable and gets checked.
+	return safepath.SafeMkdirAll(home, ".xclaw/"+botID+"/.claude/skills", 0o755)
 }
 
 // BotDelete removes one of the bot's skill bundles entirely.

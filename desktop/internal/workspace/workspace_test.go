@@ -114,17 +114,14 @@ func TestSymlinkNotFollowed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Tree: %v", err)
 	}
-	var esc *Node
+	// Round 19 Arch #4: symlinks are now skipped from the workspace
+	// listing entirely (matches skills/workflows policy). Tampering
+	// signals don't get rendered as click-targets that resolve to
+	// "refusing to read symlink" errors.
 	for _, c := range tree.Children {
 		if c.Name == "escape" {
-			esc = c
+			t.Fatalf("symlink entry must be skipped from tree, got %+v", c)
 		}
-	}
-	if esc == nil {
-		t.Fatal("symlink entry missing from tree")
-	}
-	if esc.IsDir || esc.Children != nil {
-		t.Fatalf("symlink must be a non-descended leaf, got %+v", esc)
 	}
 	// File() must refuse to read through the symlink.
 	if _, err := File("bot1", "u1", "escape/secret.txt"); err == nil {

@@ -102,8 +102,13 @@ Key invariants to preserve:
   them as user-scope assets every spawn — no per-turn sandbox symlinking, no
   shared marketplace, no install/uninstall concept. The gateway has no
   knowledge of skills/workflows; CRUD is the desktop's job
-  (`desktop/internal/skills` + `desktop/internal/workflows` with slug +
-  path-traversal validation). Managed from the desktop per-bot Skills /
+  (`desktop/internal/skills` + `desktop/internal/workflows`). All local-file
+  I/O for skills, workflows, the workspace previewer, and SOUL/AGENTS reads
+  routes through `desktop/internal/safepath`, which owns slug validation +
+  lexical containment + structural symlink refusal (dirfd-walk on unix,
+  Lstat-chain on windows). Callers MUST NOT do their own `Lstat` /
+  `EvalSymlinks` / `O_NOFOLLOW` for paths under a `root` — those concerns
+  live in safepath, period. Managed from the desktop per-bot Skills /
   Workflows windows.
 - **Agent config isolation** (`config.DriverEnvWith`): each bot's `claude` runs
   with `CLAUDE_CONFIG_DIR=~/.xclaw/<id>/.claude` so it does NOT inherit the

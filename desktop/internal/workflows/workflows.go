@@ -115,13 +115,22 @@ func writeIn(root, name, content string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(root, 0o755); err != nil {
-		return err
-	}
 	if err := safepath.SafeWrite(root, rel, []byte(content), 0o600); err != nil {
 		return translateSymlink("write through", name, err)
 	}
 	return nil
+}
+
+// ensureBotWorkflowsDir creates ~/.xclaw/<botID>/.claude/workflows via the
+// dirfd-walk SafeMkdirAll so every intermediate component is symlink-
+// refused. Round 19 Sec #4: replaces the prior `os.MkdirAll(root, …)`
+// in writeIn that followed any symlinked intermediate component.
+func ensureBotWorkflowsDir(botID string) error {
+	if !safepath.ValidSlug(botID) {
+		return fmt.Errorf("invalid bot id %q", botID)
+	}
+	home, _ := os.UserHomeDir()
+	return safepath.SafeMkdirAll(home, ".xclaw/"+botID+"/.claude/workflows", 0o755)
 }
 
 func createIn(root, name string) error {
@@ -171,6 +180,9 @@ func BotWrite(botID, name, content string) error {
 	if err != nil {
 		return err
 	}
+	if err := ensureBotWorkflowsDir(botID); err != nil {
+		return err
+	}
 	return writeIn(root, name, content)
 }
 
@@ -178,6 +190,9 @@ func BotWrite(botID, name, content string) error {
 func BotCreate(botID, name string) error {
 	root, err := botDir(botID)
 	if err != nil {
+		return err
+	}
+	if err := ensureBotWorkflowsDir(botID); err != nil {
 		return err
 	}
 	return createIn(root, name)

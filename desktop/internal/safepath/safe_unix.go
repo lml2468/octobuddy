@@ -117,6 +117,11 @@ func splitLeaf(rel string) (string, string, error) {
 // SafeOpen opens <root>/<rel> read-only with structural symlink refusal at
 // every component. The returned *os.File is guaranteed to be a regular file
 // reached without traversing any symlink. Caller MUST Close.
+//
+// Round 19 Go #2: opens with O_NONBLOCK and post-fstats to reject FIFOs,
+// devices, sockets — an agent with Bash in its sandbox can mkfifo a file
+// in workspace/, then a click in the file-preview pane would otherwise
+// block the desktop's Wails IPC handler forever waiting for a writer.
 func SafeOpen(root, rel string) (*os.File, error) {
 	if _, err := ResolveLexical(root, rel); err != nil {
 		return nil, err
@@ -130,11 +135,32 @@ func SafeOpen(root, rel string) (*os.File, error) {
 		return nil, err
 	}
 	defer parent.Close()
-	fd, err := unix.Openat(int(parent.Fd()), leaf, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	fd, err := unix.Openat(int(parent.Fd()), leaf, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return nil, classifyOpenErr(int(parent.Fd()), leaf, err, rel)
 	}
-	return os.NewFile(uintptr(fd), filepath.Join(root, rel)), nil
+	f := os.NewFile(uintptr(fd), filepath.Join(root, rel))
+	// Reject anything that isn't a regular file BEFORE handing the FD to
+	// the caller (who will likely io.ReadAll it — that's where a FIFO
+	// reader would block). Then clear O_NONBLOCK so the regular-file read
+	// uses the normal blocking path (regular files don't actually block,
+	// so this is purely a hygiene step).
+	var st unix.Stat_t
+	if serr := unix.Fstat(int(f.Fd()), &st); serr != nil {
+		f.Close()
+		return nil, serr
+	}
+	if st.Mode&unix.S_IFMT != unix.S_IFREG {
+		f.Close()
+		return nil, fmt.Errorf("safepath: not a regular file: %q", rel)
+	}
+	// Clear O_NONBLOCK now that we know it's a regular file (no-op
+	// behavior-wise but keeps the FD's flags in their "normal" state for
+	// any io.Reader that introspects them).
+	if flags, ferr := unix.FcntlInt(uintptr(f.Fd()), unix.F_GETFL, 0); ferr == nil {
+		_, _ = unix.FcntlInt(uintptr(f.Fd()), unix.F_SETFL, flags&^unix.O_NONBLOCK)
+	}
+	return f, nil
 }
 
 // SafeRead is SafeOpen + ReadAll. Cap is enforced via io.LimitReader; pass 0

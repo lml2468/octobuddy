@@ -272,7 +272,15 @@ func Save(bots []BotConfig, removedIDs []string) error {
 	// Per-bot side effects (idempotent). On failure, config.json already
 	// reflects the intended set and a retry re-applies these.
 	for _, b := range bots {
-		if err := os.MkdirAll(botDir(b.ID), 0o755); err != nil {
+		// Round 19 Sec #4: was `os.MkdirAll(botDir(b.ID), 0o755)` which
+		// follows symlinks at every intermediate component. An agent that
+		// plants `~/.xclaw/<newbotID>` as a symlink to `~/.ssh/` BEFORE
+		// the first SaveConfig would silently get future SOUL.md writes
+		// landing under .ssh — and worse, the operator-trusted prompt
+		// source would thereafter be agent-controlled. SafeMkdirAll
+		// walks via dirfd, refusing symlinks at every component.
+		home, _ := os.UserHomeDir()
+		if err := safepath.SafeMkdirAll(home, ".xclaw/"+b.ID, 0o755); err != nil {
 			return err
 		}
 		// SOUL.md / AGENTS.md handling:
@@ -328,7 +336,14 @@ func Save(bots []BotConfig, removedIDs []string) error {
 		if _, err := os.Stat(filepath.Join(botDir(id), "data")); err != nil {
 			continue // no data/ child → not an established bot dir; never RemoveAll
 		}
-		_ = os.RemoveAll(botDir(id))
+		// Round 19 Sec #3: was `os.RemoveAll(botDir(id))` which descends
+		// into symlinked subdirectories — an agent that planted
+		// `~/.xclaw/<id>/data/x → ~/Documents` would have Documents
+		// contents unlinked when the operator deleted the bot. SafeRemoveAll
+		// (via removeAllAt) opens each subdir with O_NOFOLLOW|O_DIRECTORY
+		// so a symlinked entry is unlinked rather than followed.
+		home, _ := os.UserHomeDir()
+		_ = safepath.SafeRemoveAll(home, ".xclaw/"+id)
 		_ = secrets.Delete(id, secrets.OctoToken)
 		_ = secrets.Delete(id, secrets.GatewayToken)
 		// Clear the matching octo-cli disk profile too, so a re-add of the same
@@ -348,8 +363,15 @@ func Save(bots []BotConfig, removedIDs []string) error {
 	return nil
 }
 
+// readBotFile reads SOUL.md / AGENTS.md from a bot's dir. Routed through
+// safepath.SafeRead so a symlinked file (e.g. an agent-planted
+// `~/.xclaw/<id>/SOUL.md → ~/.aws/credentials`) is refused at open time
+// instead of having its target read back to the GUI editor (round 19 Sec #1).
 func readBotFile(id, name string) string {
-	raw, err := os.ReadFile(filepath.Join(botDir(id), name))
+	if !safepath.ValidSlug(id) {
+		return ""
+	}
+	raw, err := safepath.SafeRead(botDir(id), name, 1<<20) // 1 MiB cap
 	if err != nil {
 		return ""
 	}

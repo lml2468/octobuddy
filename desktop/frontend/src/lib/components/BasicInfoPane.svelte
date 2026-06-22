@@ -13,12 +13,17 @@
   let { bot = $bindable<BotConfig>(), ondirty, ondelete }:
     { bot: BotConfig; ondirty: () => void; ondelete: () => void } = $props();
 
-  type Row = { k: string; v: string };
+  // Stable per-row id so Svelte's keyed each preserves DOM nodes when the
+  // user deletes a row — without it, every subsequent row's <input> remounts
+  // and the user's caret jumps out (round 19 FE #7).
+  type Row = { id: number; k: string; v: string };
+  let rowSeq = 0;
+  function newRow(k: string, v: string): Row { rowSeq += 1; return { id: rowSeq, k, v }; }
   let rows = $state<Row[]>([]);
   $effect(() => {
     bot.id; // re-seed on bot switch
     const e = bot.env ?? {};
-    rows = Object.entries(e).filter(([k]) => !RESERVED_ENV_KEYS.has(k)).map(([k, v]) => ({ k, v: String(v ?? "") }));
+    rows = Object.entries(e).filter(([k]) => !RESERVED_ENV_KEYS.has(k)).map(([k, v]) => newRow(k, String(v ?? "")));
   });
   function commitEnv() {
     // Preserve reserved keys (owned by other panes) by passing them through
@@ -51,7 +56,7 @@
 
   <fieldset>
     <legend>环境变量</legend>
-    {#each rows as row, i (row)}
+    {#each rows as row, i (row.id)}
       <div class="envrow">
         <input class="k" bind:value={row.k} oninput={commitEnv} placeholder="KEY" aria-label="环境变量名" />
         <span>=</span>
@@ -59,7 +64,7 @@
         <button class="del" onclick={() => { rows = rows.filter((_, x) => x !== i); commitEnv(); }} aria-label="删除">−</button>
       </div>
     {/each}
-    <button class="add sm" onclick={() => { rows = [...rows, { k: "", v: "" }]; }}>+ 添加变量</button>
+    <button class="add sm" onclick={() => { rows = [...rows, newRow("", "")]; }}>+ 添加变量</button>
     <small class="hint">OCTO_BOT_ID 在「Octo 集成」中管理，不出现在这里。</small>
   </fieldset>
 

@@ -143,17 +143,22 @@ func readDir(root, rel string, depth int, count *int) ([]*Node, error) {
 		if !e.IsDir() && skipFile(name) {
 			continue
 		}
+		// Round 19 Arch #4: skip symlinked entries entirely instead of
+		// surfacing them as bogus leaves. Clicking one would invoke
+		// File() → SafeOpen → ErrSymlink ("refusing to read symlink") —
+		// click-to-error noise that no legitimate workflow produces.
+		// Matches the skills/workflows listing policy: symlinks under
+		// these agent-writable dirs are tampering signals, not content.
+		if e.Type()&os.ModeSymlink != 0 {
+			continue
+		}
 		*count++
 		childRel := name
 		if rel != "" {
 			childRel = rel + "/" + name
 		}
-		// Never follow symlinks: a symlinked dir would let an agent escape
-		// the sandbox in the tree view. Surface as leaf.
-		isSymlink := e.Type()&os.ModeSymlink != 0
-		isDir := e.IsDir() && !isSymlink
-		n := &Node{Name: name, Path: childRel, IsDir: isDir}
-		if isDir && depth < maxDepth && !skipDir(name) {
+		n := &Node{Name: name, Path: childRel, IsDir: e.IsDir()}
+		if e.IsDir() && depth < maxDepth && !skipDir(name) {
 			kids, err := readDir(root, childRel, depth+1, count)
 			if err == nil {
 				n.Children = kids
