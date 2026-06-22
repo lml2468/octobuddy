@@ -25,7 +25,7 @@
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^7.0.0",
     "@tsconfig/svelte": "^5.0.8",
-    "@types/dompurify": "^3.0.5",
+    "@types/dompurify": "^3.2.0",
     "playwright-core": "^1.61.0",
     "svelte": "^5.46.4",
     "svelte-check": "^4.4.8",
