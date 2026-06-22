@@ -675,8 +675,8 @@ class Store {
  // user message every time the boundary lined up. The tuple compare
  // matches when the server has acknowledged the message, otherwise
  // keeps the local copy.
-    const persisted = rows.map((r) => ({
-      id: newId(), role: r.role as Role, text: r.content, ts: r.ts,
+    const persisted: Message[] = rows.map((r) => ({
+      id: newId(), role: r.role as Role, text: r.content, ts: r.ts, cron: !!r.cron,
     }));
     if (s.messages.length === 0) {
       s.messages = persisted;

@@ -534,8 +534,11 @@ func (g *Gateway) runTurn(ctx context.Context, sessionKey string, msg router.Inb
 	}
 	prompt := g.buildGroupPrompt(sessionKey, msg)
 
-	// Persist the (original) user message.
-	if err := g.store.AppendUser(sessionKey, msg.Text, msg.FromName); err != nil {
+	// Persist the (original) user message. CronFire is persisted so the
+	// desktop GUI's cron badge survives a chat-window reload — without it,
+	// reopening a conversation would replay every prior scheduler-fired
+	// prompt as if it had been typed by a human.
+	if err := g.store.AppendUser(sessionKey, msg.Text, msg.FromName, msg.CronFire); err != nil {
 		return g.failTurn(sessionKey, "store.AppendUser", err)
 	}
 

@@ -27,6 +27,12 @@ type Message struct {
 	Content   string
 	Timestamp int64
 	FromName  string
+	// Cron marks a user-row that originated from the scheduler rather than
+	// a real human inbound. Persisted so the desktop GUI's "cron" corner
+	// badge survives a reload of the chat window — without this, every
+	// reopened conversation would lose the badge on prior cron fires.
+	// Always false for assistant rows.
+	Cron bool
 }
 
 // Store is the SQLite-backed persistence layer. Pure-Go SQLite keeps the core a
@@ -52,6 +58,12 @@ CREATE TABLE IF NOT EXISTS messages (
   content    TEXT NOT NULL,
   timestamp  INTEGER NOT NULL,
   from_name  TEXT,
+  -- cron marks a user-role row as a scheduler-fired prompt rather than
+  -- a real human inbound. Persisted so the desktop GUI's "cron" corner
+  -- badge survives a chat-window reload (history fetch replays from
+  -- here — without persistence every reopened conversation would lose
+  -- the badge and conflate scheduled prompts with operator-typed ones).
+  cron       INTEGER NOT NULL DEFAULT 0,
   FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
 );
 
@@ -131,6 +143,9 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 	if err := migrateTokenUsage(db); err != nil {
+		return nil, err
+	}
+	if err := migrateMessagesAddCron(db); err != nil {
 		return nil, err
 	}
 	return &Store{db: db, now: time.Now}, nil
@@ -328,19 +343,23 @@ func (s *Store) GetOrCreate(id, channelID string, channelType int) (Session, err
 
 // --- messages ---
 
-func (s *Store) AppendUser(sessionID, content, fromName string) error {
-	return s.appendMessage(sessionID, RoleUser, content, fromName)
+func (s *Store) AppendUser(sessionID, content, fromName string, cron bool) error {
+	return s.appendMessage(sessionID, RoleUser, content, fromName, cron)
 }
 
 func (s *Store) AppendAssistant(sessionID, content, botName string) error {
-	return s.appendMessage(sessionID, RoleAssistant, content, botName)
+	return s.appendMessage(sessionID, RoleAssistant, content, botName, false)
 }
 
-func (s *Store) appendMessage(sessionID string, role Role, content, fromName string) error {
+func (s *Store) appendMessage(sessionID string, role Role, content, fromName string, cron bool) error {
 	now := s.now().Unix()
+	cronVal := 0
+	if cron {
+		cronVal = 1
+	}
 	_, err := s.db.Exec(
-		`INSERT INTO messages(session_id, role, content, timestamp, from_name) VALUES(?,?,?,?,?)`,
-		sessionID, string(role), content, now, fromName)
+		`INSERT INTO messages(session_id, role, content, timestamp, from_name, cron) VALUES(?,?,?,?,?,?)`,
+		sessionID, string(role), content, now, fromName, cronVal)
 	if err != nil {
 		return fmt.Errorf("append %s: %w", role, err)
 	}
@@ -357,7 +376,7 @@ func (s *Store) appendMessage(sessionID string, role Role, content, fromName str
 // order (oldest first), for first-turn history injection.
 func (s *Store) RecentMessages(sessionID string, limit int) ([]Message, error) {
 	rows, err := s.db.Query(
-		`SELECT role, content, timestamp, COALESCE(from_name,'')
+		`SELECT role, content, timestamp, COALESCE(from_name,''), cron
 		 FROM messages WHERE session_id=? ORDER BY id DESC LIMIT ?`,
 		sessionID, limit)
 	if err != nil {
@@ -368,10 +387,12 @@ func (s *Store) RecentMessages(sessionID string, limit int) ([]Message, error) {
 	for rows.Next() {
 		var m Message
 		var role string
-		if err := rows.Scan(&role, &m.Content, &m.Timestamp, &m.FromName); err != nil {
+		var cron int
+		if err := rows.Scan(&role, &m.Content, &m.Timestamp, &m.FromName, &cron); err != nil {
 			return nil, err
 		}
 		m.Role = Role(role)
+		m.Cron = cron != 0
 		out = append(out, m)
 	}
 	// reverse to chronological (oldest first)
@@ -615,3 +636,35 @@ func (s *Store) ClearHistory(sessionID string) error {
 }
 
 // --- maintenance ---
+
+// migrateMessagesAddCron idempotently adds the `cron` column to the
+// messages table for DBs created before the cron-badge persistence change.
+// SQLite's IF NOT EXISTS in CREATE TABLE doesn't touch existing tables, so
+// older DBs need an explicit ADD COLUMN. PRAGMA table_info is the portable
+// way to check column presence; a successful ALTER backfills DEFAULT 0
+// against every existing row (i.e., legacy rows count as non-cron).
+func migrateMessagesAddCron(db *sql.DB) error {
+	rows, err := db.Query(`PRAGMA table_info(messages)`)
+	if err != nil {
+		return fmt.Errorf("migrate messages.cron check: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, ctype, dflt sql.NullString
+		var notnull, pk int
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return fmt.Errorf("migrate messages.cron scan: %w", err)
+		}
+		if name.String == "cron" {
+			return nil // already present
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("migrate messages.cron rows: %w", err)
+	}
+	if _, err := db.Exec(`ALTER TABLE messages ADD COLUMN cron INTEGER NOT NULL DEFAULT 0`); err != nil {
+		return fmt.Errorf("migrate messages.cron add column: %w", err)
+	}
+	return nil
+}

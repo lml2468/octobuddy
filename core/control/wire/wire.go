@@ -358,6 +358,11 @@ type HistoryMessage struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
 	TS      int64  `json:"ts"`
+	// Cron is true for user rows that originated from the scheduler (cron
+	// task fired). The renderer uses it to badge the bubble — preserved
+	// through persistence so a chat-window reload doesn't lose the marker
+	// on prior fires.
+	Cron bool `json:"cron,omitempty"`
 }
 
 // HistoryResponse is the session.history response. It echoes the requested botId

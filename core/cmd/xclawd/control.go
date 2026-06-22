@@ -406,7 +406,7 @@ func makeHandler(ctx context.Context, deps handlerDeps) control.CommandHandler {
 func historyFromMessages(msgs []store.Message) []control.HistoryMessage {
 	out := make([]control.HistoryMessage, 0, len(msgs))
 	for _, m := range msgs {
-		out = append(out, control.HistoryMessage{Role: string(m.Role), Content: m.Content, TS: m.Timestamp})
+		out = append(out, control.HistoryMessage{Role: string(m.Role), Content: m.Content, TS: m.Timestamp, Cron: m.Cron})
 	}
 	return out
 }
