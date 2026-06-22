@@ -109,14 +109,20 @@
   }
 
  // ---- create / edit modal ----
-  type Target = "console" | "dm" | "group";
+ // DM target removed from the picker: in practice the operator drives the
+ // bot for either "post into a channel I'm in" (Group) or "remind / nudge
+ // myself" (Console). DMing a specific peer on a schedule is rare AND
+ // surprising for the receiver — landing it as a feature gap rather than
+ // a footgun. Existing DM tasks left from earlier versions still load
+ // (the daemon doesn't care) and render in the table as "DM" with edit
+ // disabled — operator can delete + recreate via Console/Group.
+  type Target = "console" | "group";
   let modalOpen = $state(false);
   let editingId = $state<string | null>(null);
   let formSchedule = $state("0 9 * * *");
   let formRecurring = $state(true);
   let formPrompt = $state("");
   let formTarget = $state<Target>("console");
-  let formDmUid = $state("");
   let formGroupId = $state("");
   let formFromName = $state("");
   let formError = $state("");
@@ -128,7 +134,6 @@
     formRecurring = true;
     formPrompt = "";
     formTarget = "console";
-    formDmUid = "";
     formGroupId = "";
     formFromName = "";
     formError = "";
@@ -142,20 +147,16 @@
     formRecurring = task.recurring;
     formPrompt = task.prompt ?? "";
     formFromName = task.fromName ?? "";
+    formGroupId = "";
     if (task.channelType === 3) {
       formTarget = "console";
     } else if (task.channelType === 2) {
       formTarget = "group";
       formGroupId = task.channelId ?? "";
     } else {
-     // DM — the body doesn't echo back fromUid (operator-internal), so
-     // the renderer can't pre-fill the peer uid on edit. Show the field
-     // empty with a placeholder reminding the operator to re-enter if
-     // changing the DM target; leaving it blank keeps the existing
-     // binding (the daemon's Update accepts an empty FromUID since the
-     // owner is server-resolved).
-      formTarget = "dm";
-      formDmUid = "";
+     // Legacy DM task — picker no longer offers DM, default the edit
+     // form to Console. Operator can re-target or just delete + recreate.
+      formTarget = "console";
     }
     formError = "";
     modalOpen = true;
@@ -166,33 +167,25 @@
     formError = "";
     if (isPreview) { modalOpen = false; return; }
    // Channel coords derived from the target choice. ChannelType convention:
-   //   1 = DM, 2 = Group, 3 = Console (matches core/cron/store.go).
+   //   2 = Group, 3 = Console (matches core/cron/store.go).
    //
-   // fromUid carries the TARGET of the task, distinct from auth uid (which
-   // the server resolves itself). For DM the user-typed peer uid lands here;
-   // for Console the backend stamps cron.ConsoleUID regardless so the GUI
-   // sends CONSOLE_UID for clarity; for Group the backend ignores fromUid
-   // and stamps the owner. On EDIT, an empty fromUid is the "preserve
-   // existing target" signal — Manager.Update reads the stored task and
-   // leaves coords alone when the body's coord triplet is zero.
+   // fromUid: for Console the backend stamps cron.ConsoleUID regardless so
+   // we send CONSOLE_UID for clarity; for Group the backend ignores fromUid
+   // and stamps the owner.
     let channelId = "";
-    let channelType = 1;
+    let channelType = 3;
     let fromUid = "";
     let fromName = formFromName.trim();
     if (formTarget === "console") {
       channelType = 3;
       fromUid = CONSOLE_UID;
       if (!fromName) fromName = "控制台";
-    } else if (formTarget === "group") {
+    } else {
+      // Group
       channelType = 2;
       channelId = formGroupId.trim();
       if (!channelId) { formError = "请选择一个群"; return; }
       // fromUid stays "" — Group tasks fire as the owner; backend ignores body fromUid for Group.
-    } else {
-      channelType = 1;
-      fromUid = formDmUid.trim();
-      if (!editingId && !fromUid) { formError = "请填写对方的 uid"; return; }
-      // editingId + blank fromUid: preserve existing peer binding.
     }
     formBusy = true;
     try {
@@ -352,14 +345,10 @@
           <span class="lbl">目标</span>
           <div class="seg">
             <button class:active={formTarget === "console"} onclick={() => formTarget = "console"} type="button">控制台</button>
-            <button class:active={formTarget === "dm"} onclick={() => formTarget = "dm"} type="button">DM</button>
             <button class:active={formTarget === "group"} onclick={() => formTarget = "group"} type="button">群</button>
           </div>
           {#if formTarget === "console"}
             <small class="hint">触发结果会出现在该 Bot 的桌面 Console 会话。</small>
-          {:else if formTarget === "dm"}
-            <input class="mono" bind:value={formDmUid} placeholder={editingId ? "留空保持当前绑定" : "对方 uid"} />
-            <small class="hint">直接到点向该 uid 的 DM 发起一次回合。</small>
           {:else}
             <select bind:value={formGroupId}>
               <option value="" disabled>— 选择一个群 —</option>
@@ -370,7 +359,7 @@
             {#if groupsError}
               <small class="err">无法加载群列表：{groupsError}</small>
             {:else if groups.length === 0}
-              <small class="hint">没有群，或该 Bot 的 octo-cli 未登录。</small>
+              <small class="hint">octo-cli 未返回任何群。Bot 需要先被拉进至少一个群（IM 客户端发起邀请），下次打开此对话框即可看到。</small>
             {/if}
           {/if}
         </div>
