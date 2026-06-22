@@ -159,10 +159,14 @@
 
   function onKey(e: KeyboardEvent) {
  // Don't close the file preview when another modal (SettingsModal,
- // TokenUsage, Confirm) has handled Esc — its own listener calls
- // preventDefault, and a second Esc handler closing the preview
- // underneath the modal is a "wait, why did my file close" surprise
- // when the operator just wanted to dismiss the modal.
+ // TokenUsage, Confirm) has handled Esc — those stop propagation in
+ // their own keydown handlers so this svelte:window listener
+ // shouldn't normally see the event at all. The defaultPrevented
+ // guard is belt-and-suspenders against a future modal that
+ // preventDefaults but forgets to stopPropagation (Confirm.svelte
+ // currently does both). Without either, dismissing a stacked modal
+ // also closes the preview underneath — a "wait, why did my file
+ // close" foot-gun.
     if (e.key === "Escape" && !e.defaultPrevented) onclose();
   }
 </script>

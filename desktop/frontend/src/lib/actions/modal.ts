@@ -29,6 +29,18 @@ export function modal(node: HTMLElement, opts: ModalOpts) {
     if (e.key === "Tab") {
  // Trap focus: cycle within the dialog's focusable controls so Tab/Shift+Tab
  // can't move focus into the inert background behind the modal.
+ //
+ // stopPropagation regardless of whether THIS modal handles the wrap
+ // — when a wizard is mounted inside SettingsModal, BOTH `use:modal`
+ // listeners fire on bubble. The outer modal's `querySelectorAll`
+ // scopes to its own subtree which INCLUDES the inner modal's
+ // controls, so the outer's `last` resolves to a node inside the
+ // inner modal; on Shift+Tab from the inner's first input, the outer
+ // sees `active === last` and yanks focus to its own first item
+ // (the sidebar's first bot row), escaping the wizard. Stopping
+ // propagation in the inner handler keeps the outer blind to the
+ // Tab and preserves the inner's own trap.
+      e.stopPropagation();
       const items = Array.from(node.querySelectorAll<HTMLElement>(FOCUSABLE)).filter(
         (el) => !el.hasAttribute("disabled") && el.offsetParent !== null,
       );

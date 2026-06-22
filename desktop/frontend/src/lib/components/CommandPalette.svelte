@@ -5,6 +5,7 @@
  // Esc to close.
   import { store } from "../store.svelte";
   import { isImeComposing } from "../keys";
+  import { untrack } from "svelte";
   import Avatar from "./Avatar.svelte";
 
   let { onclose, onedit, onskills, onworkflows, onusage }:
@@ -53,8 +54,14 @@
   ]);
 
  // Keep the highlight in range and reset to the top whenever the query changes.
-  $effect(() => { ql; active = 0; });
-  $effect(() => { if (active >= items.length) active = Math.max(0, items.length - 1); });
+  $effect(() => { ql; untrack(() => { active = 0; }); });
+  $effect(() => {
+    items.length;
+ // Read `active` only via untrack so the corrective write below doesn't
+ // re-trigger this effect on its own update — would race with the
+ // ql-reset effect above when items shrink mid-query.
+    untrack(() => { if (active >= items.length) active = Math.max(0, items.length - 1); });
+  });
   $effect(() => {
     active;
     listEl?.querySelector<HTMLElement>(".pitem.active")?.scrollIntoView({ block: "nearest" });

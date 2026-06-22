@@ -53,7 +53,14 @@ type Info struct {
 	Description string `json:"description"`
 }
 
-var descRe = regexp.MustCompile(`description\s*:\s*["']([^"']+)["']`)
+// descRe finds the description field inside the workflow's `export const meta
+// = { … }` block. metaRe scopes the search to that block first so a stray
+// `description:` appearing in a string literal, comment, or downstream code
+// can't be mistaken for the canonical one.
+var (
+	metaRe = regexp.MustCompile(`(?s)export\s+const\s+meta\s*=\s*\{(.*?)\}`)
+	descRe = regexp.MustCompile(`description\s*:\s*["']([^"']+)["']`)
+)
 
 // listIn returns every workflow (*.js) directly under root.
 func listIn(root string) ([]Info, error) {
@@ -92,8 +99,10 @@ func descriptionIn(root, name string) string {
 	if err != nil {
 		return ""
 	}
-	if m := descRe.FindSubmatch(b); m != nil {
-		return strings.TrimSpace(string(m[1]))
+	if mm := metaRe.FindSubmatch(b); mm != nil {
+		if m := descRe.FindSubmatch(mm[1]); m != nil {
+			return strings.TrimSpace(string(m[1]))
+		}
 	}
 	return ""
 }

@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"time"
 
 	wire "github.com/lml2468/xclaw/core/control/wire"
 )
@@ -96,11 +97,23 @@ func (c *Client) Send(cmdType string, body any) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if dErr := c.conn.SetWriteDeadline(time.Now().Add(writeDeadline)); dErr != nil {
+		return "", fmt.Errorf("control write deadline: %w", dErr)
+	}
 	if _, err := c.conn.Write(line); err != nil {
+		_ = c.conn.SetWriteDeadline(time.Time{})
 		return "", fmt.Errorf("control write: %w", err)
 	}
+	_ = c.conn.SetWriteDeadline(time.Time{})
 	return id, nil
 }
+
+// withWriteDeadline sets a write deadline on the underlying conn so a stalled
+// daemon-reader can't wedge every concurrent Send forever — the mutex above
+// is held across Write, and Close also takes the mutex, so a Write blocked
+// in the kernel's send-buffer would also block the recovery path. Five
+// seconds is plenty for a UDS write under non-pathological conditions.
+const writeDeadline = 5 * time.Second
 
 // Read consumes the NDJSON stream until the connection closes, invoking onEnv
 // for every decoded envelope (responses and events alike). It returns the error
