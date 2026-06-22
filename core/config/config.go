@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/lml2468/xclaw/core/envenc"
 	"github.com/lml2468/xclaw/core/safepath"
 )
 
@@ -169,6 +170,15 @@ type Resolved struct {
 	// auto-discovered by the claude CLI as user-scope assets — no per-turn
 	// sandbox symlinking needed.
 	ClaudeConfigDir string
+
+	// MasterKey is the 32-byte AES-GCM key used to decrypt enc:v1:… values
+	// in Agent.Env (so config.json can ship tokens encrypted-at-rest while a
+	// leaked file stays opaque). Loaded from envenc.DefaultMasterPath() at
+	// Load time; nil means decryption is disabled and every Agent.Env value
+	// is treated as plaintext (backward compat with pre-encryption configs).
+	// Never written to disk past the file at envenc.DefaultMasterPath; never
+	// echoed to logs.
+	MasterKey []byte
 }
 
 func defaults() Resolved {
@@ -208,7 +218,27 @@ func Load(path string) ([]Resolved, error) {
 	if err != nil {
 		return nil, err
 	}
-	return resolveBots(global, baseDir)
+	bots, err := resolveBots(global, baseDir)
+	if err != nil {
+		return nil, err
+	}
+	// Master key for decrypting enc:v1:… values in agent.env. Lives next to
+	// config.json (baseDir/master.key) so test runs against a tempdir config
+	// don't touch the operator's real ~/.xclaw/master.key, and so a config
+	// + master.key bundle moves together as a unit. Loaded once and shared
+	// across all bots in this daemon — every encrypted value in every bot's
+	// config.json was sealed by the same per-machine key. Wrong-size or
+	// other I/O errors surface as a Load failure so the operator sees
+	// "master key corrupted" instead of silently orphaning every encrypted
+	// secret to "decrypt failed at turn time".
+	key, err := envenc.LoadOrCreateMaster(filepath.Join(baseDir, "master.key"))
+	if err != nil {
+		return nil, fmt.Errorf("config: master key: %w", err)
+	}
+	for i := range bots {
+		bots[i].MasterKey = key
+	}
+	return bots, nil
 }
 
 // readFile parses a config.json, returning a zero File if it doesn't exist.
@@ -495,7 +525,11 @@ func isPathInside(child, parent string) bool {
 func (r Resolved) DriverEnv(gatewayToken, octoToken string) []string {
 	var out []string
 	for k, v := range r.Agent.Env {
-		out = append(out, k+"="+v)
+		dec, ok := r.decryptValue(k, v)
+		if !ok {
+			continue // fail-soft: skip the entry, warning already logged
+		}
+		out = append(out, k+"="+dec)
 	}
 	if r.Agent.GatewayBaseURL != "" {
 		out = append(out, "ANTHROPIC_BASE_URL="+r.Agent.GatewayBaseURL)
@@ -518,4 +552,31 @@ func (r Resolved) DriverEnv(gatewayToken, octoToken string) []string {
 		out = append(out, "CLAUDE_CONFIG_DIR="+r.ClaudeConfigDir)
 	}
 	return out
+}
+
+// decryptValue decrypts v if it carries the enc:v1:… envelope. Returns
+// (plaintext, true) on success or no-encryption-needed; (zero, false) when
+// decryption fails. The failure case is logged once per turn (acceptable
+// noise — a stale ciphertext from a wiped master.key needs to be loud, not
+// quiet). The k argument is for the log line only.
+func (r Resolved) decryptValue(k, v string) (string, bool) {
+	if !envenc.IsCiphertext(v) {
+		return v, true
+	}
+	if len(r.MasterKey) == 0 {
+		// Encrypted value but no key loaded: misconfigured caller (only
+		// possible in tests). Loud rather than silent.
+		fmt.Fprintf(os.Stderr, "[envenc] bot=%s key=%s skipped: no master key loaded\n", r.BotID, k)
+		return "", false
+	}
+	pt, err := envenc.Decrypt(r.MasterKey, v)
+	if err != nil {
+		// Most likely cause: config.json copied from another machine without
+		// master.key, or master.key was regenerated. Operator action: re-enter
+		// the secret in the GUI. Skipping the env entry is safer than
+		// injecting empty (a same-name plaintext fallback might win).
+		fmt.Fprintf(os.Stderr, "[envenc] bot=%s key=%s skipped: %v\n", r.BotID, k, err)
+		return "", false
+	}
+	return pt, true
 }

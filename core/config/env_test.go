@@ -1,9 +1,12 @@
 package config
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/lml2468/xclaw/core/envenc"
 )
 
 // global agent.env is the base; the inline bot's env adds/overrides per key (not
@@ -111,3 +114,58 @@ func TestDriverEnvOctoFallbackVars(t *testing.T) {
 		t.Fatalf("empty octo token should omit OCTO_BOT_TOKEN, got:\n%s", joined)
 	}
 }
+
+// Per-bot env values may be sealed with enc:v1:… so config.json never carries
+// plaintext tokens. DriverEnv must decrypt with the bot's MasterKey before
+// passing the value to the agent; this is the round-trip path users hit when
+// the GUI stores a secret and the daemon reads it on the next turn.
+func TestDriverEnvDecryptsEncryptedValues(t *testing.T) {
+	dir := t.TempDir()
+	// Generate a master.key in dir and use it to encrypt the secret BEFORE
+	// it lands in config.json — mirrors what the GUI does on Save.
+	key, err := envenc.LoadOrCreateMaster(filepath.Join(dir, "master.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ct, err := envenc.Encrypt(key, "ghp_actualtokenhere")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := filepath.Join(dir, "config.json")
+	writeFile(t, cfg, fmt.Sprintf(`{"bots":[{"id":"b","agent":{"env":{"GH_TOKEN":%q,"PLAIN":"unchanged"}}}]}`, ct))
+
+	bots, err := Load(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := bots[0].DriverEnv("", "")
+	joined := strings.Join(env, "\n")
+	if !strings.Contains(joined, "GH_TOKEN=ghp_actualtokenhere") {
+		t.Fatalf("encrypted GH_TOKEN not decrypted; env was:\n%s", joined)
+	}
+	if !strings.Contains(joined, "PLAIN=unchanged") {
+		t.Fatalf("plaintext value mangled; env was:\n%s", joined)
+	}
+}
+
+// A ciphertext sealed by a different master key (e.g. config.json copied
+// from another machine without master.key) must fail-soft: the entry is
+// dropped from the env so a same-named plaintext fallback can win OR the
+// agent fails loudly with auth=UNSET in selfcheck — both beat silently
+// injecting an empty token that a tool might accept.
+func TestDriverEnvSkipsUndecryptableValues(t *testing.T) {
+	dir := t.TempDir()
+	// Encrypt under a DIFFERENT key than the one Load will read.
+	otherKey, _ := envenc.LoadOrCreateMaster(filepath.Join(t.TempDir(), "other.key"))
+	ct, _ := envenc.Encrypt(otherKey, "this-cant-be-decrypted-here")
+	cfg := filepath.Join(dir, "config.json")
+	writeFile(t, cfg, fmt.Sprintf(`{"bots":[{"id":"b","agent":{"env":{"GH_TOKEN":%q}}}]}`, ct))
+
+	bots, _ := Load(cfg)
+	for _, e := range bots[0].DriverEnv("", "") {
+		if strings.HasPrefix(e, "GH_TOKEN=") {
+			t.Fatalf("undecryptable value should not be injected; got %q", e)
+		}
+	}
+}
+

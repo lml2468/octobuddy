@@ -8,11 +8,13 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 
+	"github.com/lml2468/xclaw/core/envenc"
 	"github.com/lml2468/xclaw/desktop/internal/configstore"
 	"github.com/lml2468/xclaw/desktop/internal/control"
 	"github.com/lml2468/xclaw/desktop/internal/core"
@@ -37,6 +39,14 @@ type XClawService struct {
 	sup          *core.Supervisor
 	client       *control.Client
 	shuttingDown bool
+	// masterKey is the AES-256 key used to encrypt env-var values the user
+	// flags as secret in the GUI. Loaded from ~/.xclaw/master.key at
+	// ServiceStartup (same path the daemon's config.Load reads). Held in
+	// memory for the app's lifetime so EncryptSecret can wrap new values
+	// without re-reading the file on every call. DO NOT expose a Decrypt
+	// path to the frontend — secrets are write-only from the GUI's
+	// perspective, the renderer never sees plaintext after Save.
+	masterKey []byte
 	// daemonOut is where the daemon's stdout+stderr land. nil means inherit
 	// os.Stderr (the legacy default). main() supplies the rotating xclaw.log
 	// tee so daemon banner / gateway errors / selfcheck lines survive past the
@@ -78,6 +88,17 @@ func (x *XClawService) ServiceStartup(ctx context.Context, _ application.Service
 	// -config and picks up the freshly-written roster, instead of remaining
 	// stuck in the synthetic single-bot REPL fallback.
 	cfg := core.ConfigPath()
+	// Master key for encrypting secret env values on Save. Lives next to
+	// config.json — same file the daemon's config.Load reads on the other
+	// side, so both processes agree without IPC handshake. Failure here is
+	// fatal: if we can't get a key, EncryptSecret would silently corrupt
+	// every value the user pastes.
+	mkPath := filepath.Join(filepath.Dir(cfg), "master.key")
+	key, err := envenc.LoadOrCreateMaster(mkPath)
+	if err != nil {
+		return fmt.Errorf("master key: %w", err)
+	}
+	x.masterKey = key
 	x.sup = &core.Supervisor{BinPath: bin, SocketPath: core.SocketPath(), ConfigPath: cfg, Output: x.daemonOut}
 	if err := x.sup.Start(); err != nil {
 		// Start may have spawned the daemon process before the socket-wait
@@ -338,6 +359,31 @@ func (x *XClawService) LoadConfig() ([]configstore.BotConfig, error) {
 // follows with RestartCore to apply.
 func (x *XClawService) SaveConfig(bots []configstore.BotConfig, removedIDs []string) error {
 	return configstore.Save(bots, removedIDs)
+}
+
+// EncryptSecret seals plaintext into the enc:v1:… envelope so the GUI can
+// drop it straight into BotConfig.Env and round-trip it through SaveConfig
+// without ever touching config.json in plaintext. This is the ONLY direction
+// the master key is exposed to the renderer process — there is no
+// DecryptSecret counterpart. To change an existing secret the user re-pastes
+// the new value; the old ciphertext is never round-tripped through the UI.
+// That asymmetry is what lets a compromised webview leak only one secret at
+// a time (the one being typed) instead of enumerating every stored token.
+//
+// Errors propagate untouched: a wrong-size master key or rand failure is a
+// configuration bug the operator needs to see, not silently swallowed.
+func (x *XClawService) EncryptSecret(plaintext string) (string, error) {
+	if len(x.masterKey) == 0 {
+		return "", fmt.Errorf("encrypt secret: master key not loaded")
+	}
+	return envenc.Encrypt(x.masterKey, plaintext)
+}
+
+// IsCiphertext reports whether a value carries the enc:v1:… envelope.
+// Exposed to the GUI so the env editor can render encrypted rows as masked
+// dots without trying to decrypt — the user must re-paste to change them.
+func (x *XClawService) IsCiphertext(value string) bool {
+	return envenc.IsCiphertext(value)
 }
 
 // --- octo-cli profile management (per-bot disk profiles in ~/.octo-cli/) ---
