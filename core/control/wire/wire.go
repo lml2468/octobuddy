@@ -259,6 +259,24 @@ type SessionReplyBody struct {
 	Text       string `json:"text"`
 }
 
+// SessionUserMessageBody is broadcast at the start of each accepted turn so
+// observer clients (the desktop GUI) can render the inbound user message in
+// the chat transcript. Without this, an IM-originated session in the GUI only
+// showed the bot's reply and read like a monologue. FromUID + FromName let
+// the GUI pick the right avatar / name for group chats where multiple humans
+// share one session. Ts is the server's accept time (seconds since epoch);
+// the GUI uses it for the "X minutes ago" label and ordering. Console-
+// originated turns also emit this — the GUI dedupes against the message it
+// optimistically pushed when the Composer typed it.
+type SessionUserMessageBody struct {
+	BotID      string `json:"botId,omitempty"`
+	SessionKey string `json:"sessionKey"`
+	Text       string `json:"text"`
+	FromUID    string `json:"fromUid,omitempty"`
+	FromName   string `json:"fromName,omitempty"`
+	Ts         int64  `json:"ts"`
+}
+
 type SessionActivityBody struct {
 	BotID      string `json:"botId,omitempty"`
 	SessionKey string `json:"sessionKey"`

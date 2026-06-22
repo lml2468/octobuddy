@@ -1,6 +1,11 @@
 package control
 
-import "github.com/lml2468/xclaw/core/agent"
+import (
+	"time"
+
+	"github.com/lml2468/xclaw/core/agent"
+	"github.com/lml2468/xclaw/core/router"
+)
 
 // EventSink adapts the control Server to gateway.Sink: it projects normalized
 // AgentEvents onto the control-bus event vocabulary (proto/README.md) and
@@ -50,4 +55,22 @@ func (s *EventSink) OnEvent(sessionKey string, ev agent.AgentEvent) {
 // OnReply broadcasts the assembled assistant reply for a completed turn.
 func (s *EventSink) OnReply(sessionKey string, text string) {
 	s.srv.Broadcast("session.reply", SessionReplyBody{BotID: s.botID, SessionKey: sessionKey, Text: text})
+}
+
+// OnUserMessage broadcasts the inbound user message at the start of an
+// accepted turn so attached GUI clients can render it in the chat
+// transcript. Carries fromUid/fromName for group sessions where multiple
+// humans share one session and the GUI needs to attribute messages.
+// Console-originated turns also emit this; the GUI dedupes via sessionKey
+// (its CONSOLE_UID is locally known and the optimistic-add already
+// covered it).
+func (s *EventSink) OnUserMessage(sessionKey string, msg router.InboundMessage) {
+	s.srv.Broadcast("session.user_message", SessionUserMessageBody{
+		BotID:      s.botID,
+		SessionKey: sessionKey,
+		Text:       msg.Text,
+		FromUID:    msg.FromUID,
+		FromName:   msg.FromName,
+		Ts:         time.Now().Unix(),
+	})
 }

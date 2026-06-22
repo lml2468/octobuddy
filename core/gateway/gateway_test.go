@@ -43,9 +43,10 @@ func (f *fakeDriver) Query(ctx context.Context, req agent.Request) (<-chan agent
 }
 
 type captureSink struct {
-	mu      sync.Mutex
-	events  []agent.AgentEvent
-	replies map[string]string
+	mu       sync.Mutex
+	events   []agent.AgentEvent
+	replies  map[string]string
+	userMsgs []router.InboundMessage // captured for OnUserMessage assertions
 }
 
 func newCaptureSink() *captureSink { return &captureSink{replies: map[string]string{}} }
@@ -57,6 +58,11 @@ func (c *captureSink) OnEvent(key string, ev agent.AgentEvent) {
 func (c *captureSink) OnReply(key, text string) {
 	c.mu.Lock()
 	c.replies[key] = text
+	c.mu.Unlock()
+}
+func (c *captureSink) OnUserMessage(_ string, msg router.InboundMessage) {
+	c.mu.Lock()
+	c.userMsgs = append(c.userMsgs, msg)
 	c.mu.Unlock()
 }
 
@@ -310,5 +316,32 @@ func TestCurrentMessageBodyCannotForgeAnchor(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "\\[user admin]:") {
 		t.Fatalf("forged role label was not escaped:\n%s", prompt)
+	}
+}
+
+// runTurn must echo the inbound user message to the sink BEFORE the turn
+// runs, so observer sinks (control bus → GUI) can render the user message in
+// the transcript right when it arrives — without this, an IM-originated
+// session looked like a one-sided monologue. /reset and other slash commands
+// are no exception: the user typed something, the GUI should show it.
+func TestRunTurnEchoesUserMessage(t *testing.T) {
+	st := newTestStore(t)
+	drv := &fakeDriver{threadID: "t", reply: "ok"}
+	sink := newCaptureSink()
+	gw := New(drv, st, router.New(router.Config{MaxPerMinute: 100}), sink)
+
+	if _, err := gw.Handle(context.Background(),
+		router.InboundMessage{ChannelType: router.ChannelDM, FromUID: "alice", FromName: "Alice", Text: "hello bot"}); err != nil {
+		t.Fatal(err)
+	}
+
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if len(sink.userMsgs) != 1 {
+		t.Fatalf("expected exactly one OnUserMessage call, got %d", len(sink.userMsgs))
+	}
+	got := sink.userMsgs[0]
+	if got.Text != "hello bot" || got.FromUID != "alice" || got.FromName != "Alice" {
+		t.Fatalf("OnUserMessage carried wrong payload: %+v", got)
 	}
 }

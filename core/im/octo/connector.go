@@ -894,6 +894,13 @@ func (c *Connector) maybeSendToolNotice(sessionKey string, ev agent.AgentEvent) 
 // server presents it as the grantor (openclaw OBO). It also stops the typing
 // heartbeat — the end-of-turn cleanup point (stream-relay.ts deliver finally).
 //
+// OnUserMessage is a no-op for the Octo connector: the inbound message arrived
+// HERE in the first place (onInbound → enqueueTurn → gateway → runTurn → back
+// to this sink). Re-sending it to the IM would echo the user's own message
+// back to them. The control-bus EventSink is the one that actually surfaces
+// user_message events to the GUI; this stub keeps the Sink interface honest.
+func (c *Connector) OnUserMessage(string, router.InboundMessage) {}
+
 // Empty reply → a no-response placeholder is sent instead of silently dropping
 // the turn (cc-channel-octo index.ts behavior).
 func (c *Connector) OnReply(sessionKey string, text string) {

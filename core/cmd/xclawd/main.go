@@ -263,6 +263,10 @@ func (s *stdoutSink) OnReply(sessionKey string, text string) {
 	}
 }
 
+// OnUserMessage is a no-op for the REPL/stdout sink — the user just typed
+// the line into stdin and sees it in their own terminal already.
+func (s *stdoutSink) OnUserMessage(string, router.InboundMessage) {}
+
 func oneLine(s string) string {
 	s = strings.Join(strings.Fields(s), " ")
 	if len(s) > 120 {
@@ -287,6 +291,11 @@ func (m multiSink) OnEvent(key string, ev agent.AgentEvent) {
 func (m multiSink) OnReply(key, text string) {
 	for _, s := range m {
 		s.OnReply(key, text)
+	}
+}
+func (m multiSink) OnUserMessage(key string, msg router.InboundMessage) {
+	for _, s := range m {
+		s.OnUserMessage(key, msg)
 	}
 }
 

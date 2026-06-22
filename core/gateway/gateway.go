@@ -36,6 +36,17 @@ type Sink interface {
 	OnEvent(sessionKey string, ev agent.AgentEvent)
 	// OnReply is called once with the full assembled assistant text (may be "").
 	OnReply(sessionKey string, text string)
+	// OnUserMessage is called once at the start of an accepted turn, BEFORE
+	// any agent work — its purpose is to let observer sinks (control bus →
+	// GUI) render the inbound user message in the chat transcript. The IM
+	// connector implements this as a no-op (the message originated there),
+	// the GUI's control-bus EventSink broadcasts session.user_message so a
+	// desktop attached to an IM-originated session sees what the remote
+	// human actually sent — without this, the GUI only saw the bot's reply
+	// and the transcript read like a monologue. NOT called for messages
+	// dropped/rate-limited before runTurn — those reach the user via the
+	// distinct oversized/rateLimited reply path instead.
+	OnUserMessage(sessionKey string, msg router.InboundMessage)
 }
 
 // Gateway wires the router, store, and an agent driver together.
@@ -470,6 +481,13 @@ func (g *Gateway) resolveSandbox(sessionKey string, msg router.InboundMessage) (
 
 // runTurn executes one accepted turn under the session lock.
 func (g *Gateway) runTurn(ctx context.Context, sessionKey string, msg router.InboundMessage) error {
+	// Echo the inbound to observer sinks (control bus → GUI) before any work
+	// so a desktop attached to an IM-originated session can render the user's
+	// message immediately, not just see the bot's reply appear out of nowhere.
+	// Placed at the very top so /reset and other slash commands still produce
+	// an echo (matches user expectation: "I typed something, show it").
+	g.sink.OnUserMessage(sessionKey, msg)
+
 	// Ensure the session row exists and bump updated_at (drives ListSessions
 	// ordering). Touch avoids the extra read-back the turn doesn't use.
 	if err := g.store.Touch(sessionKey, msg.ChannelID, int(msg.ChannelType)); err != nil {

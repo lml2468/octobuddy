@@ -62,8 +62,9 @@ type (
 	SessionTextBody      = wire.SessionTextBody
 	SessionToolBody      = wire.SessionToolBody
 	SessionUsageBody     = wire.SessionUsageBody
-	SessionReplyBody     = wire.SessionReplyBody
-	SessionActivityBody  = wire.SessionActivityBody
+	SessionReplyBody       = wire.SessionReplyBody
+	SessionUserMessageBody = wire.SessionUserMessageBody
+	SessionActivityBody    = wire.SessionActivityBody
 	ErrorBody            = wire.ErrorBody
 	HistoryMessage       = wire.HistoryMessage
 	HistoryResponse      = wire.HistoryResponse

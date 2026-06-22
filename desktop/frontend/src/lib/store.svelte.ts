@@ -512,6 +512,27 @@ class Store {
         s.lastActivity = Date.now();
         break;
       }
+      case "session.user_message": {
+ // The inbound user message — emitted by the daemon at the start of every
+ // accepted turn so IM-originated sessions render the user side of the
+ // conversation, not just the bot's reply. Console-originated turns ALSO
+ // fire this event (the daemon doesn't distinguish), so dedupe by sessionKey:
+ // the Composer's send() already optimistically pushed the message before
+ // hitting the wire, and we'd render two copies otherwise. Mark the session
+ // as awaiting so the typing indicator engages for IM turns the same way it
+ // did for Console (Composer.send did it manually there).
+        const key = env.body?.sessionKey ?? "";
+        if (key === CONSOLE_UID || key === "console") break;
+        const s = this.route(env);
+        if (!s) break;
+        const text = env.body?.text ?? "";
+        const ts = env.body?.ts ? Number(env.body.ts) : Date.now() / 1000;
+        s.messages.push({ id: newId(), role: "user", text, ts });
+        s.awaiting = true;
+        s.awaitingSince = Date.now();
+        s.lastActivity = Date.now();
+        break;
+      }
       case "session.usage": {
         const s = this.route(env);
         if (!s) break;

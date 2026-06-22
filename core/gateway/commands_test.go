@@ -24,7 +24,8 @@ type reply struct {
 	text string
 }
 
-func (s *recordSink) OnEvent(string, agent.AgentEvent) {}
+func (s *recordSink) OnEvent(string, agent.AgentEvent)              {}
+func (s *recordSink) OnUserMessage(string, router.InboundMessage)    {}
 func (s *recordSink) OnReply(key, text string) {
 	s.mu.Lock()
 	s.replies = append(s.replies, reply{key, text})
