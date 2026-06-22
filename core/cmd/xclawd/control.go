@@ -240,19 +240,28 @@ func makeHandler(ctx context.Context, deps handlerDeps) control.CommandHandler {
 			if owner == "" {
 				return nil, fmt.Errorf("bot owner not resolved yet; cannot create scheduled tasks")
 			}
-			// DM-bound tasks (no channelId) bind to the owner's own session; group
-			// tasks bind to the named channel but still run as the owner.
+			// FromUID resolution branches by channel type:
+			//   - Console → cron.ConsoleUID (must match the renderer's
+			//     CONSOLE_UID so router.SessionKey hits the same session
+			//     the desktop Console view watches; stamping the owner
+			//     uid here would route fired replies to a phantom session)
+			//   - DM      → body.FromUID (the peer the task targets);
+			//     empty is a validation error at create time
+			//   - Group   → owner (the bot identifies as itself in the group)
+			// FromName follows the same sanitize-at-the-boundary rule —
+			// store sees only the safe form (Sec L2 defense in depth;
+			// the prompt path already sanitizes via groupctx, but the
+			// on-disk task shouldn't carry the unsafe form forward).
+			chType := channelTypeFor(b.ChannelType, b.ChannelID)
+			fromUID, err := resolveFromUID(chType, b.FromUID, owner)
+			if err != nil {
+				return nil, err
+			}
 			coords := cron.SessionCoords{
 				ChannelID:   b.ChannelID,
-				ChannelType: cron.ChannelKind(channelTypeFor(b.ChannelType, b.ChannelID)),
-				FromUID:     owner,
-				// Sanitize at the store boundary so a malicious FromName
-				// (control chars, bidi overrides, bracket forgery) can't
-				// later resurface as part of a future prompt rendering
-				// (Sec L2: defense in depth — the prompt path
-				// already sanitizes via groupctx, but the on-disk task
-				// shouldn't carry the unsafe form forward).
-				FromName: safety.SanitizeDisplayName(b.FromName, owner),
+				ChannelType: cron.ChannelKind(chType),
+				FromUID:     fromUID,
+				FromName:    safety.SanitizeDisplayName(b.FromName, owner),
 			}
 			task, err := t.cron.Create(cron.CreateParams{
 				Schedule:   b.Schedule,
@@ -330,15 +339,48 @@ func makeHandler(ctx context.Context, deps handlerDeps) control.CommandHandler {
 			if owner == "" {
 				return nil, fmt.Errorf("bot owner not resolved yet; cannot update scheduled tasks")
 			}
-			// An "enabled-only" body (the GUI's per-row toggle) skips the
-			// channel-binding check inside Manager.Update; for full updates
-			// the body must carry valid coords + schedule + prompt, same
-			// rules as Create.
-			coords := cron.SessionCoords{
-				ChannelID:   b.ChannelID,
-				ChannelType: cron.ChannelKind(channelTypeFor(b.ChannelType, b.ChannelID)),
-				FromUID:     owner,
-				FromName:    safety.SanitizeDisplayName(b.FromName, owner),
+			// Detect the enabled-only fast path UP FRONT — a body that only
+			// sets Enabled (and ID) should forward zero Coords through to
+			// Manager.Update.enabledOnly, which then skips schedule
+			// validation entirely. Without this, channelTypeFor's DM
+			// default (= 1) would always make Coords.ChannelType non-zero
+			// even on a pure toggle, defeating the fast path and forcing
+			// the full-update validator that requires a Schedule.
+			bodyEnabledOnly := b.Schedule == "" && b.Prompt == "" && b.Recurring == nil &&
+				b.ChannelID == "" && b.ChannelType == 0 && b.FromUID == "" && b.FromName == "" &&
+				b.Enabled != nil
+			var coords cron.SessionCoords
+			if !bodyEnabledOnly {
+				// Full or partial-fields update: resolve FromUID by channel
+				// type. Empty body.FromUID for DM/Console targets means
+				// "preserve the existing binding" (the GUI's edit modal
+				// sends blank to honor the operator's "I'm only editing
+				// schedule" intent). Manager.Update's mutator interprets
+				// (ChannelID + FromUID + ChannelType all zero) as that
+				// preserve signal.
+				chType := channelTypeFor(b.ChannelType, b.ChannelID)
+				fromUID := b.FromUID
+				if chType == int(cron.ChannelConsole) {
+					// Always stamp the canonical Console uid — the
+					// renderer can't be trusted to keep this in sync and a
+					// Console task is meaningless if it can't reach the
+					// Console session.
+					fromUID = cron.ConsoleUID
+				} else if chType == int(router.ChannelGroup) {
+					// Group tasks ALWAYS run as the owner; a body.FromUID
+					// for Group is a category error and is ignored.
+					fromUID = owner
+				}
+				fromName := ""
+				if b.FromName != "" {
+					fromName = safety.SanitizeDisplayName(b.FromName, owner)
+				}
+				coords = cron.SessionCoords{
+					ChannelID:   b.ChannelID,
+					ChannelType: cron.ChannelKind(chType),
+					FromUID:     fromUID,
+					FromName:    fromName,
+				}
 			}
 			task, err := t.cron.Update(cron.UpdateParams{
 				ID:         b.ID,
@@ -392,6 +434,28 @@ func summariesFromSessions(sums []store.SessionSummary) []control.SessionSummary
 // and bot.go's fireCronTask routes it past EnqueueCron straight to the
 // gateway. Without this branch a Console body would fall through to "DM
 // with empty channelId" which the connector would then try to deliver to.
+// resolveFromUID picks the stored FromUID for a NEW cron task based on the
+// channel type, falling back to the server-resolved owner for Group targets
+// and stamping the canonical ConsoleUID for Console. DM tasks require an
+// explicit body FromUID (the peer the task should DM to) — empty is a
+// validation error because storing the owner uid for a "DM to alice" task
+// would silently rewrite the target to "DM to self" on first fire.
+// Used only by cron.create; cron.update's "blank = preserve" semantics
+// live in the update handler + Manager.Update mutator.
+func resolveFromUID(chType int, bodyFromUID, owner string) (string, error) {
+	switch chType {
+	case int(cron.ChannelConsole):
+		return cron.ConsoleUID, nil
+	case int(router.ChannelGroup):
+		return owner, nil
+	default: // DM
+		if bodyFromUID == "" {
+			return "", fmt.Errorf("DM target requires fromUid (peer's uid)")
+		}
+		return bodyFromUID, nil
+	}
+}
+
 func channelTypeFor(explicit int, channelID string) int {
 	if explicit == int(router.ChannelDM) || explicit == int(router.ChannelGroup) || explicit == int(cron.ChannelConsole) {
 		return explicit

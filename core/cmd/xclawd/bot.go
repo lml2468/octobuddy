@@ -338,7 +338,7 @@ func runBot(ctx context.Context, cfg config.Resolved, reg *botRegistry, srv *con
 	// the resolve handler doesn't have to lock-free write `bot.target.cron`
 	// on every call, which raced concurrent control commands.
 	var cm *cron.Manager
-	if cfg.Agent.Cron {
+	if cfg.Agent.Cron != nil && *cfg.Agent.Cron {
 		cm = cron.NewManager(cron.NewStore(filepath.Join(cfg.DataDir, "cron.json")), "", nil)
 		cm.SetLabel(fmt.Sprintf("[%s] ", cfg.BotID))
 		cm.OnFire(func(f cron.Fire) {

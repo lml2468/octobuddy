@@ -31,7 +31,14 @@ type AgentConfig struct {
 	// when true the bot loads <dataDir>/cron.json at startup and fires due tasks
 	// through the gateway. Owner-gated create/delete is exposed over the control
 	// bus (cron.create / cron.list / cron.delete).
-	Cron bool `json:"cron,omitempty"`
+	//
+	// *bool (not bool) so per-bot config can override a top-level default in
+	// EITHER direction — a plain bool's zero value (false) is indistinguishable
+	// from "not set" once mergeAgent runs, leaving GUI-driven "disable cron for
+	// just this bot" unimplementable when the top-level default is true. The
+	// nil pointer means "inherit top-level"; a non-nil pointer (true OR false)
+	// overrides.
+	Cron *bool `json:"cron,omitempty"`
 	// ToolProgress, when true, makes the IM connector mirror each tool the agent
 	// invokes back to the channel as a brief "🔧 Running <tool>(<params>)…" notice
 	// (consecutive dups collapsed, capped per turn). Off by default — opt-in.
@@ -387,8 +394,11 @@ func mergeAgent(dst *AgentConfig, src *AgentConfig) {
 	}
 	// Capability switches: a true at either the global or per-bot layer enables
 	// it (consistent with the other fields' "non-zero overrides" merge).
-	if src.Cron {
-		dst.Cron = true
+	if src.Cron != nil {
+		// Pointer override (per-bot wins, true OR false), so a per-bot false can
+		// disable a top-level cron:true default — what the previous OR-only
+		// merge made impossible.
+		dst.Cron = src.Cron
 	}
 	if src.ToolProgress {
 		dst.ToolProgress = true

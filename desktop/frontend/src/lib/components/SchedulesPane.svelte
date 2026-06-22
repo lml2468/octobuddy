@@ -27,8 +27,18 @@
 
  // ---- on mount: ask the daemon for the current task list ----
   let listError = $state("");
+ // armedCron snapshots the value the DAEMON is running with right now —
+ // distinct from bot.cron, which is the editor's dirty value that flips
+ // synchronously when the user clicks 启用 (but doesn't take effect until
+ // SaveConfig + RestartCore complete). The CronList fetch is gated on the
+ // snapshot so flipping bot.cron locally doesn't immediately fire a
+ // CronList that the daemon would reject with "cron is not enabled" — the
+ // race that lit up a red error banner the instant the user enabled the
+ // feature. The snapshot is read once at mount and re-read when bot.id
+ // changes (SettingsModal remounts the pane on bot switch).
+  let armedCron = $state(bot.cron);
   async function refreshList() {
-    if (isPreview || !bot.cron) return;
+    if (isPreview || !armedCron) return;
     try {
       await XClawService.CronList(bot.id);
       listError = "";
@@ -37,8 +47,13 @@
     }
   }
   $effect(() => {
-   // Re-fetch when bot id changes or the cron flag flips.
-    bot.id; bot.cron;
+   // Re-fetch only when the bot id changes — bot.cron edits are deliberately
+   // NOT tracked here (see armedCron note above). When the operator clicks
+   // 保存并重启 and the daemon comes back, SettingsModal closes + reopens,
+   // which remounts this pane and re-reads armedCron from the freshly
+   // loaded bot.cron — picking up the new effective value cleanly.
+    bot.id;
+    armedCron = bot.cron;
     refreshList();
   });
 
@@ -60,22 +75,15 @@
   }
 
  // ---- enable cron banner ----
-  let enabling = $state(false);
+ // The flow is two-step by design: clicking 启用 flips bot.cron locally +
+ // marks the settings dirty, surfacing 保存并重启 in the SettingsModal
+ // footer. Only after that round-trip does armedCron flip on the next
+ // pane mount — at which point refreshList actually runs. Trying to
+ // refresh immediately would surface the daemon's "cron not enabled"
+ // error the instant the user clicks 启用 (the create-then-restart race).
   async function enableCron() {
-    
     bot.cron = true;
     ondirty();
-    enabling = true;
-    try {
-     // SettingsModal owns the SaveConfig + RestartCore flow; we just flip
-     // the flag and surface a hint so the operator clicks 保存并重启.
-     // (Triggering it programmatically here would require a callback prop —
-     // the hint is cheap and matches the rest of the pane's contract:
-     // SchedulesPane does NOT participate in dirty for its own CRUD, but
-     // toggling agent.cron is a config-file edit and SHOULD.)
-    } finally {
-      enabling = false;
-    }
   }
 
  // ---- per-row enable/disable toggle ----
@@ -159,20 +167,32 @@
     if (isPreview) { modalOpen = false; return; }
    // Channel coords derived from the target choice. ChannelType convention:
    //   1 = DM, 2 = Group, 3 = Console (matches core/cron/store.go).
+   //
+   // fromUid carries the TARGET of the task, distinct from auth uid (which
+   // the server resolves itself). For DM the user-typed peer uid lands here;
+   // for Console the backend stamps cron.ConsoleUID regardless so the GUI
+   // sends CONSOLE_UID for clarity; for Group the backend ignores fromUid
+   // and stamps the owner. On EDIT, an empty fromUid is the "preserve
+   // existing target" signal — Manager.Update reads the stored task and
+   // leaves coords alone when the body's coord triplet is zero.
     let channelId = "";
     let channelType = 1;
+    let fromUid = "";
     let fromName = formFromName.trim();
     if (formTarget === "console") {
       channelType = 3;
+      fromUid = CONSOLE_UID;
       if (!fromName) fromName = "控制台";
     } else if (formTarget === "group") {
       channelType = 2;
       channelId = formGroupId.trim();
       if (!channelId) { formError = "请选择一个群"; return; }
+      // fromUid stays "" — Group tasks fire as the owner; backend ignores body fromUid for Group.
     } else {
       channelType = 1;
-      const peer = formDmUid.trim();
-      if (!editingId && !peer) { formError = "请填写对方的 uid"; return; }
+      fromUid = formDmUid.trim();
+      if (!editingId && !fromUid) { formError = "请填写对方的 uid"; return; }
+      // editingId + blank fromUid: preserve existing peer binding.
     }
     formBusy = true;
     try {
@@ -185,6 +205,7 @@
           recurring: formRecurring,
           channelId,
           channelType,
+          fromUid,
           fromName,
         } as any);
       } else {
@@ -195,6 +216,7 @@
           recurring: formRecurring,
           channelId,
           channelType,
+          fromUid,
           fromName,
         } as any);
       }
@@ -236,15 +258,29 @@
 </script>
 
 <div class="pane">
-  {#if !bot.cron}
+ <!--
+   Two-stage banner: shown if cron isn't already armed in the daemon OR
+   if the operator just flipped it on locally (pending restart). The
+   second sub-banner reminds the operator that the actual scheduler arms
+   only after 保存并重启 — otherwise they create tasks that vanish on the
+   next config reload.
+ -->
+  {#if !armedCron && !bot.cron}
     <div class="banner">
       <div class="b-text">
         <strong>定时任务未启用</strong>
         <p>启用后将为该 Bot 加载 <code>~/.xclaw/{bot.id}/cron.json</code> 并定时触发。</p>
       </div>
-      <button class="b-btn" onclick={enableCron} disabled={enabling}>启用</button>
+      <button class="b-btn" onclick={enableCron}>启用</button>
     </div>
     <p class="hint">勾选后请到工具栏点 <strong>保存并重启</strong>，定时调度器才会真正起来。</p>
+  {:else if !armedCron && bot.cron}
+    <div class="banner pending">
+      <div class="b-text">
+        <strong>已启用 — 待重启生效</strong>
+        <p>请点击工具栏的 <strong>保存并重启</strong>。重启后才能创建定时任务。</p>
+      </div>
+    </div>
   {/if}
 
   {#if listError}
@@ -253,11 +289,11 @@
 
   <div class="head">
     <h3>共 {tasks.length} 条</h3>
-    <button class="primary" onclick={openCreate} disabled={!bot.cron}>+ 新增定时任务</button>
+    <button class="primary" onclick={openCreate} disabled={!armedCron}>+ 新增定时任务</button>
   </div>
 
   {#if tasks.length === 0}
-    <div class="empty">还没有定时任务{bot.cron ? "" : "（启用后再添加）"}。</div>
+    <div class="empty">还没有定时任务{armedCron ? "" : "（启用后再添加）"}。</div>
   {:else}
     <table class="grid">
       <thead><tr>
@@ -355,6 +391,7 @@
 <style>
   .pane { display: flex; flex-direction: column; gap: 14px; }
   .banner { display: flex; align-items: center; gap: 14px; padding: 12px 14px; border-radius: 10px; border: 1px solid color-mix(in srgb, var(--warn, #c98a07) 35%, var(--hairline)); background: color-mix(in srgb, var(--warn, #c98a07) 8%, transparent); }
+  .banner.pending { border-color: color-mix(in srgb, var(--accent) 35%, var(--hairline)); background: color-mix(in srgb, var(--accent) 8%, transparent); }
   .b-text { flex: 1; }
   .b-text strong { font-size: 13px; }
   .b-text p { margin: 4px 0 0; font-size: 12px; color: var(--ink-soft); }

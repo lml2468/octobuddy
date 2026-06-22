@@ -34,6 +34,16 @@ const (
 	ChannelConsole ChannelKind = 3
 )
 
+// ConsoleUID is the synthetic from-uid that identifies the desktop GUI's
+// Console session. The renderer's Composer uses this exact string when it
+// calls session.send (it's exported as CONSOLE_UID from store.svelte.ts),
+// and router.SessionKey for a ChannelDM inbound derives the session key
+// from FromUID — so a Console-target cron task MUST be stored with this
+// uid (not the bot owner's) or its fired reply lands in a different
+// session that the GUI never opens. Server-known so the control handler
+// can stamp it regardless of what the body carries.
+const ConsoleUID = "gui-user"
+
 // Task is one scheduled task. Persisted as a plain JSON object.
 type Task struct {
 	// ID is a stable handle (uuid) used by cron.delete; not user-chosen.

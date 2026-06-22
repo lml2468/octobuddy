@@ -42,10 +42,14 @@ func TestCronControlHandlers(t *testing.T) {
 		t.Fatal("cron.list on a bot without cron should error")
 	}
 
-	// A forged body uid is NOT an authorization claim: the create still succeeds
-	// (gated on the resolved owner) AND binds to the owner, not the forged uid.
+	// A forged body uid (the deprecated UID field) is NOT an authorization
+	// claim: the create still succeeds (gated on the resolved owner) AND
+	// binds to the owner via Coords.FromUID for the DM target case OR to
+	// the body FromUID — here we hit the latter by supplying a peer.
+	// The intruder UID is silently dropped (proves "auth claim ignored");
+	// the FromUID "alice" is honored (proves "target is the body's peer").
 	res, err := call("cron.create", control.CronCreateBody{
-		BotID: "b1", UID: "intruder", Schedule: "0 9 * * *", Prompt: "daily standup",
+		BotID: "b1", UID: "intruder", FromUID: "alice", Schedule: "0 9 * * *", Prompt: "daily standup",
 	})
 	if err != nil {
 		t.Fatalf("create with forged body uid should be gated on server owner, not rejected/forged: %v", err)
@@ -54,14 +58,18 @@ func TestCronControlHandlers(t *testing.T) {
 	if !ok || info.ID == "" || info.NextRun == "" {
 		t.Fatalf("unexpected create result: %#v", res)
 	}
-	// Verify the stored task is bound to the owner, never the forged body uid.
+	// Verify the stored task: CreatedBy is the auth-owner (server side),
+	// FromUID is the peer the task should DM to (body side). Distinct
+	// concerns — confusing them is what the FromUID refactor fixed.
 	stored, err := mgr.List()
 	if err != nil || len(stored) != 1 {
 		t.Fatalf("list after create: %v %#v", err, stored)
 	}
-	if stored[0].FromUID != owner || stored[0].CreatedBy != owner {
-		t.Fatalf("task must bind to resolved owner, got FromUID=%q CreatedBy=%q",
-			stored[0].FromUID, stored[0].CreatedBy)
+	if stored[0].CreatedBy != owner {
+		t.Fatalf("CreatedBy must be the resolved owner, got %q", stored[0].CreatedBy)
+	}
+	if stored[0].FromUID != "alice" {
+		t.Fatalf("FromUID must be the body peer (alice), got %q — the create handler must not stamp owner over the DM peer", stored[0].FromUID)
 	}
 
 	// List shows the task.

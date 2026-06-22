@@ -522,3 +522,64 @@ func TestUpdateEnabledOnlyFastPath(t *testing.T) {
 		t.Fatal("enabled-only update must NOT clear other fields")
 	}
 }
+
+// Update's "preserve coords" semantics: when the body's coord triplet is
+// all-zero (no ChannelID, no FromUID, ChannelType == 0), the mutator must
+// leave the stored target alone. Without this, the GUI's "I'm only editing
+// schedule" intent (which sends blank channel/from fields) would silently
+// rebind every DM task to whatever fallback the handler stamped — the
+// showstopper that motivated the FromUID refactor.
+func TestUpdatePreservesCoordsWhenZero(t *testing.T) {
+	clk := &frozenClock{t: time.Unix(1_700_000_000, 0)}
+	m := newManager(t, "owner-1", clk)
+	created, err := m.Create(CreateParams{
+		Schedule: "* * * * *", Prompt: "p",
+		Coords:     SessionCoords{FromUID: "alice", FromName: "Alice"},
+		RequestUID: "owner-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, err := m.Update(UpdateParams{
+		ID: created.ID, Schedule: "0 9 * * *", Prompt: "q",
+		Coords: SessionCoords{}, RequestUID: "owner-1",
+	})
+	if err != nil {
+		t.Fatalf("update with zero coords: %v", err)
+	}
+	if updated.FromUID != "alice" {
+		t.Fatalf("zero-coords update must preserve FromUID, got %q", updated.FromUID)
+	}
+	if updated.FromName != "Alice" {
+		t.Fatalf("zero-coords update must preserve FromName, got %q", updated.FromName)
+	}
+	if updated.Schedule != "0 9 * * *" || updated.Prompt != "q" {
+		t.Fatalf("schedule/prompt edit did not apply: %+v", updated)
+	}
+}
+
+// Non-zero coords in the body DO rebind — the explicit "change target"
+// path the user takes when they actually fill the form fields.
+func TestUpdateRebindsCoordsWhenNonZero(t *testing.T) {
+	clk := &frozenClock{t: time.Unix(1_700_000_000, 0)}
+	m := newManager(t, "owner-1", clk)
+	created, err := m.Create(CreateParams{
+		Schedule: "* * * * *", Prompt: "p",
+		Coords:     SessionCoords{FromUID: "alice"},
+		RequestUID: "owner-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, err := m.Update(UpdateParams{
+		ID: created.ID, Schedule: "* * * * *", Prompt: "p",
+		Coords:     SessionCoords{FromUID: "bob", ChannelType: 1},
+		RequestUID: "owner-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.FromUID != "bob" {
+		t.Fatalf("non-zero coords update must rebind FromUID, got %q", updated.FromUID)
+	}
+}

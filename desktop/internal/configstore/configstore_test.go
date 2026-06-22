@@ -60,7 +60,7 @@ func TestSavePreservesUnmodeledPerBotFields(t *testing.T) {
 			GroupConfigDir:    "/srv/groups",
 			OnBehalfOf:        &config.OnBehalfOf{UID: "grantor-9"},
 			MentionFreeGroups: []string{"g1", "g2"},
-			Agent:             &config.AgentConfig{Cron: true, ToolProgress: true},
+			Agent:             &config.AgentConfig{Cron: ptrTo(true), ToolProgress: true},
 		}},
 	})
 
@@ -97,10 +97,12 @@ func TestSavePreservesUnmodeledPerBotFields(t *testing.T) {
 	if len(b.MentionFreeGroups) != 2 {
 		t.Errorf("mentionFreeGroups dropped: %v", b.MentionFreeGroups)
 	}
-	if b.Agent == nil || !b.Agent.Cron || !b.Agent.ToolProgress {
+	if b.Agent == nil || b.Agent.Cron == nil || !*b.Agent.Cron || !b.Agent.ToolProgress {
 		t.Errorf("agent cron/toolProgress dropped: %+v", b.Agent)
 	}
 }
+
+func ptrTo[T any](v T) *T { return &v }
 
 // Editor-owned values that merely equal the top-level default must NOT be
 // materialized into the per-bot entry, so the default keeps propagating.

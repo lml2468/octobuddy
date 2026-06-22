@@ -329,15 +329,21 @@ func (m *Manager) Update(p UpdateParams) (Task, error) {
 	if p.ID == "" {
 		return Task{}, fmt.Errorf("task id is required")
 	}
-	enabledOnly := p.Schedule == "" && p.Prompt == "" && p.Recurring == nil && p.Enabled != nil
+	enabledOnly := p.Schedule == "" && p.Prompt == "" && p.Recurring == nil && p.Enabled != nil &&
+		p.Coords.ChannelID == "" && p.Coords.FromUID == "" && p.Coords.ChannelType == 0 && p.Coords.FromName == ""
 	// Validate full-update fields BEFORE the mutator so a bad request doesn't
 	// land in the store.Update call's IO path.
 	var nextRun int64
 	var recurring bool
+	// preserveCoords: a full update with empty coords means "leave the
+	// existing target binding alone" — the GUI's edit modal sends blank
+	// channel/from fields for "I'm only editing schedule/prompt" intent.
+	// Without this the handler would silently rebind every DM task to
+	// the owner's self-DM on any unrelated edit. Detected as: ChannelID
+	// AND FromUID both empty AND ChannelType zero (= no explicit target
+	// shape in the body).
+	preserveCoords := p.Coords.ChannelID == "" && p.Coords.FromUID == "" && p.Coords.ChannelType == 0
 	if !enabledOnly {
-		if p.Coords.ChannelID == "" && p.Coords.FromUID == "" {
-			return Task{}, fmt.Errorf("task has no session coords to bind to")
-		}
 		oneShot := isOneShotSchedule(p.Schedule)
 		if !ValidateSchedule(p.Schedule) {
 			if oneShot {
@@ -378,11 +384,21 @@ func (m *Manager) Update(p UpdateParams) (Task, error) {
 					t.Schedule = p.Schedule
 					t.Recurring = recurring
 					t.Prompt = p.Prompt
-					t.ChannelID = p.Coords.ChannelID
-					t.ChannelType = p.Coords.ChannelType
-					t.FromUID = p.Coords.FromUID
-					t.FromName = p.Coords.FromName
 					t.NextRun = nextRun
+					if !preserveCoords {
+						// Caller wants to rebind the target. Replace coords.
+						t.ChannelID = p.Coords.ChannelID
+						t.ChannelType = p.Coords.ChannelType
+						t.FromUID = p.Coords.FromUID
+					}
+					// FromName is treated as a partial-edit field on its own:
+					// empty = preserve (matches the "I'm not changing the
+					// display name" GUI default), non-empty = rewrite. Without
+					// this an edit that blanks FromName would erase the bot's
+					// display name in every future fire.
+					if p.Coords.FromName != "" {
+						t.FromName = p.Coords.FromName
+					}
 					if p.Enabled != nil {
 						t.Enabled = *p.Enabled
 					}

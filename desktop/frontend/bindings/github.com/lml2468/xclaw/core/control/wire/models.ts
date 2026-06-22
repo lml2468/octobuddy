@@ -43,10 +43,22 @@ export class CronCreateBody {
 
     /**
      * ChannelID + ChannelType bind a GROUP task. Omit (or type 1) for a DM task,
-     * which binds to the resolved owner. ChannelType: 1 = DM, 2 = Group.
+     * which binds to the resolved owner. ChannelType: 1 = DM, 2 = Group, 3 = Console.
      */
     "channelId"?: string;
     "channelType"?: number;
+
+    /**
+     * FromUID identifies WHO the task fires AS — distinct from the auth uid
+     * (which is server-resolved + not from this body). For DM targets this is
+     * the peer's uid (the task fires as a DM from the bot to that peer). For
+     * Console targets the handler stamps cron.ConsoleUID regardless of the body.
+     * For Group targets the handler stamps the owner (the bot identifies as
+     * itself in the group). Empty for DM is a validation error at create time;
+     * empty for DM on update preserves the existing FromUID (the "blank =
+     * preserve" GUI contract for the edit modal).
+     */
+    "fromUid"?: string;
     "fromName"?: string;
 
     /** Creates a new CronCreateBody instance. */
@@ -91,6 +103,14 @@ export class CronUpdateBody {
     "recurring"?: boolean | null;
     "channelId"?: string;
     "channelType"?: number;
+
+    /**
+     * FromUID — see CronCreateBody.FromUID. On update an empty value PRESERVES
+     * the existing stored FromUID (so the GUI's "blank = preserve" edit-modal
+     * contract is honored at the wire layer, not silently rebound by the
+     * handler stamping owner over the peer uid).
+     */
+    "fromUid"?: string;
     "fromName"?: string;
 
     /**
