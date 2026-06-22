@@ -55,10 +55,11 @@ func Path() string { return filepath.Join(Dir(), "config.json") }
 func botDir(id string) string { return filepath.Join(Dir(), id) }
 
 // First-time scaffold for a newly-created bot. Applied only when the file
-// does not already exist (writeOrScaffoldBotFile uses O_CREATE|O_EXCL), so
-// an operator who deliberately authored SOUL.md / AGENTS.md is never
-// overwritten by a re-save. Kept in English to match the file name + project
-// convention; operators in any locale are expected to overwrite these.
+// does not already exist — writeOrScaffoldBotFile's exists-check (SafeLstat)
+// treats both a regular file and an agent-planted symlink as "already there"
+// and bails, so an operator who deliberately authored SOUL.md / AGENTS.md
+// is never overwritten by a re-save. Kept in English to match the file name
+// + project convention; operators in any locale are expected to overwrite these.
 const defaultSoulTemplate = `# Identity
 
 <Describe who this bot is — its voice, values, and non-negotiable boundaries.>
@@ -336,8 +337,8 @@ func Save(bots []BotConfig, removedIDs []string) error {
 		if keep[id] || !safepath.ValidSlug(id) {
 			continue
 		}
-		if _, err := os.Stat(filepath.Join(botDir(id), "data")); err != nil {
-			continue // no data/ child → not an established bot dir; never RemoveAll
+		if _, err := safepath.SafeLstat(botDir(id), "data"); err != nil {
+			continue // no data/ child (or refused symlinked path) → never RemoveAll
 		}
 		// was `os.RemoveAll(botDir(id))` which descends
 		// into symlinked subdirectories — an agent that planted

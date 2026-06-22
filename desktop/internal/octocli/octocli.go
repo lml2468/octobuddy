@@ -473,7 +473,7 @@ func extractTarGz(archive []byte) ([]byte, error) {
 			continue
 		}
 		if filepath.Base(h.Name) == binName() {
-			return io.ReadAll(io.LimitReader(tr, 64<<20))
+			return readArchiveEntry(tr, h.Name)
 		}
 	}
 	return nil, fmt.Errorf("%s not found in archive", binName())
@@ -499,10 +499,27 @@ func extractZip(archive []byte) ([]byte, error) {
 				return nil, err
 			}
 			defer rc.Close()
-			return io.ReadAll(io.LimitReader(rc, 64<<20))
+			return readArchiveEntry(rc, f.Name)
 		}
 	}
 	return nil, fmt.Errorf("%s not found in archive", binName())
+}
+
+// readArchiveEntry reads an archive member with a hard size cap, erroring
+// rather than silently truncating. io.ReadAll(io.LimitReader(r, cap)) returns
+// at most cap bytes WITH NO ERROR when the source is ≥cap — so a binary that
+// grows past the cap would install corrupted (the outer archive checksum
+// already passed before extraction). Read cap+1 and treat >cap as an error.
+func readArchiveEntry(r io.Reader, name string) ([]byte, error) {
+	const cap = 256 << 20 // 256 MiB headroom — current octo-cli is ~20 MiB.
+	buf, err := io.ReadAll(io.LimitReader(r, cap+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(buf)) > cap {
+		return nil, fmt.Errorf("archive entry %q exceeds %d byte cap", name, cap)
+	}
+	return buf, nil
 }
 
 // compareVersions compares dotted versions (leading "v" ignored). Returns

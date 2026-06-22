@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/lml2468/xclaw/core/safepath"
 )
@@ -74,28 +75,41 @@ func NewStore(cronJSONPath string) *Store {
 // can't exfiltrate target bytes via JSON-parse error messages on the
 // control bus. The caller holds s.mu.
 //
-// A corrupt or oversize cron.json is logged + treated as empty rather than
-// returned as an error: returning an error would wedge cron permanently
-// (Update bails before mutating, every scheduler tick and every create/
-// delete handler fails forever). Resetting to an empty task list lets
-// cron self-heal on the next save — the operator's tasks are lost, but
-// the subsystem isn't. A persistent agent that keeps clobbering cron.json
-// is a separate "agent has bash" problem.
+// A corrupt or oversize cron.json is preserved as `cron.json.corrupt.<unix-ns>`
+// and treated as empty for the caller. Returning an error would wedge cron
+// permanently (Update bails before mutating, every scheduler tick and every
+// create/delete handler fails forever). Resetting to an empty task list lets
+// cron self-heal on the next save; the .corrupt sidecar keeps the operator's
+// data on disk for forensic recovery rather than letting the first save after
+// corruption silently erase it. A persistent agent that keeps clobbering
+// cron.json is a separate "agent has bash" problem.
 func (s *Store) load() ([]Task, error) {
 	raw, err := safepath.SafeReadAbs(s.path, 16<<20) // 16 MiB cap
 	if os.IsNotExist(err) {
 		return []Task{}, nil
 	}
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "cron: %s unreadable, resetting to empty: %v\n", s.path, err)
+		s.quarantine(fmt.Errorf("unreadable: %w", err))
 		return []Task{}, nil
 	}
 	var tasks []Task
 	if err := json.Unmarshal(raw, &tasks); err != nil {
-		fmt.Fprintf(os.Stderr, "cron: %s is malformed, resetting to empty: %v\n", s.path, err)
+		s.quarantine(fmt.Errorf("malformed: %w", err))
 		return []Task{}, nil
 	}
 	return tasks, nil
+}
+
+// quarantine renames a corrupt cron.json to a timestamped sidecar so the
+// operator can recover their tasks; logs to stderr. Best-effort — if the
+// rename fails (e.g. the source already vanished) we still log and continue.
+func (s *Store) quarantine(reason error) {
+	sidecar := fmt.Sprintf("%s.corrupt.%d", s.path, time.Now().UnixNano())
+	if rerr := os.Rename(s.path, sidecar); rerr != nil {
+		fmt.Fprintf(os.Stderr, "cron: %s %v, resetting to empty (sidecar rename failed: %v)\n", s.path, reason, rerr)
+		return
+	}
+	fmt.Fprintf(os.Stderr, "cron: %s %v, preserved at %s, resetting to empty\n", s.path, reason, sidecar)
 }
 
 // save atomically writes the task array via SafeWriteAbs: dirfd-walk the

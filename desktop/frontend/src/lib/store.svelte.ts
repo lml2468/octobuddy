@@ -71,6 +71,12 @@ export interface Session {
   lastActivity: number;
   preview?: string;   // last-message preview for the list (from sessions.list, before messages load)
   loaded?: boolean;   // true once full history has been fetched, so we don't refetch on every open
+ // historyEpoch is bumped on every reset() so a slow History response that
+ // started before the reset can be dropped on arrival instead of restoring
+ // the rows the operator just cleared. expectedHistoryEpoch is the value
+ // captured when loadHistory issued the in-flight request.
+  historyEpoch?: number;
+  expectedHistoryEpoch?: number;
 }
 
 export interface Bot {
@@ -363,6 +369,7 @@ class Store {
       s = this.ensureSession(botId, key, 0);
     }
     if (s.loaded) return;
+    s.expectedHistoryEpoch = s.historyEpoch ?? 0;
     XClawService.History(botId, key, 0);
   }
 
@@ -394,7 +401,14 @@ class Store {
     if (!botId || !key) return;
     XClawService.Reset(botId, key);
     const s = this.currentSession;
-    if (s) { s.messages = []; s.proc = emptyProc(); }
+    if (s) {
+      s.messages = [];
+      s.proc = emptyProc();
+ // Bump the epoch so any History response issued before this reset
+ // (still in flight over the control bus) is dropped on arrival
+ // instead of restoring the rows the operator just cleared.
+      s.historyEpoch = (s.historyEpoch ?? 0) + 1;
+    }
   }
 
   restartCore() {
@@ -571,6 +585,11 @@ class Store {
     if (!bid || !key) return;
     const s = this.sessions.find((x) => x.botId === bid && x.key === key);
     if (!s) return;
+ // Drop responses whose loadHistory was issued before the most recent
+ // reset() — the operator already cleared the visible transcript;
+ // restoring it would be a surprise. expectedHistoryEpoch is unset for
+ // the first fetch (treated as epoch 0).
+    if ((s.expectedHistoryEpoch ?? 0) !== (s.historyEpoch ?? 0)) return;
     s.loaded = true; // mark fetched even when empty, so we don't refetch on every open
  // previously we silently dropped server history when
  // the user had typed before the lazy History response landed. Now

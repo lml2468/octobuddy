@@ -101,16 +101,36 @@ func SafeWrite(root, rel string, data []byte, perm os.FileMode) error {
 	if err != nil {
 		return err
 	}
-	// Temp + rename for atomicity. The temp goes in the same dir so rename
-	// stays on one filesystem.
+	// Temp + fsync + rename for atomicity AND durability. The temp goes in
+	// the same dir so rename stays on one filesystem. O_EXCL guards against
+	// a collision with an unrelated tmp (8-byte hex makes this vanishingly
+	// rare, but the contract is "atomic write"); Sync flushes the bytes to
+	// disk before the rename publishes the inode — without it a power loss
+	// between the rename and the FS journal flush would leave a zero-byte
+	// cron.json / config.json. This matches the Unix branch's guarantees.
 	dir := filepath.Dir(abs)
 	var rb [8]byte
 	if _, rerr := rand.Read(rb[:]); rerr != nil {
 		return rerr
 	}
 	tmp := filepath.Join(dir, ".tmp."+filepath.Base(abs)+"."+hex.EncodeToString(rb[:]))
-	if werr := os.WriteFile(tmp, data, perm); werr != nil {
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
+	if err != nil {
+		return err
+	}
+	if _, werr := f.Write(data); werr != nil {
+		f.Close()
+		_ = os.Remove(tmp)
 		return werr
+	}
+	if serr := f.Sync(); serr != nil {
+		f.Close()
+		_ = os.Remove(tmp)
+		return serr
+	}
+	if cerr := f.Close(); cerr != nil {
+		_ = os.Remove(tmp)
+		return cerr
 	}
 	if rerr := os.Rename(tmp, abs); rerr != nil {
 		_ = os.Remove(tmp)

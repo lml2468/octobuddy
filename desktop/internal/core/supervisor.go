@@ -137,7 +137,8 @@ type Supervisor struct {
 
 	mu        sync.Mutex
 	cmd       *exec.Cmd
-	authToken string // capability token minted for the current daemon
+	exited    chan struct{} // closed when the reaper goroutine has Wait()ed on cmd
+	authToken string        // capability token minted for the current daemon
 }
 
 // Token returns the control-bus capability token for the currently running
@@ -196,6 +197,18 @@ func (s *Supervisor) startLocked() error {
 
 	s.cmd = cmd
 	s.authToken = token
+	// Spawn a reaper goroutine so a daemon that exits on its own (crash,
+	// panic, OOM) is Wait()ed promptly — without it, the kernel keeps the
+	// child as a zombie on Linux until stopLocked runs (which may be never
+	// if the desktop process stays up but the daemon dies). stopLocked
+	// blocks on this channel so a deliberate stop after a crash doesn't
+	// race the reaper.
+	exited := make(chan struct{})
+	s.exited = exited
+	go func() {
+		_ = cmd.Wait()
+		close(exited)
+	}()
 
 	// Wait (briefly) for the daemon to bind the socket before clients dial.
 	deadline := time.Now().Add(5 * time.Second)
@@ -221,21 +234,28 @@ func (s *Supervisor) stopLocked() {
 		return
 	}
 	_ = s.cmd.Process.Signal(os.Interrupt)
-	done := make(chan struct{})
-	go func() { _, _ = s.cmd.Process.Wait(); close(done) }()
+	// The reaper goroutine (spawned in startLocked) is the sole Waiter
+	// on cmd; observe its exit channel instead of starting a second
+	// Wait (which would error with "Wait already called").
+	done := s.exited
+	if done == nil {
+		// Defensive — pre-reaper invocation shouldn't happen.
+		done = make(chan struct{})
+		close(done)
+	}
 	select {
 	case <-done:
 	case <-time.After(3 * time.Second):
 		_ = s.cmd.Process.Kill()
-		// Wait for the Wait goroutine to reap the killed process, so it doesn't
-		// linger as a zombie and the goroutine doesn't leak. Kill makes Wait return
-		// promptly; bound it so a truly stuck process can't hang Stop forever.
+		// Kill makes Wait return promptly; bound it so a truly stuck
+		// process can't hang Stop forever.
 		select {
 		case <-done:
 		case <-time.After(2 * time.Second):
 		}
 	}
 	s.cmd = nil
+	s.exited = nil
 	_ = os.Remove(s.SocketPath)
 }
 
