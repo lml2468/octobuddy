@@ -191,6 +191,16 @@ func runConfigMode(path, controlSock string, exitWithParent bool, authStdin bool
 			}
 		}(cfg)
 	}
+	// First-run state (no bots yet): wg.Wait would return immediately and the
+	// daemon would exit before the GUI ever connects. Block on ctx so the
+	// control bus stays up and SaveConfig → RestartCore can populate the
+	// roster. The signal-driven ctx.Done path (SIGINT/SIGTERM/exit-with-parent)
+	// is the same one that ends a populated run after wg.Wait, so shutdown
+	// semantics match either branch.
+	if len(bots) == 0 {
+		<-ctx.Done()
+		return
+	}
 	wg.Wait()
 }
 
