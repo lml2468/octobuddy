@@ -65,46 +65,35 @@ func runBot(ctx context.Context, cfg config.Resolved, reg *botRegistry, srv *con
 	// Resolve the gateway token lazily per turn so an injected token takes effect.
 	drv.EnvFn = func() []string { return cfg.DriverEnv(sec.GatewayToken(), sec.OctoToken(), sec.Secret) }
 
+	rtBot, connector, cm, err := assembleBotRuntime(ctx, cfg, srv, st, rt, sec, drv)
+	if err != nil {
+		return err
+	}
+	defer drainBotRuntime(cm, connector, rtBot.target)
+	registerBotRuntime(rtBot, reg, srv)
+	startBotCron(cm, cfg.BotID)
+
+	fmt.Printf("[%s] started — driver=%s api=%s data=%s\n",
+		cfg.BotID, drv.Name(), cfg.APIURL, cfg.DataDir)
+
+	err = connector.Run(ctx)
+	return err
+}
+
+func assembleBotRuntime(
+	ctx context.Context,
+	cfg config.Resolved,
+	srv *control.Server,
+	st *store.Store,
+	rt *router.Router,
+	sec *secretStore,
+	drv agent.Driver,
+) (*botRuntime, *octo.Connector, *cron.Manager, error) {
 	if cfg.APIURL == "" {
-		return fmt.Errorf("bot %s: config mode requires apiUrl", cfg.BotID)
+		return nil, nil, nil, fmt.Errorf("bot %s: config mode requires apiUrl", cfg.BotID)
 	}
-	// The Octo token is read lazily; it may arrive via secret.inject after start,
-	// so an empty token here is allowed (the connector waits for it).
-	connector := octo.NewConnector(octo.NewRESTClient(cfg.APIURL, sec.OctoToken))
-	connector.SetToolProgress(cfg.Agent.ToolProgress)
-	connector.SetMentionFreeGroups(cfg.MentionFreeGroups)
-
-	// Persona clone (openclaw OBO): when onBehalfOf is configured, the connector
-	// widens its trigger gate + routes replies as the grantor, and the gateway
-	// injects the persona system prompt. A zero grantor is a no-op (regular bot).
-	grantor := persona.Grantor{UID: cfg.OnBehalfOf.UID, Name: cfg.OnBehalfOf.Name}
-	connector.SetPersona(grantor)
-
-	// Sinks: the Octo connector (delivers replies to IM) + control bus (tagged
-	// with this bot's id) when a GUI is attached.
-	sinks := multiSink{connector}
-	if srv != nil {
-		sinks = append(sinks, control.NewBotEventSink(srv, cfg.BotID))
-	}
-
-	gw := gateway.New(drv, st, rt, sinks).
-		WithGroupContext(groupctx.New(cfg.Context.MaxContextChars)).
-		WithGroupMD(groupmd.New(cfg.GroupConfigDir)).
-		WithGroupBackfill(connector.BotUID, connector.BackfillFetch).
-		WithSystemPrompt(cfg.SystemPrompt).
-		WithPersona(grantor, cfg.OnBehalfOf.PersonaPrompt).
-		WithModel(cfg.Agent.Model).
-		WithCommandInfo(cfg.RateLimit.MaxPerMinute, cfg.Context.MaxContextChars).
-		WithSandbox(cfg.CwdBase, cfg.MemoryBase).
-		WithDispatchTimeout(time.Duration(cfg.Agent.DispatchTimeoutSec) * time.Second).
-		WithMediaAuth(connector.MediaAuth())
-	if srv != nil {
-		gw = gw.WithSessionTouchNotifier(sessionTouchBroadcaster(srv, cfg.BotID, st, connector))
-		// Push a fresh session.upserted when a late name fetch resolves, so a
-		// sidebar row that first painted with the bare id (DM peer / group name
-		// not yet cached at sessions.list time) updates without a turn.
-		connector.SetNameResolvedHook(nameResolvedBroadcaster(srv, cfg.BotID, st, connector))
-	}
+	connector, grantor := newBotConnector(cfg, sec)
+	gw := newBotGateway(cfg, srv, st, rt, drv, connector, grantor)
 	connector.SetGateway(gw)
 
 	// Eager-init the per-bot control-handler target so its embedded turnsWG is
@@ -126,40 +115,60 @@ func runBot(ctx context.Context, cfg config.Resolved, reg *botRegistry, srv *con
 	cm := newBotCronManager(ctx, cfg, connector, gw, target)
 	target.cron = cm
 
-	// Eager-init the per-bot control-handler target so its embedded turnsWG is
-	// pinned for runBot's shutdown barrier: the lazy-init in
-	// resolve left target nil for bots that no control-bus command ever
-	// reached (headless-mode operator, octo+cron-only bot), which then
-	// nil-derefs on `rtBot.target.turnsWG.Wait` in the shutdown chain. The
-	// resolver still races on first call (two control commands could both see
-	// nil), which would silently split session.send goroutines across two
-	// targets — one outside the wait barrier. Setting it here ensures a single
-	// target shared by every codepath. cron is also wired in upfront so the
-	// resolve-side per-call write was racing concurrent reads.
+	// Eager-init the per-bot control-handler target so every control path shares
+	// the same shutdown barrier. Cron is wired in upfront for the same reason.
 	rtBot := &botRuntime{
 		cfg: cfg, gateway: gw, store: st, secrets: sec, cron: cm,
 		connector: connector,
 		target:    target,
 	}
-	// Single drain defer covers both happy path and panic. Earlier code
-	// expressed the same sequence THREE times (defer for connector/target,
-	// defer for cron, and an explicit tail chain) with paragraph-long
-	// rationale. All four steps are idempotent so the defer can be the
-	// only call site:
-	//   1. cm.Stop+Wait — no fresh tick, in-flight safeFire drained
-	//   2. connector.WaitTurns — drainTurns workers done
-	//   3. target.turnsWG.Wait — control-bus session.send done
-	//   4. (defer st.Close from top of function fires last on LIFO)
-	defer drainBotRuntime(cm, connector, rtBot.target)
-	registerBotRuntime(rtBot, reg, srv)
+	return rtBot, connector, cm, nil
+}
 
-	startBotCron(cm, cfg.BotID)
+func newBotConnector(cfg config.Resolved, sec *secretStore) (*octo.Connector, persona.Grantor) {
+	// The Octo token is read lazily; it may arrive via secret.inject after start,
+	// so an empty token here is allowed (the connector waits for it).
+	connector := octo.NewConnector(octo.NewRESTClient(cfg.APIURL, sec.OctoToken))
+	connector.SetToolProgress(cfg.Agent.ToolProgress)
+	connector.SetMentionFreeGroups(cfg.MentionFreeGroups)
 
-	fmt.Printf("[%s] started — driver=%s api=%s data=%s\n",
-		cfg.BotID, drv.Name(), cfg.APIURL, cfg.DataDir)
+	// Persona clone (openclaw OBO): when onBehalfOf is configured, the connector
+	// widens its trigger gate + routes replies as the grantor, and the gateway
+	// injects the persona system prompt. A zero grantor is a no-op (regular bot).
+	grantor := persona.Grantor{UID: cfg.OnBehalfOf.UID, Name: cfg.OnBehalfOf.Name}
+	connector.SetPersona(grantor)
+	return connector, grantor
+}
 
-	err = connector.Run(ctx)
-	return err
+func newBotGateway(
+	cfg config.Resolved,
+	srv *control.Server,
+	st *store.Store,
+	rt *router.Router,
+	drv agent.Driver,
+	connector *octo.Connector,
+	grantor persona.Grantor,
+) *gateway.Gateway {
+	sinks := multiSink{connector}
+	if srv != nil {
+		sinks = append(sinks, control.NewBotEventSink(srv, cfg.BotID))
+	}
+	gw := gateway.New(drv, st, rt, sinks).
+		WithGroupContext(groupctx.New(cfg.Context.MaxContextChars)).
+		WithGroupMD(groupmd.New(cfg.GroupConfigDir)).
+		WithGroupBackfill(connector.BotUID, connector.BackfillFetch).
+		WithSystemPrompt(cfg.SystemPrompt).
+		WithPersona(grantor, cfg.OnBehalfOf.PersonaPrompt).
+		WithModel(cfg.Agent.Model).
+		WithCommandInfo(cfg.RateLimit.MaxPerMinute, cfg.Context.MaxContextChars).
+		WithSandbox(cfg.CwdBase, cfg.MemoryBase).
+		WithDispatchTimeout(time.Duration(cfg.Agent.DispatchTimeoutSec) * time.Second).
+		WithMediaAuth(connector.MediaAuth())
+	if srv != nil {
+		gw = gw.WithSessionTouchNotifier(sessionTouchBroadcaster(srv, cfg.BotID, st, connector))
+		connector.SetNameResolvedHook(nameResolvedBroadcaster(srv, cfg.BotID, st, connector))
+	}
+	return gw
 }
 
 // SafeMkdirAllAbs walks the parent chain via dirfd, refusing any symlinked
