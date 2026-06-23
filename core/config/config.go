@@ -275,77 +275,91 @@ func resolveBots(global File, baseDir string) ([]Resolved, error) {
 	seenID := map[string]bool{}
 
 	for i, bot := range entries {
-		id := bot.ID
-		if id == "" {
-			id = fmt.Sprintf("bot%d", i)
-		}
-		if !validSlug(id) {
-			return nil, fmt.Errorf("bot %q: invalid id — letters, digits, dot, underscore, hyphen only (no path separators)", id)
-		}
-		if seenID[id] {
-			return nil, fmt.Errorf("duplicate bot id %q", id)
+		id, err := resolveBotID(bot, i, seenID)
+		if err != nil {
+			return nil, err
 		}
 		seenID[id] = true
 
 		botRoot := filepath.Join(baseDir, id)
-
-		r := defaults()
-		r.BotID = id
-		r.DataDir = filepath.Join(botRoot, "data")
-		r.CwdBase = filepath.Join(botRoot, "workspace")
-		r.MemoryBase = filepath.Join(botRoot, "memory")
-		r.ClaudeConfigDir = filepath.Join(botRoot, ".claude")
-
-		// Bot identity/agent config is per-bot only. Top-level config carries
-		// shared runtime policy (rateLimit/context), not bot defaults.
-		r.APIURL = bot.APIURL
-		r.OctoToken = bot.OctoToken
-
-		// shallow-merge runtime policy defaults first, then the per-bot override.
-		mergeAgent(&r.Agent, bot.Agent)
-		mergeRate(&r.RateLimit, global.RateLimit)
-		mergeRate(&r.RateLimit, bot.RateLimit)
-		mergeCtx(&r.Context, global.Context)
-		mergeCtx(&r.Context, bot.Context)
-
-		// Gating lists are per-bot policy. Nil and empty both resolve to "unset".
-		r.MentionFreeGroups = bot.MentionFreeGroups
-		r.KnownBotUids = bot.KnownBotUids
-		r.AllowedBotUids = bot.AllowedBotUids
-		r.BotBlocklist = bot.BotBlocklist
-
-		// System prompt: SOUL.md (identity) + AGENTS.md (behavior), file-based.
-		r.SystemPrompt = soul(botRoot)
-
-		// Per-bot groupConfigDir. Empty = feature off.
-		r.GroupConfigDir = bot.GroupConfigDir
-
-		// Persona clone (openclaw OBO): grantor identity comes from config, not
-		// from message payloads. A nil block leaves r.OnBehalfOf zero (regular bot).
-		if bot.OnBehalfOf != nil {
-			r.OnBehalfOf = *bot.OnBehalfOf
-		}
-
-		// validation. octoToken is intentionally NOT required: it may be omitted
-		// from the file and injected at runtime via the control bus (secret.inject)
-		// from the GUI's secret backend. The connector waits for a token before connecting.
-		if r.APIURL != "" && !IsAllowedURL(r.APIURL) {
-			return nil, fmt.Errorf("bot %q: unsafe apiUrl %q (must be https:// or http://localhost; SSRF protection)", id, r.APIURL)
-		}
-		if r.Agent.GatewayBaseURL != "" && !IsAllowedURL(r.Agent.GatewayBaseURL) {
-			return nil, fmt.Errorf("bot %q: unsafe gatewayBaseUrl %q (SSRF protection)", id, r.Agent.GatewayBaseURL)
-		}
-		// groupConfigDir files are injected UNSANITIZED into the system prompt, so
-		// the dir must NOT be the agent-writable sandbox — otherwise a user-driven
-		// agent could write its own future instructions. Mirrors cc-channel-octo's
-		// assertGroupConfigDirOutsideCwd.
-		if err := assertGroupConfigDirOutsideCwd(id, r.GroupConfigDir, r.CwdBase); err != nil {
+		r := buildResolvedBot(global, bot, id, botRoot)
+		if err := validateResolvedBot(r); err != nil {
 			return nil, err
 		}
-
 		out = append(out, r)
 	}
 	return out, nil
+}
+
+func resolveBotID(bot BotEntry, index int, seenID map[string]bool) (string, error) {
+	id := bot.ID
+	if id == "" {
+		id = fmt.Sprintf("bot%d", index)
+	}
+	if !validSlug(id) {
+		return "", fmt.Errorf("bot %q: invalid id — letters, digits, dot, underscore, hyphen only (no path separators)", id)
+	}
+	if seenID[id] {
+		return "", fmt.Errorf("duplicate bot id %q", id)
+	}
+	return id, nil
+}
+
+func buildResolvedBot(global File, bot BotEntry, id, botRoot string) Resolved {
+	r := defaults()
+	r.BotID = id
+	r.DataDir = filepath.Join(botRoot, "data")
+	r.CwdBase = filepath.Join(botRoot, "workspace")
+	r.MemoryBase = filepath.Join(botRoot, "memory")
+	r.ClaudeConfigDir = filepath.Join(botRoot, ".claude")
+
+	// Bot identity/agent config is per-bot only. Top-level config carries
+	// shared runtime policy (rateLimit/context), not bot defaults.
+	r.APIURL = bot.APIURL
+	r.OctoToken = bot.OctoToken
+
+	// shallow-merge runtime policy defaults first, then the per-bot override.
+	mergeAgent(&r.Agent, bot.Agent)
+	mergeRate(&r.RateLimit, global.RateLimit)
+	mergeRate(&r.RateLimit, bot.RateLimit)
+	mergeCtx(&r.Context, global.Context)
+	mergeCtx(&r.Context, bot.Context)
+
+	// Gating lists are per-bot policy. Nil and empty both resolve to "unset".
+	r.MentionFreeGroups = bot.MentionFreeGroups
+	r.KnownBotUids = bot.KnownBotUids
+	r.AllowedBotUids = bot.AllowedBotUids
+	r.BotBlocklist = bot.BotBlocklist
+
+	// System prompt: SOUL.md (identity) + AGENTS.md (behavior), file-based.
+	r.SystemPrompt = soul(botRoot)
+
+	// Per-bot groupConfigDir. Empty = feature off.
+	r.GroupConfigDir = bot.GroupConfigDir
+
+	// Persona clone (openclaw OBO): grantor identity comes from config, not
+	// from message payloads. A nil block leaves r.OnBehalfOf zero (regular bot).
+	if bot.OnBehalfOf != nil {
+		r.OnBehalfOf = *bot.OnBehalfOf
+	}
+	return r
+}
+
+func validateResolvedBot(r Resolved) error {
+	// validation. octoToken is intentionally NOT required: it may be omitted
+	// from the file and injected at runtime via the control bus (secret.inject)
+	// from the GUI's secret backend. The connector waits for a token before connecting.
+	if r.APIURL != "" && !IsAllowedURL(r.APIURL) {
+		return fmt.Errorf("bot %q: unsafe apiUrl %q (must be https:// or http://localhost; SSRF protection)", r.BotID, r.APIURL)
+	}
+	if r.Agent.GatewayBaseURL != "" && !IsAllowedURL(r.Agent.GatewayBaseURL) {
+		return fmt.Errorf("bot %q: unsafe gatewayBaseUrl %q (SSRF protection)", r.BotID, r.Agent.GatewayBaseURL)
+	}
+	// groupConfigDir files are injected UNSANITIZED into the system prompt, so
+	// the dir must NOT be the agent-writable sandbox — otherwise a user-driven
+	// agent could write its own future instructions. Mirrors cc-channel-octo's
+	// assertGroupConfigDirOutsideCwd.
+	return assertGroupConfigDirOutsideCwd(r.BotID, r.GroupConfigDir, r.CwdBase)
 }
 
 func mergeAgent(dst *AgentConfig, src *AgentConfig) {
