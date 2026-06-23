@@ -65,6 +65,7 @@ const emptyProc = (): ProcState => ({ steps: [], active: false });
 export interface Session {
   botId: string;
   key: string;        // sessionKey (the console session is keyed on CONSOLE_UID)
+  channelType: number; // router channel type: 1=DM, 2=Group, 3=Console
   title: string;
   messages: Message[];
   awaiting: boolean;  // a turn is in flight (show typing indicator)
@@ -244,7 +245,7 @@ class Store {
       return;
     }
     const s: Session = {
-      botId: "main", key: "console", title: "Console", awaiting: true, awaitingSince: Date.now(),
+      botId: "main", key: "console", channelType: 1, title: "Console", awaiting: true, awaitingSince: Date.now(),
       proc: {
         active: true,
  // Process for the in-flight turn: thinking + tool calls only. The
@@ -274,7 +275,7 @@ class Store {
     ];
     for (const [key, title, prev, ago] of hist) {
       this.sessions.push({
-        botId: "main", key, title, messages: [], awaiting: false, awaitingSince: 0, proc: emptyProc(),
+        botId: "main", key, channelType: key.startsWith("group:") ? 2 : 1, title, messages: [], awaiting: false, awaitingSince: 0, proc: emptyProc(),
         inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, costUsd: 0,
         lastActivity: Date.now() - ago, preview: prev,
       });
@@ -404,7 +405,7 @@ class Store {
  // guard here too so a stray keybinding path can't inject as the bot.
     if (!this.isConsole && this.selectedKey != null) return;
     const key = CONSOLE_UID;
-    const s = this.ensureSession(botId, key);
+    const s = this.ensureSession(botId, key, Date.now(), 1);
     s.messages.push({ id: newId(), role: "user", text, ts: Date.now() / 1000 });
     s.awaiting = true;
     s.awaitingSince = Date.now();
@@ -626,7 +627,7 @@ class Store {
     const botId = env.body?.botId || this.defaultBotId();
     const key = env.body?.sessionKey ?? "";
     if (!botId) return null;
-    return this.ensureSession(botId, key || CONSOLE_UID);
+    return this.ensureSession(botId, key || CONSOLE_UID, Date.now(), Number(env.body?.channelType ?? 1));
   }
 
   private defaultBotId(): string {
@@ -642,11 +643,13 @@ class Store {
  // out-sort genuinely-recent sessions — applyHistory + applySessionsList
  // both `Math.max(s.lastActivity, persisted)`, so a bogus high value
  // wins forever.
-  private ensureSession(botId: string, key: string, initialActivity = Date.now()): Session {
+  private ensureSession(botId: string, key: string, initialActivity = Date.now(), channelType = 1): Session {
     let s = this.sessions.find((x) => x.botId === botId && x.key === key);
     if (!s) {
-      s = { botId, key, title: prettyTitle(key), messages: [], awaiting: false, awaitingSince: 0, proc: emptyProc(), inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, costUsd: 0, lastActivity: initialActivity };
+      s = { botId, key, channelType, title: prettyTitle(key), messages: [], awaiting: false, awaitingSince: 0, proc: emptyProc(), inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, costUsd: 0, lastActivity: initialActivity };
       this.sessions.push(s);
+    } else if (channelType > 0) {
+      s.channelType = channelType;
     }
  // Surface an arriving conversation when nothing is selected yet (first
  // connect, incoming IM, or an externally-driven turn) so the transcript
@@ -723,7 +726,7 @@ class Store {
     for (const r of rows) {
       if (!r?.key) continue;
       const existed = this.sessions.some((x) => x.botId === bid && x.key === r.key);
-      const s = this.ensureSession(bid, r.key);
+      const s = this.ensureSession(bid, r.key, Date.now(), Number(r.channelType ?? 1));
  // Don't clobber a live session's recency: a turn in flight sets lastActivity
  // to Date.now; the persisted updatedAt is older, so only seed it for
  // sessions we just created (or take the max), or an active chat would drop

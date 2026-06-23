@@ -3,9 +3,13 @@
   import type { Node } from "../../../bindings/github.com/lml2468/xclaw/desktop/internal/workspace/models";
   import { errMsg } from "../errors";
 
-  let { botId, sessionKey, activePath, onopen, onclose }: {
+  type FileSource = "workspace" | "memory";
+
+  let { botId, channelType = 1, sessionKey, source = "workspace", activePath, onopen, onclose }: {
     botId: string | null;
+    channelType?: number;
     sessionKey: string | null;
+    source?: FileSource;
     activePath: string | null;
     onopen: (path: string) => void;
     onclose: () => void;
@@ -34,16 +38,16 @@
 
  // Refetch whenever the selected session changes (covers open + switch).
   $effect(() => {
-    const b = botId, k = sessionKey;
+    const b = botId, ct = channelType, k = sessionKey, src = source;
     expanded = new Set();
-    loadTree(b, k);
+    loadTree(b, ct, k, src);
   });
 
  // Generation counter discards stale fetches: switching sessions twice
  // quickly used to leave the slower (older) WorkspaceTree response
  // overwriting `tree` with the wrong session's files.
   let loadGen = 0;
-  async function loadTree(b: string | null, k: string | null) {
+  async function loadTree(b: string | null, ct: number, k: string | null, src: FileSource) {
     const gen = ++loadGen;
     error = "";
     if (!b || !k) {
@@ -58,7 +62,11 @@
     }
     loading = true;
     try {
-      const t = isPreview ? mockTree : await XClawService.WorkspaceTree(b, k);
+      const t = isPreview
+        ? mockTree
+        : src === "memory"
+          ? await XClawService.MemoryTree(b, ct, k)
+          : await XClawService.WorkspaceTree(b, ct, k);
       if (gen === loadGen) tree = t;
     } catch (e) {
       if (gen === loadGen) { error = errMsg(e); tree = null; }
@@ -79,16 +87,18 @@
   }
 
   const hasFiles = $derived(kids(tree).length > 0);
+  const title = $derived(source === "memory" ? "记忆" : "工作区");
+  const emptyText = $derived(source === "memory" ? "还没有记忆。Agent 写入 session memory 后会显示在这里。" : "还没有文件。Agent 写入工作区后会显示在这里。");
 </script>
 
 <div class="panel">
   <header class="bar">
-    <span class="title">工作区</span>
+    <span class="title">{title}</span>
     <span class="spacer"></span>
-    <button class="icon" class:spin={loading} title="刷新" aria-label="刷新" onclick={() => loadTree(botId, sessionKey)}>
+    <button class="icon" class:spin={loading} title="刷新" aria-label="刷新" onclick={() => loadTree(botId, channelType, sessionKey, source)}>
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>
     </button>
-    <button class="icon" title="关闭" aria-label="关闭工作区" onclick={onclose}>
+    <button class="icon" title="关闭" aria-label={`关闭${title}`} onclick={onclose}>
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
     </button>
   </header>
@@ -97,7 +107,7 @@
     {#if error}
       <div class="msg err" role="alert">
         <span>加载失败:{error}</span>
-        <button class="retry" onclick={() => loadTree(botId, sessionKey)}>重试</button>
+        <button class="retry" onclick={() => loadTree(botId, channelType, sessionKey, source)}>重试</button>
       </div>
     {:else if loading && !tree}
       <div class="skel" aria-hidden="true">
@@ -106,7 +116,7 @@
         {/each}
       </div>
     {:else if !hasFiles}
-      <div class="msg">还没有文件。Agent 写入工作区后会显示在这里。</div>
+      <div class="msg">{emptyText}</div>
     {:else}
       {#each kids(tree) as child (child.path)}
         {@render row(child, 0)}

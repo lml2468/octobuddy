@@ -211,6 +211,26 @@ export function LoadConfig(): $CancellablePromise<configstore$0.BotConfig[]> {
 }
 
 /**
+ * MemoryFile returns one session memory file's contents for inline preview,
+ * bounded and traversal-safe.
+ */
+export function MemoryFile(botID: string, channelType: number, sessionKey: string, relPath: string): $CancellablePromise<workspace$0.FileContent> {
+    return $Call.ByID(2248183679, botID, channelType, sessionKey, relPath).then(($result: any) => {
+        return $$createType9($result);
+    });
+}
+
+/**
+ * MemoryTree returns the file tree of a session's auto-memory directory
+ * (read-only). Returns an empty tree when no memory has been written yet.
+ */
+export function MemoryTree(botID: string, channelType: number, sessionKey: string): $CancellablePromise<workspace$0.Node | null> {
+    return $Call.ByID(1997019889, botID, channelType, sessionKey).then(($result: any) => {
+        return $$createType11($result);
+    });
+}
+
+/**
  * OctoAddBot provisions a new bot on octo-server using the operator's User API
  * Key (uk_…), returning the bot's robot id + bf_ token. The wizard then folds
  * these into a BotConfig and calls SaveConfig — so the token reaches the
@@ -219,7 +239,7 @@ export function LoadConfig(): $CancellablePromise<configstore$0.BotConfig[]> {
  */
 export function OctoAddBot(apiURL: string, apiKey: string, name: string): $CancellablePromise<octoapi$0.BotResult> {
     return $Call.ByID(1338554973, apiURL, apiKey, name).then(($result: any) => {
-        return $$createType9($result);
+        return $$createType12($result);
     });
 }
 
@@ -246,7 +266,7 @@ export function OctoCliRelogin(botID: string): $CancellablePromise<void> {
  */
 export function OctoCliStatus(botID: string): $CancellablePromise<$models.OctoCliStatus> {
     return $Call.ByID(3212560983, botID).then(($result: any) => {
-        return $$createType10($result);
+        return $$createType13($result);
     });
 }
 
@@ -304,9 +324,9 @@ export function UsageStats(botID: string, since: number): $CancellablePromise<vo
  * WorkspaceFile returns one workspace file's contents for inline preview
  * (utf8 text or base64 for images/binaries), bounded and traversal-safe.
  */
-export function WorkspaceFile(botID: string, sessionKey: string, relPath: string): $CancellablePromise<workspace$0.FileContent> {
-    return $Call.ByID(2447146625, botID, sessionKey, relPath).then(($result: any) => {
-        return $$createType11($result);
+export function WorkspaceFile(botID: string, channelType: number, sessionKey: string, relPath: string): $CancellablePromise<workspace$0.FileContent> {
+    return $Call.ByID(2447146625, botID, channelType, sessionKey, relPath).then(($result: any) => {
+        return $$createType9($result);
     });
 }
 
@@ -314,9 +334,9 @@ export function WorkspaceFile(botID: string, sessionKey: string, relPath: string
  * WorkspaceTree returns the file tree of a session's sandbox workspace
  * (read-only). Returns an empty tree when no turn has created the sandbox yet.
  */
-export function WorkspaceTree(botID: string, sessionKey: string): $CancellablePromise<workspace$0.Node | null> {
-    return $Call.ByID(710539635, botID, sessionKey).then(($result: any) => {
-        return $$createType13($result);
+export function WorkspaceTree(botID: string, channelType: number, sessionKey: string): $CancellablePromise<workspace$0.Node | null> {
+    return $Call.ByID(710539635, botID, channelType, sessionKey).then(($result: any) => {
+        return $$createType11($result);
     });
 }
 
@@ -330,8 +350,8 @@ const $$createType5 = octocli$0.Group.createFrom;
 const $$createType6 = $Create.Array($$createType5);
 const $$createType7 = configstore$0.BotConfig.createFrom;
 const $$createType8 = $Create.Array($$createType7);
-const $$createType9 = octoapi$0.BotResult.createFrom;
-const $$createType10 = $models.OctoCliStatus.createFrom;
-const $$createType11 = workspace$0.FileContent.createFrom;
-const $$createType12 = workspace$0.Node.createFrom;
-const $$createType13 = $Create.Nullable($$createType12);
+const $$createType9 = workspace$0.FileContent.createFrom;
+const $$createType10 = workspace$0.Node.createFrom;
+const $$createType11 = $Create.Nullable($$createType10);
+const $$createType12 = octoapi$0.BotResult.createFrom;
+const $$createType13 = $models.OctoCliStatus.createFrom;

@@ -520,14 +520,26 @@ func (x *XClawService) BotWorkflowDelete(botID, name string) error {
 
 // WorkspaceTree returns the file tree of a session's sandbox workspace
 // (read-only). Returns an empty tree when no turn has created the sandbox yet.
-func (x *XClawService) WorkspaceTree(botID, sessionKey string) (*workspace.Node, error) {
-	return workspace.Tree(botID, sessionKey)
+func (x *XClawService) WorkspaceTree(botID string, channelType int, sessionKey string) (*workspace.Node, error) {
+	return workspace.Tree(botID, channelType, sessionKey)
 }
 
 // WorkspaceFile returns one workspace file's contents for inline preview
 // (utf8 text or base64 for images/binaries), bounded and traversal-safe.
-func (x *XClawService) WorkspaceFile(botID, sessionKey, relPath string) (workspace.FileContent, error) {
-	return workspace.File(botID, sessionKey, relPath)
+func (x *XClawService) WorkspaceFile(botID string, channelType int, sessionKey, relPath string) (workspace.FileContent, error) {
+	return workspace.File(botID, channelType, sessionKey, relPath)
+}
+
+// MemoryTree returns the file tree of a session's auto-memory directory
+// (read-only). Returns an empty tree when no memory has been written yet.
+func (x *XClawService) MemoryTree(botID string, channelType int, sessionKey string) (*workspace.Node, error) {
+	return workspace.MemoryTree(botID, channelType, sessionKey)
+}
+
+// MemoryFile returns one session memory file's contents for inline preview,
+// bounded and traversal-safe.
+func (x *XClawService) MemoryFile(botID string, channelType int, sessionKey, relPath string) (workspace.FileContent, error) {
+	return workspace.MemoryFile(botID, channelType, sessionKey, relPath)
 }
 
 // RestartCore restarts the daemon and reconnects (applies config changes). It

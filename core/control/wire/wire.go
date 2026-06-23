@@ -329,12 +329,13 @@ type SessionReplyBody struct {
 // originated turns also emit this — the GUI dedupes against the message it
 // optimistically pushed when the Composer typed it.
 type SessionUserMessageBody struct {
-	BotID      string `json:"botId,omitempty"`
-	SessionKey string `json:"sessionKey"`
-	Text       string `json:"text"`
-	FromUID    string `json:"fromUid,omitempty"`
-	FromName   string `json:"fromName,omitempty"`
-	Ts         int64  `json:"ts"`
+	BotID       string `json:"botId,omitempty"`
+	SessionKey  string `json:"sessionKey"`
+	ChannelType int    `json:"channelType,omitempty"`
+	Text        string `json:"text"`
+	FromUID     string `json:"fromUid,omitempty"`
+	FromName    string `json:"fromName,omitempty"`
+	Ts          int64  `json:"ts"`
 	// CronFire is true when this user_message represents a scheduled-task
 	// trigger rather than a real human inbound. The renderer uses it to (a)
 	// override the Composer-typed dedupe — a cron Console fire shares the

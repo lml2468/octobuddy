@@ -1,9 +1,9 @@
-// Package workspace exposes a read-only view of a chat session's sandbox
-// workspace (~/.xclaw/<botID>/workspace/<hash>) to the desktop app: a bounded
-// file tree and per-file contents. The hash is the same one core/sandbox derives
-// from the session's (kind, sessionKey); since the desktop doesn't know whether a
-// session is a DM or a group, Tree/File try both kinds and use whichever sandbox
-// directory exists on disk.
+// Package workspace exposes read-only views of a chat session's sandbox-backed
+// files to the desktop app: workspace files under
+// ~/.xclaw/<botID>/workspace/<hash> and auto-memory files under
+// ~/.xclaw/<botID>/memory/<hash>. The hash is the same one core/sandbox derives
+// from the session's (kind, sessionKey), and callers pass the persisted channel
+// type explicitly so the file browser does not guess DM vs group.
 //
 // Everything here is read-only and defensive: bot IDs are slug-validated,
 // per-file paths are containment-checked (mirroring internal/skills),
@@ -41,6 +41,19 @@ const (
 	maxBinaryBytes = 8 << 20 // 8 MiB
 )
 
+const (
+	channelDM      = 1
+	channelGroup   = 2
+	channelConsole = 3
+)
+
+type treeSpace string
+
+const (
+	workspaceSpace treeSpace = "workspace"
+	memorySpace    treeSpace = "memory"
+)
+
 // Dir is ~/.xclaw (the install root), matching configstore.Dir.
 func Dir() string {
 	home, _ := os.UserHomeDir()
@@ -72,31 +85,51 @@ type FileContent struct {
 	Size      int64  `json:"size"`
 }
 
-// resolveRoot returns the session's sandbox directory and whether it exists.
-// The desktop doesn't carry the session kind, so we try DM then group and use
-// whichever directory is present (the kind prefix makes the two hashes distinct,
-// so at most one exists; DM wins a pathological tie). When neither exists yet (no
-// turn has run), exists is false and dir is the DM candidate path.
-func resolveRoot(botID, sessionKey string) (dir string, exists bool, err error) {
+func kindForChannelType(channelType int) (sandbox.Kind, error) {
+	switch channelType {
+	case channelDM, channelConsole:
+		return sandbox.KindDM, nil
+	case channelGroup:
+		return sandbox.KindGroup, nil
+	default:
+		return "", fmt.Errorf("unsupported channel type %d", channelType)
+	}
+}
+
+// resolveRoot returns the session's file-root directory and whether it exists.
+// When neither exists yet (no turn has run or the agent has not written memory),
+// exists is false and dir is still the deterministic candidate path.
+func resolveRoot(space treeSpace, botID string, channelType int, sessionKey string) (dir string, exists bool, err error) {
 	if !safepath.ValidSlug(botID) {
 		return "", false, fmt.Errorf("invalid bot id %q", botID)
 	}
-	base := filepath.Join(Dir(), botID, "workspace")
-	for _, k := range []sandbox.Kind{sandbox.KindDM, sandbox.KindGroup} {
-		cand := filepath.Join(base, sandbox.SessionDirName(sandbox.SessionCtx{Kind: k, SessionKey: sessionKey}))
-		if fi, e := os.Stat(cand); e == nil && fi.IsDir() {
-			return cand, true, nil
-		}
+	kind, err := kindForChannelType(channelType)
+	if err != nil {
+		return "", false, err
 	}
-	dm := sandbox.SessionDirName(sandbox.SessionCtx{Kind: sandbox.KindDM, SessionKey: sessionKey})
-	return filepath.Join(base, dm), false, nil
+	base := filepath.Join(Dir(), botID, string(space))
+	dir = filepath.Join(base, sandbox.SessionDirName(sandbox.SessionCtx{Kind: kind, SessionKey: sessionKey}))
+	if fi, e := os.Stat(dir); e == nil && fi.IsDir() {
+		return dir, true, nil
+	}
+	return dir, false, nil
 }
 
 // Tree returns the session's workspace as a bounded file tree. When no sandbox
 // exists yet (no turn has run), it returns an empty (non-nil) root so the UI can
 // show an "empty workspace" state without an error.
-func Tree(botID, sessionKey string) (*Node, error) {
-	root, exists, err := resolveRoot(botID, sessionKey)
+func Tree(botID string, channelType int, sessionKey string) (*Node, error) {
+	return tree(workspaceSpace, botID, channelType, sessionKey)
+}
+
+// MemoryTree returns the session's auto-memory directory as a bounded file tree.
+// Missing memory is rendered as an empty non-nil root, matching Tree.
+func MemoryTree(botID string, channelType int, sessionKey string) (*Node, error) {
+	return tree(memorySpace, botID, channelType, sessionKey)
+}
+
+func tree(space treeSpace, botID string, channelType int, sessionKey string) (*Node, error) {
+	root, exists, err := resolveRoot(space, botID, channelType, sessionKey)
 	if err != nil {
 		return nil, err
 	}
@@ -175,7 +208,16 @@ func readDir(root, rel string, depth int, count *int) ([]*Node, error) {
 // All path safety — lexical containment, parent-chain symlink refusal,
 // race-free leaf open — lives in safepath; this function has no Lstat /
 // EvalSymlinks / O_NOFOLLOW concerns of its own.
-func File(botID, sessionKey, relPath string) (FileContent, error) {
+func File(botID string, channelType int, sessionKey, relPath string) (FileContent, error) {
+	return file(workspaceSpace, botID, channelType, sessionKey, relPath)
+}
+
+// MemoryFile reads one file from the session's auto-memory directory.
+func MemoryFile(botID string, channelType int, sessionKey, relPath string) (FileContent, error) {
+	return file(memorySpace, botID, channelType, sessionKey, relPath)
+}
+
+func file(space treeSpace, botID string, channelType int, sessionKey, relPath string) (FileContent, error) {
 	var fc FileContent
 	// Refuse credential-bearing dotfiles at the door. A hand-crafted
 	// File("..../.netrc") path would otherwise bypass the tree-level filter
@@ -193,12 +235,12 @@ func File(botID, sessionKey, relPath string) (FileContent, error) {
 			return fc, fmt.Errorf("path traverses a credential-bearing directory: %q", relPath)
 		}
 	}
-	root, exists, err := resolveRoot(botID, sessionKey)
+	root, exists, err := resolveRoot(space, botID, channelType, sessionKey)
 	if err != nil {
 		return fc, err
 	}
 	if !exists {
-		return fc, fmt.Errorf("no workspace yet for this session")
+		return fc, fmt.Errorf("no %s yet for this session", space)
 	}
 
 	// One call does it all: lexical containment, parent-chain symlink walk

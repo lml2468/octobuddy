@@ -4,9 +4,13 @@
   import { renderMarkdown, highlight, onMarkdownCopyClick } from "../markdown";
   import { errMsg } from "../errors";
 
-  let { botId, sessionKey, path, onclose }: {
+  type FileSource = "workspace" | "memory";
+
+  let { botId, channelType = 1, sessionKey, source = "workspace", path, onclose }: {
     botId: string | null;
+    channelType?: number;
     sessionKey: string | null;
+    source?: FileSource;
     path: string;
     onclose: () => void;
   } = $props();
@@ -41,7 +45,7 @@
 
  // Refetch whenever the target file (or session) changes.
   $effect(() => {
-    const b = botId, k = sessionKey, p = path;
+    const b = botId, ct = channelType, k = sessionKey, src = source, p = path;
     file = null;
     error = "";
     mdMode = "rendered";
@@ -54,14 +58,14 @@
       copyTimer = undefined;
     }
     copied = false;
-    load(b, k, p);
+    load(b, ct, k, src, p);
   });
 
  // Generation counter discards stale fetches — switching files quickly
  // would otherwise let a slower (older) WorkspaceFile response clobber
  // `file` with the wrong content.
   let loadGen = 0;
-  async function load(b: string | null, k: string | null, p: string) {
+  async function load(b: string | null, ct: number, k: string | null, src: FileSource, p: string) {
     const gen = ++loadGen;
     if (isPreview) {
       file = mockFiles[p] ?? ({ path: p, content: "(no preview)", encoding: "utf8", mime: "text/plain", truncated: false, size: 0 } as FileContent);
@@ -69,7 +73,9 @@
     }
     if (!b || !k) return;
     try {
-      const fc = await XClawService.WorkspaceFile(b, k, p);
+      const fc = src === "memory"
+        ? await XClawService.MemoryFile(b, ct, k, p)
+        : await XClawService.WorkspaceFile(b, ct, k, p);
       if (gen === loadGen) file = fc;
     } catch (e) {
       if (gen === loadGen) error = errMsg(e);

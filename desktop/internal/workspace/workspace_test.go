@@ -9,6 +9,8 @@ import (
 	"github.com/lml2468/xclaw/core/sandbox"
 )
 
+const testChannelDM = 1
+
 // setHome points workspace.Dir (os.UserHomeDir) at a temp dir on every OS:
 // UserHomeDir reads $HOME on unix but %USERPROFILE% on Windows, so set both.
 func setHome(t *testing.T) string {
@@ -42,9 +44,17 @@ func write(t *testing.T, path, content string) {
 	}
 }
 
+func workspaceTree(botID, sessionKey string) (*Node, error) {
+	return Tree(botID, testChannelDM, sessionKey)
+}
+
+func workspaceFile(botID, sessionKey, relPath string) (FileContent, error) {
+	return File(botID, testChannelDM, sessionKey, relPath)
+}
+
 func TestMissingWorkspaceIsEmptyTree(t *testing.T) {
 	setHome(t)
-	tree, err := Tree("bot1", "never-ran")
+	tree, err := workspaceTree("bot1", "never-ran")
 	if err != nil {
 		t.Fatalf("Tree: %v", err)
 	}
@@ -59,7 +69,7 @@ func TestTreeShapeDirsFirst(t *testing.T) {
 	write(t, filepath.Join(dir, "src", "main.go"), "package main")
 	write(t, filepath.Join(dir, "src", "util.go"), "package main")
 
-	tree, err := Tree("bot1", "u1")
+	tree, err := workspaceTree("bot1", "u1")
 	if err != nil {
 		t.Fatalf("Tree: %v", err)
 	}
@@ -78,11 +88,52 @@ func TestTreeShapeDirsFirst(t *testing.T) {
 	}
 }
 
+func TestTreeUsesExplicitChannelType(t *testing.T) {
+	home := setHome(t)
+	botID, sessionKey := "bot1", "shared"
+	dmDir := filepath.Join(home, ".xclaw", botID, "workspace",
+		sandbox.SessionDirName(sandbox.SessionCtx{Kind: sandbox.KindDM, SessionKey: sessionKey}))
+	groupDir := filepath.Join(home, ".xclaw", botID, "workspace",
+		sandbox.SessionDirName(sandbox.SessionCtx{Kind: sandbox.KindGroup, SessionKey: sessionKey}))
+	write(t, filepath.Join(dmDir, "dm.txt"), "dm")
+	write(t, filepath.Join(groupDir, "group.txt"), "group")
+
+	tree, err := Tree(botID, 2, sessionKey)
+	if err != nil {
+		t.Fatalf("Tree group: %v", err)
+	}
+	if len(tree.Children) != 1 || tree.Children[0].Name != "group.txt" {
+		t.Fatalf("Tree must use explicit group channel type, got %+v", tree.Children)
+	}
+}
+
+func TestMemoryTreeAndFile(t *testing.T) {
+	home := setHome(t)
+	dir := filepath.Join(home, ".xclaw", "bot1", "memory",
+		sandbox.SessionDirName(sandbox.SessionCtx{Kind: sandbox.KindDM, SessionKey: "u1"}))
+	write(t, filepath.Join(dir, "memory.md"), "# remembered")
+
+	tree, err := MemoryTree("bot1", testChannelDM, "u1")
+	if err != nil {
+		t.Fatalf("MemoryTree: %v", err)
+	}
+	if len(tree.Children) != 1 || tree.Children[0].Name != "memory.md" {
+		t.Fatalf("memory tree wrong: %+v", tree.Children)
+	}
+	fc, err := MemoryFile("bot1", testChannelDM, "u1", "memory.md")
+	if err != nil {
+		t.Fatalf("MemoryFile: %v", err)
+	}
+	if fc.Kind != "markdown" || fc.Content != "# remembered" {
+		t.Fatalf("memory file wrong: %+v", fc)
+	}
+}
+
 func TestDotClaudeNotDescended(t *testing.T) {
 	dir := sandboxDir(t, "bot1", "u1")
 	write(t, filepath.Join(dir, ".claude", "skills", "x", "SKILL.md"), "secret catalog")
 
-	tree, err := Tree("bot1", "u1")
+	tree, err := workspaceTree("bot1", "u1")
 	if err != nil {
 		t.Fatalf("Tree: %v", err)
 	}
@@ -110,7 +161,7 @@ func TestSymlinkNotFollowed(t *testing.T) {
 		t.Skipf("symlink unsupported: %v", err)
 	}
 
-	tree, err := Tree("bot1", "u1")
+	tree, err := workspaceTree("bot1", "u1")
 	if err != nil {
 		t.Fatalf("Tree: %v", err)
 	}
@@ -124,7 +175,7 @@ func TestSymlinkNotFollowed(t *testing.T) {
 		}
 	}
 	// File must refuse to read through the symlink.
-	if _, err := File("bot1", "u1", "escape/secret.txt"); err == nil {
+	if _, err := workspaceFile("bot1", "u1", "escape/secret.txt"); err == nil {
 		t.Fatal("File must not read through a symlink")
 	}
 }
@@ -135,7 +186,7 @@ func TestFileTextAndTruncation(t *testing.T) {
 	big := strings.Repeat("a", maxTextBytes+500)
 	write(t, filepath.Join(dir, "big.txt"), big)
 
-	fc, err := File("bot1", "u1", "note.txt")
+	fc, err := workspaceFile("bot1", "u1", "note.txt")
 	if err != nil {
 		t.Fatalf("File: %v", err)
 	}
@@ -143,7 +194,7 @@ func TestFileTextAndTruncation(t *testing.T) {
 		t.Fatalf("text read wrong: %+v", fc)
 	}
 
-	bf, err := File("bot1", "u1", "big.txt")
+	bf, err := workspaceFile("bot1", "u1", "big.txt")
 	if err != nil {
 		t.Fatalf("File big: %v", err)
 	}
@@ -160,7 +211,7 @@ func TestFilePDFMimeBase64(t *testing.T) {
 	// %PDF header → application/pdf by extension; binary → base64.
 	write(t, filepath.Join(dir, "doc.pdf"), "%PDF-1.7\n\x00binary\x00")
 
-	fc, err := File("bot1", "u1", "doc.pdf")
+	fc, err := workspaceFile("bot1", "u1", "doc.pdf")
 	if err != nil {
 		t.Fatalf("File pdf: %v", err)
 	}
@@ -203,7 +254,7 @@ func TestFileBinaryUsesLargerCap(t *testing.T) {
 	body[0] = 0 // NUL → binary
 	write(t, filepath.Join(dir, "blob.bin"), string(body))
 
-	fc, err := File("bot1", "u1", "blob.bin")
+	fc, err := workspaceFile("bot1", "u1", "blob.bin")
 	if err != nil {
 		t.Fatalf("File bin: %v", err)
 	}
@@ -220,7 +271,7 @@ func TestFileImageBase64(t *testing.T) {
 	// 1x1 PNG header bytes are enough to classify as image/png by extension.
 	write(t, filepath.Join(dir, "pic.png"), "\x89PNG\r\n\x1a\n\x00\x00")
 
-	fc, err := File("bot1", "u1", "pic.png")
+	fc, err := workspaceFile("bot1", "u1", "pic.png")
 	if err != nil {
 		t.Fatalf("File png: %v", err)
 	}
@@ -234,11 +285,11 @@ func TestFileRejectsTraversalAndDirs(t *testing.T) {
 	write(t, filepath.Join(dir, "sub", "a.txt"), "x")
 
 	for _, bad := range []string{"../escape", "/etc/passwd", "sub/../../x", ""} {
-		if _, err := File("bot1", "u1", bad); err == nil {
+		if _, err := workspaceFile("bot1", "u1", bad); err == nil {
 			t.Fatalf("File(%q) should be rejected", bad)
 		}
 	}
-	if _, err := File("bot1", "u1", "sub"); err == nil {
+	if _, err := workspaceFile("bot1", "u1", "sub"); err == nil {
 		t.Fatal("File on a directory should error")
 	}
 }
@@ -246,7 +297,7 @@ func TestFileRejectsTraversalAndDirs(t *testing.T) {
 func TestInvalidBotID(t *testing.T) {
 	setHome(t)
 	for _, bad := range []string{"..", "a/b", "", "."} {
-		if _, err := Tree(bad, "u1"); err == nil {
+		if _, err := workspaceTree(bad, "u1"); err == nil {
 			t.Fatalf("Tree with bot id %q should be rejected", bad)
 		}
 	}

@@ -70,12 +70,13 @@ func (s *EventSink) OnReply(sessionKey string, text string) {
 // suddenly @-mentioned the bot with the prompt text.
 func (s *EventSink) OnUserMessage(sessionKey string, msg router.InboundMessage) {
 	s.srv.Broadcast("session.user_message", SessionUserMessageBody{
-		BotID:      s.botID,
-		SessionKey: sessionKey,
-		Text:       msg.Text,
-		FromUID:    msg.FromUID,
-		FromName:   msg.FromName,
-		Ts:         time.Now().Unix(),
-		CronFire:   msg.CronFire,
+		BotID:       s.botID,
+		SessionKey:  sessionKey,
+		ChannelType: int(msg.ChannelType),
+		Text:        msg.Text,
+		FromUID:     msg.FromUID,
+		FromName:    msg.FromName,
+		Ts:          time.Now().Unix(),
+		CronFire:    msg.CronFire,
 	})
 }

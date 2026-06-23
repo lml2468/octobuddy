@@ -15,6 +15,8 @@
   import TokenUsage from "./lib/components/TokenUsage.svelte";
   import { confirm } from "./lib/confirm.svelte";
 
+  type FileSource = "workspace" | "memory";
+
   let composer = $state<Composer>();
 
  // Initial-show + initial-tab parsing from ?settings[=basic|octo|skills|workflows].
@@ -33,7 +35,13 @@
  // re-triggering on subsequent gear-icon opens.
   let settingsOpenWizard = $state(false);
   let showUsage = $state(new URLSearchParams(location.search).has("usage"));
-  let showFiles = $state(new URLSearchParams(location.search).has("files"));
+  let filePane = $state<FileSource | null>(
+    new URLSearchParams(location.search).has("memory")
+      ? "memory"
+      : new URLSearchParams(location.search).has("files")
+        ? "workspace"
+        : null,
+  );
   let showPalette = $state(false);
   let collapsed = $state(false);
  // The file open in the wide preview pane (which overlays the chat). Null = chat.
@@ -46,6 +54,11 @@
     store.selectedBotId; store.selectedKey;
     previewPath = null;
   });
+
+  function toggleFilePane(source: FileSource) {
+    filePane = filePane === source ? null : source;
+    previewPath = null;
+  }
 
  // Per-Space theme color (Arc's signature): each bot carries an Arc theme
  // gradient, chosen deterministically from its id, and the whole window
@@ -138,8 +151,15 @@
     {collapsed}
   />
   <div class="content">
-    {#if previewPath && showFiles && store.currentSession}
-      <FilePreview botId={store.selectedBotId} sessionKey={store.selectedKey} path={previewPath} onclose={() => (previewPath = null)} />
+    {#if previewPath && filePane && store.currentSession}
+      <FilePreview
+        botId={store.selectedBotId}
+        channelType={store.currentSession.channelType}
+        sessionKey={store.selectedKey}
+        source={filePane}
+        path={previewPath}
+        onclose={() => (previewPath = null)}
+      />
     {:else}
       <main class="chat">
         <header class="chat-bar" style="--wails-draggable: drag;">
@@ -157,7 +177,8 @@
             </button>
           {/if}
           {#if store.currentBot}
-            <button class="icon" class:on={showFiles} style="--wails-draggable: no-drag;" title="Workspace files" onclick={() => (showFiles = !showFiles)} aria-label="Toggle workspace" aria-pressed={showFiles}>
+            <button class="icon txt" class:on={filePane === "memory"} style="--wails-draggable: no-drag;" title="Session memory" onclick={() => toggleFilePane("memory")} aria-label="Toggle memory" aria-pressed={filePane === "memory"}>记忆</button>
+            <button class="icon" class:on={filePane === "workspace"} style="--wails-draggable: no-drag;" title="Workspace files" onclick={() => toggleFilePane("workspace")} aria-label="Toggle workspace" aria-pressed={filePane === "workspace"}>
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></svg>
             </button>
           {/if}
@@ -169,14 +190,16 @@
         {/if}
       </main>
     {/if}
-    {#if showFiles && store.currentSession}
+    {#if filePane && store.currentSession}
       <aside class="files">
         <WorkspacePanel
           botId={store.selectedBotId}
+          channelType={store.currentSession.channelType}
           sessionKey={store.selectedKey}
+          source={filePane}
           activePath={previewPath}
           onopen={(p) => (previewPath = p)}
-          onclose={() => { showFiles = false; previewPath = null; }}
+          onclose={() => { filePane = null; previewPath = null; }}
         />
       </aside>
     {/if}
@@ -240,6 +263,7 @@
   }
   .icon:hover { background: color-mix(in srgb, var(--ink) 7%, transparent); color: var(--accent); }
   .icon.on { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); }
+  .icon.txt { width: auto; padding: 0 10px; font-size: 12px; font-weight: 600; }
  /* Sidebar collapse/expand toggle, top-left of the chat header. Chevron points
      toward the rail (collapse); flips outward when collapsed (expand). */
   .sb-toggle { margin-left: -4px; }
