@@ -22,6 +22,11 @@ func TestParseCronExpressionRejectsInvalid(t *testing.T) {
 		"* * * 13 *",  // month out of range
 		"* * * * 7",   // dow max is 6
 		"5-3 * * * *", // inverted range
+		"0,,1 * * * *",
+		"*/x * * * *",
+		"*/0 * * * *",
+		"x * * * *",
+		"999999999999999999999999999999999 * * * *",
 	}
 	for _, e := range invalid {
 		if parseCronExpression(e) != nil {
@@ -31,7 +36,7 @@ func TestParseCronExpressionRejectsInvalid(t *testing.T) {
 }
 
 func TestParseCronExpressionAcceptsValid(t *testing.T) {
-	valid := []string{"* * * * *", "0 9 * * 1-5", "*/15 * * * *", "0,30 * * * *", "5/10 * * * *"}
+	valid := []string{"* * * * *", "0 9 * * 1-5", "*/15 * * * *", "0,30 * * * *", "5/10 * * * *", "1-5/2 * * * *"}
 	for _, e := range valid {
 		if parseCronExpression(e) == nil {
 			t.Errorf("parseCronExpression(%q) should be valid", e)

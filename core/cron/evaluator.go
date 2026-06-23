@@ -60,50 +60,13 @@ func parseField(raw string, min, max int) map[int]bool {
 	out := map[int]bool{}
 	for _, part := range strings.Split(raw, ",") {
 		seg := strings.TrimSpace(part)
-		if seg == "" {
+		rangeStr, step, hasStep, ok := parseFieldStep(seg)
+		if !ok {
 			return nil
 		}
-		// step: "*/n" or "a-b/n" or "a/n"
-		rangeStr := seg
-		var stepStr string
-		hasStep := false
-		if slash := strings.IndexByte(seg, '/'); slash != -1 {
-			rangeStr = seg[:slash]
-			stepStr = seg[slash+1:]
-			hasStep = true
-		}
-		step := 1
-		if hasStep {
-			if !digitsRE.MatchString(stepStr) {
-				return nil
-			}
-			n, err := strconv.Atoi(stepStr)
-			if err != nil || n < 1 {
-				return nil
-			}
-			step = n
-		}
-		var lo, hi int
-		switch {
-		case rangeStr == "*":
-			lo, hi = min, max
-		case digitsRE.MatchString(rangeStr):
-			n, err := strconv.Atoi(rangeStr)
-			if err != nil {
-				return nil
-			}
-			lo, hi = n, n
-			// A bare number with a step (e.g. "5/10") means "from 5 to max, step".
-			if hasStep {
-				hi = max
-			}
-		default:
-			m := rangeRE.FindStringSubmatch(rangeStr)
-			if m == nil {
-				return nil
-			}
-			lo, _ = strconv.Atoi(m[1])
-			hi, _ = strconv.Atoi(m[2])
+		lo, hi, ok := parseFieldRange(rangeStr, hasStep, min, max)
+		if !ok {
+			return nil
 		}
 		if lo < min || hi > max || lo > hi {
 			return nil
@@ -116,6 +79,52 @@ func parseField(raw string, min, max int) map[int]bool {
 		return nil
 	}
 	return out
+}
+
+func parseFieldStep(seg string) (string, int, bool, bool) {
+	if seg == "" {
+		return "", 0, false, false
+	}
+	// step: "*/n" or "a-b/n" or "a/n"
+	slash := strings.IndexByte(seg, '/')
+	if slash == -1 {
+		return seg, 1, false, true
+	}
+	stepStr := seg[slash+1:]
+	if !digitsRE.MatchString(stepStr) {
+		return "", 0, false, false
+	}
+	n, err := strconv.Atoi(stepStr)
+	if err != nil || n < 1 {
+		return "", 0, false, false
+	}
+	return seg[:slash], n, true, true
+}
+
+func parseFieldRange(rangeStr string, hasStep bool, min, max int) (int, int, bool) {
+	switch {
+	case rangeStr == "*":
+		return min, max, true
+	case digitsRE.MatchString(rangeStr):
+		n, err := strconv.Atoi(rangeStr)
+		if err != nil {
+			return 0, 0, false
+		}
+		hi := n
+		// A bare number with a step (e.g. "5/10") means "from 5 to max, step".
+		if hasStep {
+			hi = max
+		}
+		return n, hi, true
+	default:
+		m := rangeRE.FindStringSubmatch(rangeStr)
+		if m == nil {
+			return 0, 0, false
+		}
+		lo, _ := strconv.Atoi(m[1])
+		hi, _ := strconv.Atoi(m[2])
+		return lo, hi, true
+	}
 }
 
 // parseCronExpression parses a 5-field cron expression. Returns nil when invalid.
