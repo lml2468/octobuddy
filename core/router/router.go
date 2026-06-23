@@ -284,53 +284,8 @@ func (r *Router) RouteAndHandle(ctx context.Context, msg InboundMessage, handler
 		return DroppedUnroutable, nil
 	}
 
-	// DM blocklist + bot-loop guard (silent). Mirrors session-router.ts:
-	// blocklisted DM senders, and DM senders that look like bots (unless
-	// whitelisted) are dropped to prevent bot↔bot reply loops.
-	if msg.ChannelType == ChannelDM && !msg.CronFire {
-		if r.blocklisted[msg.FromUID] {
-			return DroppedBot, nil
-		}
-		if r.looksLikeBot(msg.FromUID) && !r.allowedBots[msg.FromUID] {
-			return DroppedBot, nil
-		}
-	}
-
-	// Group gating.
-	if msg.ChannelType == ChannelGroup && !msg.CronFire {
-		// Hard-drop blocklisted senders entirely (even if @-mentioned).
-		if r.blocklisted[msg.FromUID] {
-			return DroppedBot, nil
-		}
-		// Mention gate. Skip unless mentioned OR the channel is mention-free (G12).
-		if !msg.Mentioned {
-			if !r.mentionFree[msg.ChannelID] {
-				return DroppedNotMentioned, nil
-			}
-			// In a mention-free group there is no @mention gate to stop one bot
-			// replying to another bot's plain text — drop bot-looking senders
-			// (unless whitelisted) so two bots can't enter an unbounded loop.
-			if r.looksLikeBot(msg.FromUID) && !r.allowedBots[msg.FromUID] {
-				return DroppedBot, nil
-			}
-		}
-	}
-
-	// Content size gate.
-	if len(msg.Text) > r.cfg.MaxContentByte {
-		return DroppedTooLong, nil
-	}
-
-	// Rate limiting (cron fires bypass it — operator-scheduled). The notify
-	// decision is computed atomically with the rejection so the caller can
-	// debounce the reply without re-locking (M1).
-	if !msg.CronFire {
-		if allowed, notify := r.allow(key, msg.FromUID); !allowed {
-			if notify {
-				return RateLimited, nil
-			}
-			return RateLimitedSilent, nil
-		}
+	if decision := r.routeGate(key, msg); decision != Accepted {
+		return decision, nil
 	}
 
 	// Serialize within the session.
@@ -341,6 +296,75 @@ func (r *Router) RouteAndHandle(ctx context.Context, msg InboundMessage, handler
 		return Accepted, err
 	}
 	return Accepted, nil
+}
+
+func (r *Router) routeGate(key string, msg InboundMessage) Decision {
+	// DM blocklist + bot-loop guard (silent). Mirrors session-router.ts:
+	// blocklisted DM senders, and DM senders that look like bots (unless
+	// whitelisted) are dropped to prevent bot↔bot reply loops.
+	if decision := r.dmGate(msg); decision != Accepted {
+		return decision
+	}
+
+	// Group gating.
+	if decision := r.groupGate(msg); decision != Accepted {
+		return decision
+	}
+
+	// Content size gate.
+	if len(msg.Text) > r.cfg.MaxContentByte {
+		return DroppedTooLong
+	}
+
+	// Rate limiting (cron fires bypass it — operator-scheduled). The notify
+	// decision is computed atomically with the rejection so the caller can
+	// debounce the reply without re-locking (M1).
+	if !msg.CronFire {
+		if allowed, notify := r.allow(key, msg.FromUID); !allowed {
+			if notify {
+				return RateLimited
+			}
+			return RateLimitedSilent
+		}
+	}
+	return Accepted
+}
+
+func (r *Router) dmGate(msg InboundMessage) Decision {
+	if msg.ChannelType != ChannelDM || msg.CronFire {
+		return Accepted
+	}
+	if r.blocklisted[msg.FromUID] {
+		return DroppedBot
+	}
+	if r.looksLikeBot(msg.FromUID) && !r.allowedBots[msg.FromUID] {
+		return DroppedBot
+	}
+	return Accepted
+}
+
+func (r *Router) groupGate(msg InboundMessage) Decision {
+	if msg.ChannelType != ChannelGroup || msg.CronFire {
+		return Accepted
+	}
+	// Hard-drop blocklisted senders entirely (even if @-mentioned).
+	if r.blocklisted[msg.FromUID] {
+		return DroppedBot
+	}
+	// Mention gate. Skip unless mentioned OR the channel is mention-free (G12).
+	if msg.Mentioned {
+		return Accepted
+	}
+	if !r.mentionFree[msg.ChannelID] {
+		return DroppedNotMentioned
+	}
+	// In a mention-free group there is no @mention gate to stop one bot replying
+	// to another bot's plain text — drop bot-looking senders (unless
+	// whitelisted) so two bots can't enter an unbounded loop.
+	if r.looksLikeBot(msg.FromUID) && !r.allowedBots[msg.FromUID] {
+		return DroppedBot
+	}
+	return Accepted
 }
 
 // acquire returns the (locked) per-session entry for key, creating it if needed
