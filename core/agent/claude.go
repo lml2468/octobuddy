@@ -375,95 +375,102 @@ func parseClaudeLine(line string) []AgentEvent {
 
 	switch cl.Type {
 	case "system":
-		switch cl.Subtype {
-		case "init":
-			// First line of a run: carries the session id to persist for resume.
-			return []AgentEvent{{Kind: KindSessionStarted, SessionID: cl.SessionID, Raw: line}}
-		case "api_retry":
-			// claude is retrying upstream; classify rate-limit/overload as transient
-			// so a terminal failure after exhausted retries reads as "服务繁忙".
-			msg := fmt.Sprintf("api_retry status=%d: %s", cl.ErrorStatus, cl.Error)
-			ev := AgentEvent{Kind: KindError, Err: msg, Recoverable: true, Raw: line}
-			if cl.ErrorStatus == 429 || cl.ErrorStatus == 503 || cl.ErrorStatus == 529 || isTransientUpstream(cl.Error) {
-				ev.Transient = true
-				ev.RetryHint = retryHint(cl.Error)
-			}
-			return []AgentEvent{ev}
-		default:
-			// hook_started / hook_response / other informational system lines.
-			return []AgentEvent{{Kind: KindSystem, Text: cl.Subtype, Raw: line}}
-		}
-
+		return parseClaudeSystemLine(cl, line)
 	case "assistant":
-		if cl.Message == nil {
-			return nil
-		}
-		var evs []AgentEvent
-		for _, b := range cl.Message.Content {
-			switch b.Type {
-			case "text":
-				if b.Text != "" {
-					evs = append(evs, AgentEvent{Kind: KindTextDelta, Text: b.Text, Raw: line})
-				}
-			case "thinking":
-				if b.Text != "" {
-					evs = append(evs, AgentEvent{Kind: KindThinking, Text: b.Text, Raw: line})
-				}
-			case "tool_use":
-				evs = append(evs, AgentEvent{
-					Kind:       KindToolUse,
-					ToolName:   b.Name,
-					ToolParams: truncateParams(b.Input),
-					Raw:        line,
-				})
-			}
-		}
-		return evs
-
+		return parseClaudeAssistantLine(cl.Message, line)
 	case "user":
-		// tool_result blocks come back as a user-role message.
-		if cl.Message == nil {
-			return nil
-		}
-		var evs []AgentEvent
-		for _, b := range cl.Message.Content {
-			if b.Type == "tool_result" {
-				evs = append(evs, AgentEvent{Kind: KindToolResult, Raw: line})
-			}
-		}
-		return evs
-
+		return parseClaudeUserLine(cl.Message, line)
 	case "result":
-		ev := AgentEvent{Kind: KindTurnDone, Raw: line}
-		if cl.Usage != nil {
-			ev.Usage = &TokenUsage{
-				InputTokens:              cl.Usage.InputTokens,
-				OutputTokens:             cl.Usage.OutputTokens,
-				CachedInputTokens:        cl.Usage.CacheReadInputTokens,
-				CacheCreationInputTokens: cl.Usage.CacheCreationInputTokens,
-				CostUSD:                  cl.TotalCost,
-			}
-		} else if cl.TotalCost != 0 {
-			ev.Usage = &TokenUsage{CostUSD: cl.TotalCost}
-		}
-		if cl.IsError {
-			errEv := AgentEvent{
-				Kind:        KindError,
-				Err:         fmt.Sprintf("result error (subtype=%s): %s", cl.Subtype, cl.Result),
-				Recoverable: false,
-				Raw:         line,
-			}
-			if isTransientUpstream(cl.Result) || isTransientUpstream(cl.Subtype) {
-				errEv.Transient = true
-				errEv.RetryHint = retryHint(cl.Result)
-			}
-			return []AgentEvent{errEv, ev}
-		}
-		return []AgentEvent{ev}
-
+		return parseClaudeResultLine(cl, line)
 	default:
 		return []AgentEvent{{Kind: KindSystem, Text: cl.Type, Raw: line}}
 	}
+}
+
+func parseClaudeSystemLine(cl claudeLine, line string) []AgentEvent {
+	switch cl.Subtype {
+	case "init":
+		return []AgentEvent{{Kind: KindSessionStarted, SessionID: cl.SessionID, Raw: line}}
+	case "api_retry":
+		msg := fmt.Sprintf("api_retry status=%d: %s", cl.ErrorStatus, cl.Error)
+		ev := AgentEvent{Kind: KindError, Err: msg, Recoverable: true, Raw: line}
+		if cl.ErrorStatus == 429 || cl.ErrorStatus == 503 || cl.ErrorStatus == 529 || isTransientUpstream(cl.Error) {
+			ev.Transient = true
+			ev.RetryHint = retryHint(cl.Error)
+		}
+		return []AgentEvent{ev}
+	default:
+		return []AgentEvent{{Kind: KindSystem, Text: cl.Subtype, Raw: line}}
+	}
+}
+
+func parseClaudeAssistantLine(msg *claudeMessage, line string) []AgentEvent {
+	if msg == nil {
+		return nil
+	}
+	var evs []AgentEvent
+	for _, b := range msg.Content {
+		switch b.Type {
+		case "text":
+			if b.Text != "" {
+				evs = append(evs, AgentEvent{Kind: KindTextDelta, Text: b.Text, Raw: line})
+			}
+		case "thinking":
+			if b.Text != "" {
+				evs = append(evs, AgentEvent{Kind: KindThinking, Text: b.Text, Raw: line})
+			}
+		case "tool_use":
+			evs = append(evs, AgentEvent{
+				Kind:       KindToolUse,
+				ToolName:   b.Name,
+				ToolParams: truncateParams(b.Input),
+				Raw:        line,
+			})
+		}
+	}
+	return evs
+}
+
+func parseClaudeUserLine(msg *claudeMessage, line string) []AgentEvent {
+	if msg == nil {
+		return nil
+	}
+	var evs []AgentEvent
+	for _, b := range msg.Content {
+		if b.Type == "tool_result" {
+			evs = append(evs, AgentEvent{Kind: KindToolResult, Raw: line})
+		}
+	}
+	return evs
+}
+
+func parseClaudeResultLine(cl claudeLine, line string) []AgentEvent {
+	ev := AgentEvent{Kind: KindTurnDone, Raw: line}
+	if cl.Usage != nil {
+		ev.Usage = &TokenUsage{
+			InputTokens:              cl.Usage.InputTokens,
+			OutputTokens:             cl.Usage.OutputTokens,
+			CachedInputTokens:        cl.Usage.CacheReadInputTokens,
+			CacheCreationInputTokens: cl.Usage.CacheCreationInputTokens,
+			CostUSD:                  cl.TotalCost,
+		}
+	} else if cl.TotalCost != 0 {
+		ev.Usage = &TokenUsage{CostUSD: cl.TotalCost}
+	}
+	if !cl.IsError {
+		return []AgentEvent{ev}
+	}
+	errEv := AgentEvent{
+		Kind:        KindError,
+		Err:         fmt.Sprintf("result error (subtype=%s): %s", cl.Subtype, cl.Result),
+		Recoverable: false,
+		Raw:         line,
+	}
+	if isTransientUpstream(cl.Result) || isTransientUpstream(cl.Subtype) {
+		errEv.Transient = true
+		errEv.RetryHint = retryHint(cl.Result)
+	}
+	return []AgentEvent{errEv, ev}
 }
 
 // truncateParams renders tool input JSON as a short one-liner for progress UI.
