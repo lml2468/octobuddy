@@ -145,9 +145,18 @@
 
  /* bubble-col stacks the sender-name label (when shown) above the bubble.
     On user (row-reverse) rows the label aligns to the right edge so it
-    sits over the bubble's leading corner. min-width: 0 lets the inner
-    bubble's max-width work without the column hijacking the row width. */
-  .bubble-col { display: flex; flex-direction: column; gap: 3px; min-width: 0; max-width: 100%; align-items: flex-start; }
+    sits over the bubble's leading corner. min-width: 0 lets the column
+    shrink below its content's max-content width.
+
+    The 74% width cap lives HERE, not on .bubble. A percentage max-width on
+    .bubble would resolve against .bubble-col — but .bubble-col is itself a
+    content-sized flex item (flex: 0 1 auto), so its width depends on the
+    bubble: a circular constraint the browser collapses toward min-content,
+    wrapping short messages to a sliver (e.g. "你能调用 gh cli 么?" to ~107px
+    on two lines). The column's containing block is the .row, which IS a
+    definite width, so capping the column resolves cleanly; the bubble then
+    fits its content up to that cap. */
+  .bubble-col { display: flex; flex-direction: column; gap: 3px; min-width: 0; max-width: 74%; align-items: flex-start; }
   .row.user .bubble-col { align-items: flex-end; }
   .sender {
     font-size: 11px;
@@ -162,7 +171,7 @@
 
   .bubble {
     position: relative;
-    max-width: 74%;
+    max-width: 100%;
     padding: 9px 13px;
     font-size: 14px; line-height: 1.5;
     background: var(--in-bubble); color: var(--in-ink);
