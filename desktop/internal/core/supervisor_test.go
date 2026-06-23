@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -118,5 +119,80 @@ func TestDaemonArgsOmitToken(t *testing.T) {
 	}
 	if !slices.Contains(args, "-config") {
 		t.Fatalf("config mode args missing -config: %v", args)
+	}
+}
+
+// TestEnvWithOctoBinAugmentsPath verifies the daemon env carries a PATH that
+// (1) leads with ~/.xclaw/bin, (2) includes the well-known agent install dirs so
+// a GUI-launched daemon finds `claude`, and (3) still contains the inherited
+// PATH entries, with no duplicates.
+func TestEnvWithOctoBinAugmentsPath(t *testing.T) {
+	sentinel := filepath.Join(t.TempDir(), "inherited-bin")
+	t.Setenv("PATH", sentinel)
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skipf("no home dir: %v", err)
+	}
+	sep := string(os.PathListSeparator)
+
+	var path string
+	for _, kv := range envWithOctoBin() {
+		if strings.HasPrefix(kv, "PATH=") {
+			path = strings.TrimPrefix(kv, "PATH=")
+		}
+	}
+	if path == "" {
+		t.Fatal("envWithOctoBin produced no PATH")
+	}
+	entries := strings.Split(path, sep)
+
+	octoBin := filepath.Join(home, ".xclaw", "bin")
+	if entries[0] != octoBin {
+		t.Fatalf("PATH does not lead with %q: %q", octoBin, entries[0])
+	}
+	if !slices.Contains(entries, sentinel) {
+		t.Fatalf("inherited PATH entry %q dropped: %v", sentinel, entries)
+	}
+	for _, d := range wellKnownBinDirs(home) {
+		if !slices.Contains(entries, d) {
+			t.Fatalf("well-known dir %q missing from PATH: %v", d, entries)
+		}
+	}
+
+	seen := map[string]bool{}
+	for _, e := range entries {
+		if seen[e] {
+			t.Fatalf("duplicate PATH entry %q: %v", e, entries)
+		}
+		seen[e] = true
+	}
+}
+
+// TestLoginShellPathFencing exercises the marker-fenced login-shell probe with a
+// fake $SHELL that prints a banner around the value. Unix only (no $SHELL probe
+// on Windows).
+func TestLoginShellPathFencing(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no login-shell PATH probe on Windows")
+	}
+	// A fake shell script: emits noise on stderr + stdout, sets a sentinel PATH,
+	// then runs the command our code passes as the 3rd arg (after -l -c), which
+	// prints the marker-fenced PATH to stdout.
+	dir := t.TempDir()
+	fake := filepath.Join(dir, "fakeshell.sh")
+	script := "#!/bin/sh\n" +
+		"echo 'MOTD banner' >&2\n" + // stderr noise: never captured
+		"echo 'login greeting'\n" + // stdout noise BEFORE the marker: stripped by fencing
+		"PATH='/fake/agent/bin:/usr/bin'\n" +
+		"eval \"$3\"\n" // argv is (-l, -c, CMD) → $3 is the printf command
+	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake shell: %v", err)
+	}
+	t.Setenv("SHELL", fake)
+
+	got := loginShellPath()
+	if got != "/fake/agent/bin:/usr/bin" {
+		t.Fatalf("loginShellPath() = %q, want %q", got, "/fake/agent/bin:/usr/bin")
 	}
 }
