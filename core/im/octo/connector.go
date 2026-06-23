@@ -286,13 +286,25 @@ func (c *Connector) MediaAuth() gateway.MediaAuth {
 // messages once the uid is known.
 func (c *Connector) BotUID() string { return c.uid() }
 
-// BackfillFetch pulls recent group-channel history for cold-start backfill (cc
-// G4), adapting octo.HistoricalMessage to the IM-agnostic groupctx.BackfillMessage.
-// limit<=0 lets the REST client apply its default. Group channels only — the
-// gateway only calls this for group sessions. Returns nil on any REST failure
-// (the agent runs fine without history).
+// BackfillFetch pulls recent history for cold-start backfill (cc G4), adapting
+// octo.HistoricalMessage to the IM-agnostic groupctx.BackfillMessage. limit<=0
+// lets the REST client apply its default. Group-like channels only (the gateway
+// calls this for group sessions, which includes threads — a thread is routed as
+// router.ChannelGroup). Returns nil on any REST failure (the agent runs fine
+// without history).
+//
+// A thread (CommunityTopic / 子区) channel id is the compound
+// "<groupNo>____<shortId>", and messages/sync must be queried with
+// channel_type=CommunityTopic for it: querying a thread id as a plain Group
+// makes the server's membership check fail with not_group_member (the bot is a
+// member of the parent group / the topic, never of a "group" by that compound
+// id). Bare group ids stay ChannelGroup.
 func (c *Connector) BackfillFetch(channelID string, limit int) []groupctx.BackfillMessage {
-	hist := c.rest.GetChannelMessages(c.ctx(), channelID, ChannelGroup, limit)
+	chType := ChannelGroup
+	if IsThreadChannelID(channelID) {
+		chType = ChannelCommunityTopic
+	}
+	hist := c.rest.GetChannelMessages(c.ctx(), channelID, chType, limit)
 	if len(hist) == 0 {
 		return nil
 	}

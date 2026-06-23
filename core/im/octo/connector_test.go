@@ -2,6 +2,8 @@ package octo
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -228,4 +230,61 @@ func TestNoTargetMapStompUnderConcurrentEnqueue(t *testing.T) {
 		t.Errorf("item 1 tgt corrupted by concurrent enqueue: %+v", q.pending[1].tgt)
 	}
 	c.mu.Unlock()
+}
+
+// TestBackfillFetchChannelType proves cold-start backfill sends the right
+// channel_type to /v1/bot/messages/sync: ChannelGroup for a bare group id, but
+// ChannelCommunityTopic for a thread (compound "<groupNo>____<shortId>") id —
+// querying a thread id as a plain group is what made the server reject the sync
+// with not_group_member.
+func TestBackfillFetchChannelType(t *testing.T) {
+	cases := []struct {
+		name      string
+		channelID string
+		wantType  int
+	}{
+		{"bare group", "g1", int(ChannelGroup)},
+		{"thread", "g1" + ThreadIDSeparator + "topic9", int(ChannelCommunityTopic)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var body map[string]any
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				raw, _ := io.ReadAll(r.Body)
+				_ = json.Unmarshal(raw, &body)
+				_, _ = w.Write([]byte(`{"messages":[]}`))
+			}))
+			defer srv.Close()
+
+			c := NewConnector(NewRESTClient(srv.URL, func() string { return "tk" }))
+			c.BackfillFetch(tc.channelID, 10)
+
+			if body == nil {
+				t.Fatal("server received no sync request")
+			}
+			if got := int(body["channel_type"].(float64)); got != tc.wantType {
+				t.Fatalf("channel_type = %d, want %d", got, tc.wantType)
+			}
+			if got := body["channel_id"].(string); got != tc.channelID {
+				t.Fatalf("channel_id = %q, want %q", got, tc.channelID)
+			}
+		})
+	}
+}
+
+// TestBackfillFetchTolerates403 proves a genuine membership failure (the bot is
+// really not in the channel) degrades to nil rather than propagating — the agent
+// runs fine without backfilled history. This guards the swallow-on-error path so
+// the not_group_member fix doesn't accidentally start surfacing the error.
+func TestBackfillFetchTolerates403(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":{"code":"err.server.bot_api.not_group_member"},"status":400}`))
+	}))
+	defer srv.Close()
+
+	c := NewConnector(NewRESTClient(srv.URL, func() string { return "tk" }))
+	if got := c.BackfillFetch("g1", 10); got != nil {
+		t.Fatalf("BackfillFetch on 403 = %v, want nil", got)
+	}
 }
