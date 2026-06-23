@@ -198,6 +198,16 @@ func TestReapEvictsIdleAndRecreates(t *testing.T) {
 	r.SetClock(func() time.Time { return now })
 	h := func(ctx context.Context, key string, m InboundMessage) error { return nil }
 
+	seedIdleRoutes(t, r, h)
+	assertNothingEvictedYet(t, r)
+
+	now = base.Add(2 * time.Hour)
+	assertIdleRoutesEvicted(t, r)
+	assertReapedKeyRecreated(t, r, h)
+}
+
+func seedIdleRoutes(t *testing.T, r *Router, h Handler) {
+	t.Helper()
 	for _, uid := range []string{"u1", "u2"} {
 		if d, _ := r.RouteAndHandle(context.Background(),
 			InboundMessage{ChannelType: ChannelDM, FromUID: uid}, h); d != Accepted {
@@ -208,14 +218,17 @@ func TestReapEvictsIdleAndRecreates(t *testing.T) {
 		t.Fatalf("want 2 of each, got locks=%d perUser=%d perSess=%d",
 			len(r.locks), len(r.perUser), len(r.perSess))
 	}
+}
 
-	// Not idle long enough yet: nothing evicted.
+func assertNothingEvictedYet(t *testing.T, r *Router) {
+	t.Helper()
 	if locks, buckets := r.Reap(time.Hour); locks != 0 || buckets != 0 {
 		t.Fatalf("nothing should be idle yet, evicted locks=%d buckets=%d", locks, buckets)
 	}
+}
 
-	// Advance past the idle threshold: everything evicted.
-	now = base.Add(2 * time.Hour)
+func assertIdleRoutesEvicted(t *testing.T, r *Router) {
+	t.Helper()
 	locks, buckets := r.Reap(time.Hour)
 	if locks != 2 || buckets != 4 {
 		t.Fatalf("want locks=2 buckets=4, got locks=%d buckets=%d", locks, buckets)
@@ -224,8 +237,10 @@ func TestReapEvictsIdleAndRecreates(t *testing.T) {
 		t.Fatalf("maps not emptied: locks=%d perUser=%d perSess=%d",
 			len(r.locks), len(r.perUser), len(r.perSess))
 	}
+}
 
-	// A reaped key still routes correctly afterward (recreated on demand).
+func assertReapedKeyRecreated(t *testing.T, r *Router, h Handler) {
+	t.Helper()
 	if d, _ := r.RouteAndHandle(context.Background(),
 		InboundMessage{ChannelType: ChannelDM, FromUID: "u1"}, h); d != Accepted {
 		t.Fatalf("post-reap route should be accepted, got %s", d)
