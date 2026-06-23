@@ -1,6 +1,6 @@
 {
   "_comment": "XClaw config. Single file at ~/.xclaw/config.json. Top-level rateLimit/context are shared runtime policy. Bot identity, API URL, agent routing, env, group policy, and persona-clone config are per-bot only. Secrets are not written here: config stores secretRef entries that are resolved from the secret backend at runtime.",
-  "rateLimit": { "maxPerMinute": 5 },
+  "rateLimit": { "maxPerMinute": 30 },
   "context": { "maxContextChars": 6000 },
   "bots": [
     {

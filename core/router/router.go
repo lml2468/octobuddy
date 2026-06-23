@@ -110,7 +110,7 @@ func (m InboundMessage) SessionKey() (string, error) {
 // from cc-channel-octo's session-router.ts (G12 mention-free groups, G14
 // multi-bot loop guard, DM blocklist).
 type Config struct {
-	MaxPerMinute   int // per-session and per-user bucket size; default 5
+	MaxPerMinute   int // per-session and per-user bucket size; default 30
 	MaxContentByte int // reject longer text; default 32 KiB
 
 	// SelfUID is this bot's own uid. It is treated as a known bot (so a relayed
@@ -139,7 +139,7 @@ type Config struct {
 
 func (c Config) withDefaults() Config {
 	if c.MaxPerMinute <= 0 {
-		c.MaxPerMinute = 5
+		c.MaxPerMinute = 30
 	}
 	if c.MaxContentByte <= 0 {
 		c.MaxContentByte = 32 * 1024

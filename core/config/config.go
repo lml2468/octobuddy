@@ -174,7 +174,7 @@ type Resolved struct {
 
 func defaults() Resolved {
 	return Resolved{
-		RateLimit: RateLimitConfig{MaxPerMinute: 5},
+		RateLimit: RateLimitConfig{MaxPerMinute: 30},
 		Context:   ContextConfig{MaxContextChars: 6000},
 	}
 }

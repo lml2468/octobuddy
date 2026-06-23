@@ -37,7 +37,7 @@ func TestSingleBotDefaults(t *testing.T) {
 		t.Fatalf("apiUrl/token wrong: %+v", b)
 	}
 	// defaults applied
-	if b.RateLimit.MaxPerMinute != 5 || b.Context.MaxContextChars != 6000 {
+	if b.RateLimit.MaxPerMinute != 30 || b.Context.MaxContextChars != 6000 {
 		t.Fatalf("defaults wrong: %+v", b)
 	}
 	// derived data dir
