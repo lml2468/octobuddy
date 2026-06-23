@@ -742,15 +742,7 @@ func (g *Gateway) runTurn(ctx context.Context, sessionKey string, msg router.Inb
 		break
 	}
 
-	// If the turn was cut short by the dispatch timeout (not the caller's own
-	// cancellation), apologize and release the lock. The guard's expired
-	// returns true ONLY when our idle timer fired (its cancel cause is our
-	// sentinel) — a parent cancellation propagates the parent's cause instead,
-	// so this is unambiguous even if both fire near-simultaneously (M9).
-	if idle.expired(turnCtx) {
-		fmt.Fprintf(os.Stderr, "[gateway] dispatch idle timeout after %s (session=%s)\n", g.dispatchTimeout, sessionKey)
-		turnDelivered = true // bot processed but went silent; don't replay
-		g.sink.OnReply(sessionKey, timeoutReply)
+	if g.handleDispatchTimeout(turnCtx, idle, sessionKey, &turnDelivered) {
 		return nil
 	}
 
@@ -762,6 +754,16 @@ func (g *Gateway) runTurn(ctx context.Context, sessionKey string, msg router.Inb
 	g.completeSuccessfulTurn(sessionKey, msg, newResume, text)
 	turnDelivered = true
 	return nil
+}
+
+func (g *Gateway) handleDispatchTimeout(ctx context.Context, idle *idleGuard, sessionKey string, delivered *bool) bool {
+	if !idle.expired(ctx) {
+		return false
+	}
+	fmt.Fprintf(os.Stderr, "[gateway] dispatch idle timeout after %s (session=%s)\n", g.dispatchTimeout, sessionKey)
+	*delivered = true
+	g.sink.OnReply(sessionKey, timeoutReply)
+	return true
 }
 
 func (g *Gateway) handleTerminalAgentError(sessionKey, termErr string, transient bool, hint string, delivered *bool) bool {
