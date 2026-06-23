@@ -566,31 +566,12 @@ func (c *Connector) onInbound(m BotMessage) {
 	if m.StreamOn {
 		return
 	}
-	// WuKongIM RECV packets carry only fromUid, not a display name. Kick a
-	// background fetch via the cache (non-blocking — ResolveUser returns ""
-	// on miss and the next message from the same uid sees it cached) and
-	// fall back to the cached value if it happens to be there already. The
-	// receive goroutine MUST NOT block on REST: a slow / unreachable name
-	// service would stall ALL inbound for this bot. First sight of an
-	// unseen sender lands in the chat with senderName empty (the GUI falls
-	// back to senderUid for the bubble label) — subsequent messages from
-	// the same uid carry the resolved name, and the persisted history row
-	// gets backfilled on the next history fetch via the warmed cache.
-	if m.FromName == "" && m.FromUID != "" {
-		m.FromName = c.names.ResolveUser(m.FromUID)
-	}
-	// Free-feed the name cache (no-op if FromName is empty). Also kick the
-	// channel-name fetch for groups so the sidebar can show it next render.
-	c.names.LearnUser(m.FromUID, m.FromName)
-	if m.ChannelType == ChannelGroup || m.ChannelType == ChannelCommunityTopic {
-		c.names.ResolveChannel(m.ChannelID)
-	}
+	c.hydrateInboundNames(&m)
 
 	// Render the payload to LLM-facing text. ResolveContent covers every type
 	// (text, media markers, location, card, RichText, MultipleForward) and
 	// sanitizes any untrusted name/body that lands in a label.
-	resolved := ResolveContent(m.Payload, c.rest.APIURL())
-	baseText := strings.TrimSpace(resolved.Text)
+	baseText := c.resolveInboundText(m.Payload)
 	if baseText == "" {
 		return // nothing renderable (e.g. an empty/unknown payload)
 	}
@@ -599,10 +580,7 @@ func (c *Connector) onInbound(m BotMessage) {
 	// fan-out message carrying an origin-channel hint so the clone replies in the
 	// origin group. SECURITY: only trust OBO fields when the message is sent by
 	// the configured grantor — otherwise any user could forge a reply-as-someone.
-	oboV2 := c.persona.Configured() &&
-		m.Payload.OBOOriginChannelID != "" &&
-		oboRespondAs(m.Payload) != "" &&
-		m.FromUID == c.persona.UID
+	oboV2 := c.isTrustedOBORelay(m)
 
 	// OBO v2 relevance filter (openclaw inbound.ts ~L2122-2160): drop pure @AI
 	// fan-out that does not address the grantor BEFORE recording any reply target
@@ -656,7 +634,7 @@ func (c *Connector) onInbound(m BotMessage) {
 	// Exception (G12): in a mention-free channel an unmentioned message IS a turn
 	// — hand it to the gateway so the router applies the mention-free + bot-loop
 	// policy. runTurn caches it into group context itself, so do NOT also Observe.
-	if inbound.ChannelType == router.ChannelGroup && !inbound.Mentioned && !c.mentionFree[m.ChannelID] {
+	if c.shouldObserveBackground(inbound, m.ChannelID) {
 		if c.gateway != nil {
 			c.gateway.Observe(inbound)
 		}
@@ -665,9 +643,7 @@ func (c *Connector) onInbound(m BotMessage) {
 	// Prepend the quoted-reply context to the CURRENT turn only (never stored
 	// history): the sender quoted a prior message, so give the agent that
 	// context fenced ahead of the real request (inbound.ts quotePrefix).
-	if prefix := resolveQuotePrefix(m.Payload.Reply, c.rest.APIURL()); prefix != "" {
-		inbound.Text = prefix + inbound.Text
-	}
+	c.applyQuotePrefix(&inbound, m.Payload.Reply)
 	// Dispatch the turn on the per-key worker so the WS read loop is not blocked
 	// for the whole (possibly multi-minute) turn. The router still serializes
 	// same-session turns; the per-key queue guarantees they reach the router in
@@ -675,6 +651,50 @@ func (c *Connector) onInbound(m BotMessage) {
 	// when gateway is nil (tests), but the queue is still populated so the
 	// persona tests can assert via peekQueuedTarget.
 	c.enqueueTurn(key, inbound, tgt)
+}
+
+func (c *Connector) hydrateInboundNames(m *BotMessage) {
+	// WuKongIM RECV packets carry only fromUid, not a display name. Kick a
+	// background fetch via the cache (non-blocking — ResolveUser returns "" on
+	// miss and the next message from the same uid sees it cached) and fall back
+	// to the cached value if it happens to be there already. The receive goroutine
+	// MUST NOT block on REST: a slow / unreachable name service would stall ALL
+	// inbound for this bot. First sight of an unseen sender lands in the chat
+	// with senderName empty (the GUI falls back to senderUid for the bubble
+	// label) — subsequent messages from the same uid carry the resolved name, and
+	// the persisted history row gets backfilled on the next history fetch via the
+	// warmed cache.
+	if m.FromName == "" && m.FromUID != "" {
+		m.FromName = c.names.ResolveUser(m.FromUID)
+	}
+	// Free-feed the name cache (no-op if FromName is empty). Also kick the
+	// channel-name fetch for groups so the sidebar can show it next render.
+	c.names.LearnUser(m.FromUID, m.FromName)
+	if m.ChannelType == ChannelGroup || m.ChannelType == ChannelCommunityTopic {
+		c.names.ResolveChannel(m.ChannelID)
+	}
+}
+
+func (c *Connector) resolveInboundText(payload MessagePayload) string {
+	resolved := ResolveContent(payload, c.rest.APIURL())
+	return strings.TrimSpace(resolved.Text)
+}
+
+func (c *Connector) isTrustedOBORelay(m BotMessage) bool {
+	return c.persona.Configured() &&
+		m.Payload.OBOOriginChannelID != "" &&
+		oboRespondAs(m.Payload) != "" &&
+		m.FromUID == c.persona.UID
+}
+
+func (c *Connector) shouldObserveBackground(inbound router.InboundMessage, channelID string) bool {
+	return inbound.ChannelType == router.ChannelGroup && !inbound.Mentioned && !c.mentionFree[channelID]
+}
+
+func (c *Connector) applyQuotePrefix(inbound *router.InboundMessage, reply *ReplyPayload) {
+	if prefix := resolveQuotePrefix(reply, c.rest.APIURL()); prefix != "" {
+		inbound.Text = prefix + inbound.Text
+	}
 }
 
 func (c *Connector) buildInboundMessage(m BotMessage, botUID, text string) router.InboundMessage {
