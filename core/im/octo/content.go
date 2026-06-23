@@ -450,39 +450,26 @@ func ResolveContent(p MessagePayload, apiURL string) ResolvedContent {
 		return ResolvedContent{Text: p.Content}
 
 	case MsgImage:
-		return ResolvedContent{Text: withURL("[图片]", buildMediaURL(p.URL, apiURL))}
+		return resolveURLMarkerContent("[图片]", p.URL, apiURL)
 
 	case MsgGIF:
-		return ResolvedContent{Text: withURL("[GIF]", buildMediaURL(p.URL, apiURL))}
+		return resolveURLMarkerContent("[GIF]", p.URL, apiURL)
 
 	case MsgVoice:
 		// The model receives the URL as a marker; transcription is out of scope.
-		return ResolvedContent{Text: withURL("[语音消息]", buildMediaURL(p.URL, apiURL))}
+		return resolveURLMarkerContent("[语音消息]", p.URL, apiURL)
 
 	case MsgVideo:
-		return ResolvedContent{Text: withURL("[视频]", buildMediaURL(p.URL, apiURL))}
+		return resolveURLMarkerContent("[视频]", p.URL, apiURL)
 
 	case MsgFile:
-		// payload.name is user-controlled — sanitize before the `[文件: …]` label.
-		name := safety.SanitizeDisplayName(p.Name, "未知文件")
-		return ResolvedContent{Text: withURL("[文件: "+name+"]", buildMediaURL(p.URL, apiURL))}
+		return resolveFileContent(p, apiURL)
 
 	case MsgLocation:
-		lat, latOK := toFiniteCoord(firstNonNil(p.Latitude, p.Lat))
-		lng, lngOK := toFiniteCoord(firstNonNil(p.Longitude, p.Lng, p.Lon))
-		if latOK && lngOK {
-			return ResolvedContent{Text: "[位置信息: " + formatCoord(lat) + "," + formatCoord(lng) + "]"}
-		}
-		return ResolvedContent{Text: "[位置信息]"}
+		return resolveLocationContent(p)
 
 	case MsgCard:
-		// name + uid are user-controlled — sanitize both for the `[名片: …]` label.
-		name := safety.SanitizeDisplayName(p.Name, "未知")
-		uid := safety.SanitizeDisplayName(p.UID, "")
-		if uid != "" {
-			return ResolvedContent{Text: "[名片: " + name + " (" + uid + ")]"}
-		}
-		return ResolvedContent{Text: "[名片: " + name + "]"}
+		return resolveCardContent(p)
 
 	case MsgMultipleForward:
 		return ResolvedContent{Text: resolveMultipleForwardText(p.Users, p.Msgs, apiURL, 0)}
@@ -492,14 +479,47 @@ func ResolveContent(p MessagePayload, apiURL string) ResolvedContent {
 		return ResolvedContent{Text: text, MediaURLs: urls}
 
 	default:
-		if p.Content != "" {
-			return ResolvedContent{Text: p.Content}
-		}
-		if p.URL != "" {
-			return ResolvedContent{Text: p.URL}
-		}
-		return ResolvedContent{Text: "[消息]"}
+		return resolveUnknownContent(p)
 	}
+}
+
+func resolveURLMarkerContent(marker, rawURL, apiURL string) ResolvedContent {
+	return ResolvedContent{Text: withURL(marker, buildMediaURL(rawURL, apiURL))}
+}
+
+func resolveFileContent(p MessagePayload, apiURL string) ResolvedContent {
+	// payload.name is user-controlled — sanitize before the `[文件: …]` label.
+	name := safety.SanitizeDisplayName(p.Name, "未知文件")
+	return ResolvedContent{Text: withURL("[文件: "+name+"]", buildMediaURL(p.URL, apiURL))}
+}
+
+func resolveLocationContent(p MessagePayload) ResolvedContent {
+	lat, latOK := toFiniteCoord(firstNonNil(p.Latitude, p.Lat))
+	lng, lngOK := toFiniteCoord(firstNonNil(p.Longitude, p.Lng, p.Lon))
+	if latOK && lngOK {
+		return ResolvedContent{Text: "[位置信息: " + formatCoord(lat) + "," + formatCoord(lng) + "]"}
+	}
+	return ResolvedContent{Text: "[位置信息]"}
+}
+
+func resolveCardContent(p MessagePayload) ResolvedContent {
+	// name + uid are user-controlled — sanitize both for the `[名片: …]` label.
+	name := safety.SanitizeDisplayName(p.Name, "未知")
+	uid := safety.SanitizeDisplayName(p.UID, "")
+	if uid != "" {
+		return ResolvedContent{Text: "[名片: " + name + " (" + uid + ")]"}
+	}
+	return ResolvedContent{Text: "[名片: " + name + "]"}
+}
+
+func resolveUnknownContent(p MessagePayload) ResolvedContent {
+	if p.Content != "" {
+		return ResolvedContent{Text: p.Content}
+	}
+	if p.URL != "" {
+		return ResolvedContent{Text: p.URL}
+	}
+	return ResolvedContent{Text: "[消息]"}
 }
 
 // firstNonNil returns the first non-nil arg (the `a ?? b ?? c` coalescing used
