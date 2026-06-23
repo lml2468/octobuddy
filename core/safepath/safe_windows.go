@@ -39,8 +39,8 @@ func lstatChain(root, rel string) (string, error) {
 	// "empty path" from ResolveLexical and broke Windows-only.
 	if rel == "" || rel == "." {
 		root = filepath.Clean(root)
-		if fi, err := os.Lstat(root); err == nil && fi.Mode()&os.ModeSymlink != 0 {
-			return "", pathErrSymlink(root)
+		if err := checkWindowsRoot(root); err != nil {
+			return "", err
 		}
 		return root, nil
 	}
@@ -50,34 +50,60 @@ func lstatChain(root, rel string) (string, error) {
 	}
 	// Walk: root, then root/c1, root/c1/c2, … Each level refused if it's a
 	// reparse point (Windows' equivalent of symlink/junction/mountpoint).
-	if fi, err := os.Lstat(root); err == nil {
-		if fi.Mode()&os.ModeSymlink != 0 {
-			return "", pathErrSymlink(root)
-		}
+	if err := checkWindowsRoot(root); err != nil {
+		return "", err
 	}
+	return walkWindowsPath(abs, root, rel)
+}
+
+func walkWindowsPath(abs, root, rel string) (string, error) {
 	parts := strings.Split(strings.Trim(filepath.ToSlash(rel), "/"), "/")
 	cur := root
 	for i, p := range parts {
-		if p == "" || p == "." {
+		if skipWindowsPathSegment(p) {
 			continue
 		}
 		if p == ".." {
 			return "", fmt.Errorf("path contains .. segment: %q", rel)
 		}
 		cur = filepath.Join(cur, p)
-		fi, err := os.Lstat(cur)
-		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
+		if err := checkWindowsComponent(cur, strings.Join(parts[:i+1], "/")); err != nil {
+			if errors.Is(err, errWindowsMissingComponent) {
 				// non-existent component below — ok for SafeWrite / SafeMkdirAll
 				return abs, nil
 			}
 			return "", err
 		}
-		if fi.Mode()&os.ModeSymlink != 0 {
-			return "", pathErrSymlink(strings.Join(parts[:i+1], "/"))
-		}
 	}
 	return abs, nil
+}
+
+var errWindowsMissingComponent = errors.New("missing windows path component")
+
+func checkWindowsRoot(root string) error {
+	fi, err := os.Lstat(root)
+	if err == nil && fi.Mode()&os.ModeSymlink != 0 {
+		return pathErrSymlink(root)
+	}
+	return nil
+}
+
+func skipWindowsPathSegment(p string) bool {
+	return p == "" || p == "."
+}
+
+func checkWindowsComponent(path, rel string) error {
+	fi, err := os.Lstat(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return errWindowsMissingComponent
+		}
+		return err
+	}
+	if fi.Mode()&os.ModeSymlink != 0 {
+		return pathErrSymlink(rel)
+	}
+	return nil
 }
 
 func SafeOpen(root, rel string) (*os.File, error) {
