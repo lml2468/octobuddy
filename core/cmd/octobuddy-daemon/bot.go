@@ -34,24 +34,8 @@ const (
 // agent events are also broadcast to the control bus tagged with the bot id, and
 // the bot is registered for command routing + bots.list. Blocks until ctx done.
 func runBot(ctx context.Context, cfg config.Resolved, reg *botRegistry, srv *control.Server) error {
-	// SafeMkdirAllAbs walks the parent chain via dirfd, refusing any
-	// symlinked intermediate with ErrSymlink. An agent (Bash + bypass)
-	// in any existing bot's cwd could otherwise plant
-	// `~/.octobuddy/<newbotID>` as a symlink to `~/.ssh/` BEFORE the operator
-	// adds the new bot; a bare MkdirAll would silently follow it, and
-	// store.Open would then create octobuddy.db/.wal/.shm under .ssh. When
-	// DataDir is outside $HOME (operator-supplied absolute path)
-	// SafeMkdirAllAbs falls back to bare MkdirAll — that boundary is
-	// operator-trusted.
-	if err := safepath.SafeMkdirAllAbs(cfg.DataDir, 0o755); err != nil {
-		return fmt.Errorf("bot %s: mkdir data: %w", cfg.BotID, err)
-	}
-	// Isolated per-bot CLAUDE_CONFIG_DIR (unless inheriting the operator's
-	// ~/.claude). Created here so the agent's config root exists before it spawns.
-	if cfg.ClaudeConfigDir != "" && !cfg.Agent.InheritUserConfig {
-		if err := safepath.SafeMkdirAllAbs(cfg.ClaudeConfigDir, 0o700); err != nil {
-			return fmt.Errorf("bot %s: mkdir claude config dir: %w", cfg.BotID, err)
-		}
+	if err := prepareBotDirs(cfg); err != nil {
+		return err
 	}
 	st, err := store.Open(filepath.Join(cfg.DataDir, "octobuddy.db"))
 	if err != nil {
@@ -67,25 +51,7 @@ func runBot(ctx context.Context, cfg config.Resolved, reg *botRegistry, srv *con
 		BotBlocklist:      cfg.BotBlocklist,
 	})
 
-	// Periodic reaper: bound the router's per-session lock / rate-limit maps over
-	// the daemon's lifetime (idle entries are evicted; sessions/messages/sandboxes
-	// themselves are NOT expired — they persist). Runs once now, then on a ticker.
-	reap := func() {
-		rt.Reap(routerReapIdle)
-	}
-	reap()
-	go func() {
-		t := time.NewTicker(reapInterval)
-		defer t.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-t.C:
-				reap()
-			}
-		}
-	}()
+	startRouterReaper(ctx, rt)
 
 	// Per-bot secret store: seed from the config file (the headless fallback),
 	// then let secret.inject (from the GUI's secret backend) override at runtime.
@@ -157,15 +123,7 @@ func runBot(ctx context.Context, cfg config.Resolved, reg *botRegistry, srv *con
 	// and so it can be wired into botRuntime/target BEFORE reg.add — that way
 	// the resolve handler doesn't have to lock-free write `bot.target.cron`
 	// on every call, which raced concurrent control commands.
-	var cm *cron.Manager
-	if cfg.Agent.Cron != nil && *cfg.Agent.Cron {
-		cm = cron.NewManager(cron.NewStore(filepath.Join(cfg.DataDir, "cron.json")), "", nil)
-		cm.SetLabel(fmt.Sprintf("[%s] ", cfg.BotID))
-		cm.OnFire(func(f cron.Fire) {
-			fireCronTask(ctx, connector, gw, target, f.Task)
-		})
-		connector.OnOwner(func(ownerUID string) { cm.SetOwnerUID(ownerUID) })
-	}
+	cm := newBotCronManager(ctx, cfg, connector, gw, target)
 	target.cron = cm
 
 	// Eager-init the per-bot control-handler target so its embedded turnsWG is
@@ -192,32 +150,93 @@ func runBot(ctx context.Context, cfg config.Resolved, reg *botRegistry, srv *con
 	//   2. connector.WaitTurns — drainTurns workers done
 	//   3. target.turnsWG.Wait — control-bus session.send done
 	//   4. (defer st.Close from top of function fires last on LIFO)
-	defer func() {
-		if cm != nil {
-			cm.Stop()
-			cm.Wait()
-		}
-		connector.WaitTurns()
-		rtBot.target.turnsWG.Wait()
-	}()
-	if reg != nil {
-		reg.add(rtBot)
-	}
-	connector.OnStatus(func(connected bool, lastErr string) {
-		rtBot.setStatus(connected, lastErr)
-		if srv != nil {
-			srv.Broadcast("bot.status", rtBot.info())
-		}
-	})
+	defer drainBotRuntime(cm, connector, rtBot.target)
+	registerBotRuntime(rtBot, reg, srv)
 
-	if cm != nil {
-		cm.Start()
-		fmt.Printf("[%s] cron scheduler armed (tick %s)\n", cfg.BotID, cron.CronTickInterval)
-	}
+	startBotCron(cm, cfg.BotID)
 
 	fmt.Printf("[%s] started — driver=%s api=%s data=%s\n",
 		cfg.BotID, drv.Name(), cfg.APIURL, cfg.DataDir)
 
 	err = connector.Run(ctx)
 	return err
+}
+
+// SafeMkdirAllAbs walks the parent chain via dirfd, refusing any symlinked
+// intermediate with ErrSymlink. An agent (Bash + bypass) in any existing bot's
+// cwd could otherwise plant `~/.octobuddy/<newbotID>` as a symlink to `~/.ssh/`
+// before the operator adds the new bot; a bare MkdirAll would silently follow it.
+func prepareBotDirs(cfg config.Resolved) error {
+	if err := safepath.SafeMkdirAllAbs(cfg.DataDir, 0o755); err != nil {
+		return fmt.Errorf("bot %s: mkdir data: %w", cfg.BotID, err)
+	}
+	// Isolated per-bot CLAUDE_CONFIG_DIR (unless inheriting the operator's
+	// ~/.claude). Created here so the agent's config root exists before it spawns.
+	if cfg.ClaudeConfigDir != "" && !cfg.Agent.InheritUserConfig {
+		if err := safepath.SafeMkdirAllAbs(cfg.ClaudeConfigDir, 0o700); err != nil {
+			return fmt.Errorf("bot %s: mkdir claude config dir: %w", cfg.BotID, err)
+		}
+	}
+	return nil
+}
+
+func startRouterReaper(ctx context.Context, rt *router.Router) {
+	// Periodic reaper: bound the router's per-session lock / rate-limit maps over
+	// the daemon's lifetime. Sessions/messages/sandboxes themselves are not expired.
+	reap := func() { rt.Reap(routerReapIdle) }
+	reap()
+	go func() {
+		t := time.NewTicker(reapInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				reap()
+			}
+		}
+	}()
+}
+
+func newBotCronManager(ctx context.Context, cfg config.Resolved, connector *octo.Connector, gw *gateway.Gateway, target *botTarget) *cron.Manager {
+	if cfg.Agent.Cron == nil || !*cfg.Agent.Cron {
+		return nil
+	}
+	cm := cron.NewManager(cron.NewStore(filepath.Join(cfg.DataDir, "cron.json")), "", nil)
+	cm.SetLabel(fmt.Sprintf("[%s] ", cfg.BotID))
+	cm.OnFire(func(f cron.Fire) {
+		fireCronTask(ctx, connector, gw, target, f.Task)
+	})
+	connector.OnOwner(func(ownerUID string) { cm.SetOwnerUID(ownerUID) })
+	return cm
+}
+
+func drainBotRuntime(cm *cron.Manager, connector *octo.Connector, target *botTarget) {
+	if cm != nil {
+		cm.Stop()
+		cm.Wait()
+	}
+	connector.WaitTurns()
+	target.turnsWG.Wait()
+}
+
+func registerBotRuntime(rtBot *botRuntime, reg *botRegistry, srv *control.Server) {
+	if reg != nil {
+		reg.add(rtBot)
+	}
+	rtBot.connector.OnStatus(func(connected bool, lastErr string) {
+		rtBot.setStatus(connected, lastErr)
+		if srv != nil {
+			srv.Broadcast("bot.status", rtBot.info())
+		}
+	})
+}
+
+func startBotCron(cm *cron.Manager, botID string) {
+	if cm == nil {
+		return
+	}
+	cm.Start()
+	fmt.Printf("[%s] cron scheduler armed (tick %s)\n", botID, cron.CronTickInterval)
 }
