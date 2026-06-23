@@ -22,7 +22,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: core/go.mod
           cache-dependency-path: core/go.sum
@@ -68,7 +68,7 @@ jobs:
           - { goos: windows, goarch: amd64 }
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: core/go.mod
           cache-dependency-path: core/go.sum
@@ -112,7 +112,7 @@ jobs:
             libgtk-4-dev \
             libwebkitgtk-6.0-dev
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: desktop/go.mod
           cache-dependency-path: desktop/go.sum
