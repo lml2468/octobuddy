@@ -6,14 +6,16 @@ replacing the Node-only `claude-agent-sdk`. Single static binary, zero cgo,
 cross-compiles everywhere. Native shells (the Wails v3 desktop app in `../desktop`)
 sit on top via the control bus (`../proto`).
 
-Phase 1 ships a single driver — **Claude** — behind the `agent.Driver`
-abstraction. The abstraction is the point: a second agent (Codex, Gemini, …)
-re-enters as another `Driver` implementation without touching the gateway,
-router, store, or control bus.
+One driver ships today — **Claude** — behind the `agent.Driver` abstraction.
+That abstraction is the point: a second agent (Codex, Gemini, …) re-enters as
+another `Driver` implementation without touching the gateway, router, store,
+or control bus.
 
-> Status: headless MVP runs end-to-end — `inbound → router (lock + gate +
-> rate limit) → gateway → agent driver → outbound sink`, with SQLite-backed
-> sessions/messages and per-session resume continuity.
+End-to-end pipeline: `inbound → router (mention gate + bot-loop guard +
+sessionKey + rate limit + per-session lock) → store + groupctx → gateway →
+agent driver → sink (IM REST + control-bus events)`, with SQLite-backed
+sessions/messages and per-session resume continuity that survives daemon
+restart.
 
 ## What this proves
 
@@ -43,22 +45,41 @@ in allow rules).
 ## Layout
 
 ```
-cmd/octobuddy-daemon/   daemon entry point — wires store+router+gateway+driver; ships a
-              REPL inbound source (stdin) for the headless MVP.
+cmd/octobuddy-daemon/  daemon entry point — wires store+router+gateway+driver; ships a
+              REPL inbound source (stdin) for headless / single-bot dev.
 agent/        Driver abstraction (the heart). Everything above depends only on this.
   agent.go    AgentEvent, Request, Capabilities, Driver interface
   claude.go   ClaudeDriver: spawn claude CLI, parse stream-json → AgentEvent
-store/        SQLite persistence: sessions + messages + resume map (no TTL — sessions are persistent; the daemon only reaps idle in-memory router locks)
-router/       sessionKey derivation + per-session serial lock + 3-bucket rate limit
-gateway/      handleMessage orchestration: route → store → driver → sink → persist
-control/      control bus: NDJSON-over-UDS server + gateway EventSink (GUI clients)
+store/        SQLite persistence: sessions + messages + resume map + token usage
+              (no TTL — sessions are persistent; the daemon only reaps idle
+              in-memory router locks/rate-limit buckets).
+router/       sessionKey derivation (DM=per-peer, group=per-channel), per-session
+              serial lock, 3-bucket rate limit, mention/bot-loop gating.
+gateway/      turn pipeline: route → store → groupctx → sandbox → attachments →
+              buildSystemPrompt → driver → sink → persist.
+control/      control bus: NDJSON-over-UDS server + gateway EventSink (GUI clients).
+              Includes a session.upserted push event so the sidebar stays in sync
+              without polling sessions.list.
 im/octo/      Octo IM connector: WuKongIM binary protocol (curve25519 DH + MD5→
-              AES-128-CBC) + REST; inbound → router, replies via REST. Ported
-              wire-compatibly from cc-channel-octo.
+              AES-128-CBC) + REST; inbound → router, replies via REST. Carries an
+              in-connector name cache that resolves DM/peer + group/thread names
+              via /v1/bot/user/info, /v1/bot/groups/{id}, /v1/bot/groups/{g}/threads/{s}.
+              Ported wire-compatibly from cc-channel-octo / openclaw-channel-octo.
 safety/       prompt-injection defense: SanitizeDisplayName / Escape{Role,Section}
               + SafeText choke-point + SecurityPrefix. Ported from prompt-safety.ts.
+safepath/     lexical path containment + symlink defense — the single boundary
+              every local-file read/write in the daemon routes through (config,
+              skills, workflows, GROUP.md, sandbox cwd, IM media downloads).
+sandbox/      per-session deterministic cwd + auto-memory dir under each bot's
+              data root; SHA-derived names keep sessions isolated on disk.
 groupctx/     per-channel group context window + cursor + @mention resolution;
               renders the [Recent group messages] delta for injection.
+groupmd/      operator-trusted per-channel `<channelId>.md` loader (injected as
+              [Group instructions] when the bot's groupConfigDir is set).
+persona/      OBO persona-clone reply voice (openclaw on_behalf_of relay) — the
+              clone speaks for a grantor while routing replies under their uid.
+cron/         per-bot scheduled tasks; owner-gated create/list/delete over the
+              control bus, fires synthetic CronFire inbound messages.
 config/       single-file config (~/.octobuddy/config.json): shared defaults +
               inline bots[], derived data dir, SOUL.md + AGENTS.md prompt,
               slug + SSRF validation.
@@ -106,18 +127,4 @@ can be injected at runtime over the control bus (`secret.inject`) — the macOS 
 keeps them in the Keychain. A bot started without a token waits ("awaiting
 secret") until one is injected, then connects. Put tokens in the file only for
 headless/no-GUI deployments.
-
-## Notes / next
-
-- **Auth:** this machine's `claude` returns 401 on direct Anthropic calls (its
-  key is Claude-Code-internal, not for standalone CLI), so live turns produce no
-  assistant text here. The full pipeline — spawn, event normalization, routing,
-  locking, persistence, multi-turn resume — is verified regardless (unit tests +
-  live spawn). A real key / model gateway lights up the assistant-text path
-  end-to-end.
-- **Next:**
-  - More drivers (e.g. Codex, Gemini) — each just implements `agent.Driver`,
-    additive to the gateway. Codex's `app-server` is a long-lived JSON-RPC duplex
-    process — a different protocol shape that still reduces to the same
-    `AgentEvent` stream, which is the abstraction's real stress test.
 

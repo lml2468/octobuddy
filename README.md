@@ -82,10 +82,12 @@ one contract:
 ```
 
 Inbound message → **router** (mention gate · bot-loop guard · sessionKey · rate
-limit · per-session lock) → **store** (resume id) → **sandbox** (cwd + memory) →
-**buildSystemPrompt** (security prefix + SOUL/AGENTS + roster) →
-**driver.Query** → stream `AgentEvent`s (each resets a per-turn idle deadline)
-→ assemble reply → persist + send.
+limit · per-session lock) → **store** (resume id) → **groupctx** (rolling group
+context + answered/new segmentation) → **sandbox** (cwd + memory) →
+**attachments materialized into cwd** → **buildSystemPrompt** (security prefix +
+SOUL/AGENTS + roster + GROUP.md + persona) → **driver.Query** → stream
+`AgentEvent`s (each resets a per-turn idle deadline) → assemble reply →
+persist + send (sink emits `session.upserted` so the sidebar stays in sync).
 
 See [`CLAUDE.md`](CLAUDE.md) for the full pipeline, invariants, and security model.
 
@@ -126,9 +128,9 @@ the daemon already cross-compiles for all three.
 Cut from a single mac with `zsh scripts/release.sh vX.Y.Z` — the script
 codesigns with your Developer ID, notarizes via App Store Connect API key,
 and publishes a [GitHub Release](https://github.com/lml2468/octobuddy/releases)
-with a universal macOS `.app.zip` + headless `octobuddy-daemon` binaries for
-linux-amd64, linux-arm64, and windows-amd64. See
-[`docs/RELEASE.md`](docs/RELEASE.md) for one-time setup.
+with a universal macOS `.app.zip` plus headless `octobuddy-daemon` binaries
+for darwin-arm64, darwin-amd64, linux-amd64, linux-arm64, and windows-amd64.
+See [`docs/RELEASE.md`](docs/RELEASE.md) for one-time setup.
 
 ## Configuration
 

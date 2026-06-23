@@ -31,27 +31,38 @@ cd desktop && wails3 generate bindings -ts -d frontend/bindings
 ```
 
 **UI preview mode** (`OCTOBUDDY_PREVIEW=1`, with `OCTOBUDDY_PREVIEW_THEME=dark|light`,
-`OCTOBUDDY_PREVIEW_EMPTY=1`, `?editor=1` / `?skills=1`) seeds mock data and skips the
-daemon, so the UI can be screenshotted and geometry-asserted in headless Chrome
-without a live bot.
+`OCTOBUDDY_PREVIEW_EMPTY=1`) seeds mock data and skips the daemon, so the UI
+can be screenshotted and geometry-asserted in headless Chrome without a live
+bot. Append `?settings=<tab>` (basic / octo / skills / workflows / schedules)
+to land directly on a Settings-modal pane; `?memory` / `?files` to open the
+workspace sidebar; `?usage` to open the token-usage modal.
 
 ## Layout
 
 ```
 main.go            app + frameless window + system tray + single-instance
 octobuddyservice.go    Wails-bound bridge: spawn octobuddy-daemon, dial UDS, forward
-                   octobuddy:event, expose command/config/skills methods
+                   octobuddy:event, expose command/config/skills/workflows methods
 internal/
   control          UDS/NDJSON client over core/control/wire
   core             supervisor: resolve binary → spawn → stop/restart
-  configstore      ~/.octobuddy/config.json + per-bot SOUL/AGENTS + skill allow-list
-  skills           CRUD over the ~/.octobuddy/skills/ catalog bundles
+  configstore      ~/.octobuddy/config.json + per-bot SOUL/AGENTS
+  skills           per-bot CRUD over ~/.octobuddy/<id>/.claude/skills/ bundles
+  workflows        per-bot CRUD over ~/.octobuddy/<id>/.claude/workflows/*.js
+  workspace        read-only sandboxed tree+file view of each session's cwd
+  octoapi          REST helpers against the bot's Octo gateway
   octocli          bundle/install/upgrade the octo-cli companion
+  autostart        macOS launch-at-login (com.mlt.octobuddy.desktop)
   secrets          tokens in the OS credential store (go-keyring, zero cgo)
+  logfile          rotating ~/.octobuddy/logs/octobuddy.log
+  safehttp         IM-scoped HTTP client (rebinding-proof dial guard)
 frontend/src
   lib/store.svelte.ts    single reducer: folds octobuddy:event into the view model
-  lib/components/        Rail · Conversations · Transcript · Bubble · Composer ·
-                         ConfigEditor · SkillsPanel · Avatar
+  lib/components/        Sidebar · Transcript · Bubble · Composer · SettingsModal +
+                         four panes (BasicInfoPane · OctoIntegrationPane · SkillsPane ·
+                         WorkflowsPane) · SchedulesPane · TokenUsage · WorkspacePanel ·
+                         FilePreview · Confirm · ErrorFooter · Avatar
+  lib/confirm.svelte.ts  global confirm() — mounts <Confirm> programmatically
   lib/styles/theme.css   design tokens
 ```
 
