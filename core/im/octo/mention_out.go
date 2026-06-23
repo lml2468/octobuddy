@@ -442,56 +442,8 @@ func splitMessageProtected(text string, maxUnits int, ranges []protectedRange) [
 			break
 		}
 
-		chunk := remaining[:maxUnits]
-		// Translate global ranges to local (relative to consumed).
-		var local []protectedRange
-		for _, r := range ranges {
-			if r.end > consumed && r.start < consumed+len(remaining) {
-				local = append(local, protectedRange{start: r.start - consumed, end: r.end - consumed})
-			}
-		}
-
-		splitAt := -1
-		try := func(candidate int) bool {
-			adj, ok := adjustSplitForProtectedRanges(candidate, local)
-			if !ok || adj <= 0 || adj > maxUnits {
-				return false
-			}
-			splitAt = adj
-			return true
-		}
-
-		// 1. Paragraph break.
-		if idx := lastIndexUnits(chunk, "\n\n"); idx > 0 {
-			try(idx + 2)
-		}
-		// 2. Newline.
-		if splitAt == -1 {
-			if idx := lastIndexUnits(chunk, "\n"); idx > 0 {
-				try(idx + 1)
-			}
-		}
-		// 3. Space.
-		if splitAt == -1 {
-			if idx := lastIndexUnits(chunk, " "); idx > 0 {
-				try(idx + 1)
-			}
-		}
-		// 4. Hard cut — avoid surrogate split and protected ranges.
-		if splitAt == -1 {
-			splitAt = maxUnits
-			if c := remaining[splitAt-1]; c >= 0xD800 && c <= 0xDBFF {
-				splitAt--
-			}
-			if adj, ok := adjustSplitForProtectedRanges(splitAt, local); ok && adj > 0 {
-				// adj < splitAt: a protected range with room before it → cut earlier.
-				// adj > splitAt: a mention longer than maxUnits starting at 0 → cut at
-				// its end so the whole mention stays in this (over-long) segment
-				// instead of being sliced through.
-				splitAt = adj
-			}
-		}
-
+		local := localProtectedRanges(ranges, consumed, len(remaining))
+		splitAt := chooseProtectedSplit(remaining, maxUnits, local)
 		// adj from a start-0 oversized mention can exceed the remaining length;
 		// clamp so the slice below never panics.
 		if splitAt > len(remaining) {
@@ -503,6 +455,66 @@ func splitMessageProtected(text string, maxUnits int, ranges []protectedRange) [
 	}
 
 	return segs
+}
+
+func localProtectedRanges(ranges []protectedRange, consumed, remainingLen int) []protectedRange {
+	var local []protectedRange
+	for _, r := range ranges {
+		if r.end > consumed && r.start < consumed+remainingLen {
+			local = append(local, protectedRange{start: r.start - consumed, end: r.end - consumed})
+		}
+	}
+	return local
+}
+
+func chooseProtectedSplit(remaining []uint16, maxUnits int, local []protectedRange) int {
+	chunk := remaining[:maxUnits]
+	if splitAt, ok := preferredProtectedSplit(chunk, maxUnits, local); ok {
+		return splitAt
+	}
+	return hardProtectedSplit(remaining, maxUnits, local)
+}
+
+func preferredProtectedSplit(chunk []uint16, maxUnits int, local []protectedRange) (int, bool) {
+	for _, candidate := range []struct {
+		substr string
+		width  int
+	}{
+		{substr: "\n\n", width: 2},
+		{substr: "\n", width: 1},
+		{substr: " ", width: 1},
+	} {
+		if idx := lastIndexUnits(chunk, candidate.substr); idx > 0 {
+			if splitAt, ok := tryProtectedSplit(idx+candidate.width, maxUnits, local); ok {
+				return splitAt, true
+			}
+		}
+	}
+	return 0, false
+}
+
+func tryProtectedSplit(candidate, maxUnits int, local []protectedRange) (int, bool) {
+	adj, ok := adjustSplitForProtectedRanges(candidate, local)
+	if !ok || adj <= 0 || adj > maxUnits {
+		return 0, false
+	}
+	return adj, true
+}
+
+func hardProtectedSplit(remaining []uint16, maxUnits int, local []protectedRange) int {
+	splitAt := maxUnits
+	// Avoid surrogate split.
+	if c := remaining[splitAt-1]; c >= 0xD800 && c <= 0xDBFF {
+		splitAt--
+	}
+	if adj, ok := adjustSplitForProtectedRanges(splitAt, local); ok && adj > 0 {
+		// adj < splitAt: a protected range with room before it → cut earlier.
+		// adj > splitAt: a mention longer than maxUnits starting at 0 → cut at
+		// its end so the whole mention stays in this (over-long) segment instead
+		// of being sliced through.
+		splitAt = adj
+	}
+	return splitAt
 }
 
 // lastIndexUnits returns the UTF-16 code-unit index of the last occurrence of
