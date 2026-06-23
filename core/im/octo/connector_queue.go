@@ -107,6 +107,12 @@ func (c *Connector) WaitTurns() {
 	c.turnsWG.Wait()
 }
 
+func shouldObserveDroppedGroupMessage(inbound router.InboundMessage, dec router.Decision) bool {
+	return inbound.ChannelType == router.ChannelGroup &&
+		!inbound.Mentioned &&
+		(dec == router.DroppedBot || dec == router.DroppedNotMentioned)
+}
+
 func (c *Connector) drainTurns(key string) {
 	defer c.turnsWG.Done()
 	for {
@@ -142,8 +148,7 @@ func (c *Connector) drainTurns(key string) {
 		// guard, or it turned out not to be mention-free after all) is still group
 		// chatter the agent should see later — observe it as background. runTurn
 		// already cached it on the Accepted path, so only observe on these drops.
-		if item.inbound.ChannelType == router.ChannelGroup && !item.inbound.Mentioned &&
-			(dec == router.DroppedBot || dec == router.DroppedNotMentioned) {
+		if shouldObserveDroppedGroupMessage(item.inbound, dec) {
 			c.gateway.Observe(item.inbound)
 		}
 	}
