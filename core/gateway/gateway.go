@@ -543,16 +543,6 @@ func (g *Gateway) runTurn(ctx context.Context, sessionKey string, msg router.Inb
 		return err
 	}
 
-	// Build the prompt. For group messages this injects the [Recent group
-	// messages] delta as untrusted background and demarcates the real request
-	// with the current-message anchor; DM messages pass through unchanged.
-	// Snapshot the pre-build group cursor for this channel and defer a
-	// conditional rewind. buildGroupPrompt advances the cursor past the
-	// current message; any turn-aborting failure BEFORE we've actually
-	// produced + delivered a reply must roll it back, or the unanswered
-	// message silently drops from every subsequent [Recent group messages]
-	// delta. Set turnDelivered=true once the reply is on its way out so the
-	// happy path keeps the cursor advanced.
 	turnDelivered := false
 	defer g.rewindGroupCursorUnlessDelivered(msg, &turnDelivered)()
 	req, err := g.prepareAgentRequest(ctx, sessionKey, msg)
@@ -560,14 +550,6 @@ func (g *Gateway) runTurn(ctx context.Context, sessionKey string, msg router.Inb
 		return err
 	}
 
-	// Bound driver.Query + the stream loop with a per-turn IDLE timeout (#141).
-	// Cancelling turnCtx kills the claude subprocess (CommandContext) and closes
-	// the event stream, so a hung turn (stuck query, wedged tool, stalled stream)
-	// can't block the session queue forever. The timer resets on every AgentEvent
-	// — a long but healthy turn (multi-agent workflow, big stream) survives as
-	// long as events flow; only true silence kills it. On expiry we send an
-	// apology and return nil — the per-session lock then releases as runTurn
-	// returns.
 	turnCtx, idle := newIdleGuard(ctx, g.dispatchTimeout)
 	defer idle.stop()
 
@@ -577,30 +559,13 @@ func (g *Gateway) runTurn(ctx context.Context, sessionKey string, msg router.Inb
 		req.SessionID = resume
 		events, err := g.driver.Query(turnCtx, req)
 		if err != nil {
-			// Spawning/dispatching the agent failed (incl. the fresh retry after a
-			// stale resume). Signal the user instead of returning silently — a bare
-			// return would leave them with no reply and the typing indicator stuck.
 			return g.failTurn(sessionKey, "driver.Query", err)
 		}
 
-		// On a resume attempt the stream may turn out doomed (stale resume id). To
-		// avoid leaking a doomed attempt's events to the sink — the
-		// ResumeInvalid signal arrives on stderr while content arrives on stdout,
-		// with no ordering guarantee between the two reader goroutines — we GATE
-		// sink emission: buffer events until the session proves valid (first
-		// KindSessionStarted), then flush and stream live. If ResumeInvalid arrives
-		// first, the buffer is dropped. A fresh attempt (no resume id) streams live
-		// immediately. Latency is bounded by the first event, so a healthy resume is
-		// unaffected.
 		attemptResult = g.consumeAgentAttempt(sessionKey, events, idle, resume != "")
 
-		// Self-heal a stale resume id: clear the mapping and retry once, fresh.
 		if shouldRetryFreshResume(attemptResult, resume, attempt) {
 			fmt.Fprintf(os.Stderr, "[gateway] stale resume id for %s; clearing and retrying fresh\n", sessionKey)
-			// Per-agent clear: self-heal only nukes THIS driver's
-			// row, not every agent's. the prior composite-PK promise was
-			// that two drivers can hold concurrent resume ids; a blanket
-			// ClearResume(sessionKey) would have crossed that boundary.
 			_ = g.store.ClearResumeForAgent(sessionKey, g.driver.Name())
 			resume = ""
 			continue
