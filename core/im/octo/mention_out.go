@@ -205,18 +205,7 @@ func buildEntitiesFromFallback(content string, memberMap map[string]string) fall
 	if len(memberMap) == 0 {
 		return res
 	}
-	sortedNames := make([]string, 0, len(memberMap))
-	for k := range memberMap {
-		sortedNames = append(sortedNames, k)
-	}
-	// Longest first; ties broken lexicographically for determinism.
-	sort.Slice(sortedNames, func(i, j int) bool {
-		if len(sortedNames[i]) != len(sortedNames[j]) {
-			return len(sortedNames[i]) > len(sortedNames[j])
-		}
-		return sortedNames[i] < sortedNames[j]
-	})
-
+	sortedNames := sortedFallbackMemberNames(memberMap)
 	runes := []rune(content)
 	off16 := 0 // UTF-16 offset of runes[i]
 	for i := 0; i < len(runes); i++ {
@@ -235,29 +224,7 @@ func buildEntitiesFromFallback(content string, memberMap map[string]string) fall
 			continue
 		}
 		afterAt := runes[i+1:]
-		// Determine the captured plain name (charset run after '@').
-		nameLen := 0
-		for nameLen < len(afterAt) && nameCharRE.MatchString(string(afterAt[nameLen])) {
-			nameLen++
-		}
-		if nameLen == 0 {
-			off16 += utf16Width(r)
-			continue
-		}
-		name := string(afterAt[:nameLen])
-		// Skip @all / @所有人 — handled by mentionAll.
-		if strings.EqualFold(name, "all") || name == "所有人" {
-			off16 += utf16Width(r)
-			continue
-		}
-
-		matchedName := name
-		uid, ok := "", false
-		if mn, mu, found := tryLongestMemberMatch(afterAt, memberMap, sortedNames); found {
-			matchedName, uid, ok = mn, mu, true
-		} else if u, exists := memberMap[name]; exists {
-			uid, ok = u, true
-		}
+		matchedName, uid, ok := resolveFallbackMention(afterAt, memberMap, sortedNames)
 		if !ok {
 			off16 += utf16Width(r)
 			continue
@@ -277,6 +244,48 @@ func buildEntitiesFromFallback(content string, memberMap map[string]string) fall
 		i += consumed - 1
 	}
 	return res
+}
+
+func sortedFallbackMemberNames(memberMap map[string]string) []string {
+	sortedNames := make([]string, 0, len(memberMap))
+	for k := range memberMap {
+		sortedNames = append(sortedNames, k)
+	}
+	// Longest first; ties broken lexicographically for determinism.
+	sort.Slice(sortedNames, func(i, j int) bool {
+		if len(sortedNames[i]) != len(sortedNames[j]) {
+			return len(sortedNames[i]) > len(sortedNames[j])
+		}
+		return sortedNames[i] < sortedNames[j]
+	})
+	return sortedNames
+}
+
+func resolveFallbackMention(afterAt []rune, memberMap map[string]string, sortedNames []string) (string, string, bool) {
+	nameLen := plainMentionNameLen(afterAt)
+	if nameLen == 0 {
+		return "", "", false
+	}
+	name := string(afterAt[:nameLen])
+	// Skip @all / @所有人 — handled by mentionAll.
+	if strings.EqualFold(name, "all") || name == "所有人" {
+		return "", "", false
+	}
+	if matchedName, uid, found := tryLongestMemberMatch(afterAt, memberMap, sortedNames); found {
+		return matchedName, uid, true
+	}
+	if uid, exists := memberMap[name]; exists {
+		return name, uid, true
+	}
+	return "", "", false
+}
+
+func plainMentionNameLen(afterAt []rune) int {
+	nameLen := 0
+	for nameLen < len(afterAt) && nameCharRE.MatchString(string(afterAt[nameLen])) {
+		nameLen++
+	}
+	return nameLen
 }
 
 // resolveResult is the output of resolveMentions.
