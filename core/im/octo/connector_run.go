@@ -12,10 +12,7 @@ import (
 // transient API outage at startup doesn't kill the bot.
 func (c *Connector) Run(ctx context.Context) error {
 	c.setCtx(ctx)
-	// REST heartbeat loop (30s), separate from the WS ping.
-	go c.heartbeatLoop(ctx)
-	// Single-worker read-receipt sender (see receiptCh comment).
-	go c.receiptWorker(ctx)
+	c.startRunWorkers(ctx)
 
 	backoff := c.reconnectBase
 	var reg RegisterResponse
@@ -26,29 +23,20 @@ func (c *Connector) Run(ctx context.Context) error {
 			return ctx.Err()
 		}
 
-		// No token yet (config has none and secret.inject hasn't arrived): wait
-		// for one rather than hammering Register with an empty bearer. The GUI
-		// injects tokens shortly after the control bus connects.
-		if c.rest.Token() == "" {
-			c.setStatus(false, "awaiting secret")
-			sleep(ctx, awaitTokenPoll)
+		if !c.waitForToken(ctx) {
 			continue
 		}
 
 		if !registered {
-			r, err := c.rest.Register(ctx, false)
+			r, ok, err := c.registerInitial(ctx, backoff)
 			if err != nil {
-				if ctx.Err() != nil {
-					return ctx.Err()
-				}
-				c.setStatus(false, err.Error())
-				sleep(ctx, backoff)
+				return err
+			}
+			if !ok {
 				backoff = min(backoff*2, c.reconnectMax)
 				continue
 			}
 			reg = r
-			c.setUID(reg.RobotID)
-			c.notifyOwner(reg.OwnerUID)
 			registered = true
 			backoff = c.reconnectBase
 		}
@@ -60,22 +48,62 @@ func (c *Connector) Run(ctx context.Context) error {
 		}
 		c.setStatus(false, errString(err))
 
-		// Connection dropped: back off, then force a fresh registration (token
-		// may have expired) before reconnecting. Re-check ctx after the sleep so
-		// a shutdown that races the back-off doesn't issue a wasted Register.
 		sleep(ctx, backoff)
 		backoff = min(backoff*2, c.reconnectMax)
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if fresh, rerr := c.rest.Register(ctx, true); rerr == nil {
+		if fresh, rerr := c.refreshRegistration(ctx); rerr == nil {
 			reg = fresh
-			c.setUID(reg.RobotID)
-			c.notifyOwner(reg.OwnerUID)
 		} else {
 			registered = false // force the retry path above
 		}
 	}
+}
+
+func (c *Connector) waitForToken(ctx context.Context) bool {
+	// No token yet: wait rather than hammering Register with an empty bearer.
+	if c.rest.Token() != "" {
+		return true
+	}
+	c.setStatus(false, "awaiting secret")
+	sleep(ctx, awaitTokenPoll)
+	return false
+}
+
+func (c *Connector) registerInitial(ctx context.Context, backoff time.Duration) (RegisterResponse, bool, error) {
+	reg, err := c.rest.Register(ctx, false)
+	if err == nil {
+		c.applyRegistration(reg)
+		return reg, true, nil
+	}
+	if ctx.Err() != nil {
+		return RegisterResponse{}, false, ctx.Err()
+	}
+	c.setStatus(false, err.Error())
+	sleep(ctx, backoff)
+	return RegisterResponse{}, false, nil
+}
+
+func (c *Connector) startRunWorkers(ctx context.Context) {
+	// REST heartbeat loop (30s), separate from the WS ping.
+	go c.heartbeatLoop(ctx)
+	// Single-worker read-receipt sender (see receiptCh comment).
+	go c.receiptWorker(ctx)
+}
+
+func (c *Connector) refreshRegistration(ctx context.Context) (RegisterResponse, error) {
+	reg, err := c.rest.Register(ctx, true)
+	if err != nil {
+		return RegisterResponse{}, err
+	}
+	c.applyRegistration(reg)
+	return reg, nil
+}
+
+func (c *Connector) applyRegistration(reg RegisterResponse) {
+	c.setUID(reg.RobotID)
+	c.notifyOwner(reg.OwnerUID)
 }
 
 func errString(err error) string {
