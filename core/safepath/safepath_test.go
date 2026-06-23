@@ -109,6 +109,12 @@ func TestSafeWriteAtomic(t *testing.T) {
 	if string(b) != "hi" {
 		t.Errorf("round-trip mismatch: %q", string(b))
 	}
+	exerciseRemovalExports(t, root)
+}
+
+func exerciseRemovalExports(t *testing.T, root string) {
+	t.Helper()
+
 	if _, err := SafeReadDir(root, "a/b"); err != nil {
 		t.Fatalf("SafeReadDir: %v", err)
 	}
