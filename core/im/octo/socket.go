@@ -123,6 +123,12 @@ func (s *socketConn) writeRaw(b []byte) error {
 	return s.conn.WriteMessage(websocket.BinaryMessage, b)
 }
 
+type connackPayload struct {
+	reason    byte
+	serverKey string
+	salt      string
+}
+
 func (s *socketConn) readConnack() error {
 	// Bound the CONNACK wait. The ctx-watcher goroutine that calls
 	// s.close() on cancellation is only started later in run(); without
@@ -136,42 +142,60 @@ func (s *socketConn) readConnack() error {
 	if err != nil {
 		return fmt.Errorf("read connack: %w", err)
 	}
+	body, hasServerVersion, err := parseConnackFrame(data)
+	if err != nil {
+		return err
+	}
+	payload, err := s.decodeConnackBody(body, hasServerVersion)
+	if err != nil {
+		return err
+	}
+	return s.applyConnackPayload(payload)
+}
+
+func parseConnackFrame(data []byte) ([]byte, bool, error) {
 	pt, body, _, ok, ferr := nextFrame(data)
 	if ferr != nil || !ok {
-		return fmt.Errorf("connack frame: ok=%v err=%v", ok, ferr)
+		return nil, false, fmt.Errorf("connack frame: ok=%v err=%v", ok, ferr)
 	}
 	if pt != pktConnack {
-		return fmt.Errorf("expected CONNACK, got packet %d", pt)
+		return nil, false, fmt.Errorf("expected CONNACK, got packet %d", pt)
 	}
-	hasServerVersion := headerFlags(data[0])&0x01 == 1
+	return body, headerFlags(data[0])&0x01 == 1, nil
+}
 
+func (s *socketConn) decodeConnackBody(body []byte, hasServerVersion bool) (connackPayload, error) {
 	d := &decoder{buf: body}
 	if hasServerVersion {
 		v, _ := d.readByte()
 		s.srvVer = int(v)
 	}
 	if _, err := d.readInt64(); err != nil { // timeDiff (unused)
-		return err
+		return connackPayload{}, err
 	}
 	reason, err := d.readByte()
 	if err != nil {
-		return err
+		return connackPayload{}, err
 	}
 	serverKey, err := d.readString()
 	if err != nil {
-		return err
+		return connackPayload{}, err
 	}
 	salt, err := d.readString()
 	if err != nil {
-		return err
+		return connackPayload{}, err
 	}
 	if s.srvVer >= 4 {
 		_, _ = d.readInt64() // nodeId (unused)
 	}
-	if reason != 1 {
-		return fmt.Errorf("connack reason %d (not success)", reason)
+	return connackPayload{reason: reason, serverKey: serverKey, salt: salt}, nil
+}
+
+func (s *socketConn) applyConnackPayload(payload connackPayload) error {
+	if payload.reason != 1 {
+		return fmt.Errorf("connack reason %d (not success)", payload.reason)
 	}
-	key, iv, err := deriveAESKeyIV(s.dh.priv, serverKey, salt)
+	key, iv, err := deriveAESKeyIV(s.dh.priv, payload.serverKey, payload.salt)
 	if err != nil {
 		return err
 	}
