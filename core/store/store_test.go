@@ -20,37 +20,40 @@ func openTemp(t *testing.T) *Store {
 
 func TestResumeRoundTrip(t *testing.T) {
 	s := openTemp(t)
+	assertUnknownResume(t, s)
+	assertResumeUpsert(t, s)
+	assertSecondAgentResume(t, s)
+	assertClearResume(t, s)
+}
+
+func assertUnknownResume(t *testing.T, s *Store) {
+	t.Helper()
+
 	if got, _ := s.Resume("group:123", "claude"); got != "" {
 		t.Fatalf("expected empty for unknown key, got %q", got)
 	}
-	if err := s.SaveResume("group:123", "claude", "sess-abc"); err != nil {
-		t.Fatalf("save: %v", err)
-	}
-	if got, _ := s.Resume("group:123", "claude"); got != "sess-abc" {
-		t.Fatalf("got %q want sess-abc", got)
-	}
+}
+
+func assertResumeUpsert(t *testing.T, s *Store) {
+	t.Helper()
+
+	saveAndAssertResume(t, s, "group:123", "claude", "sess-abc", "save: %v", "got %q want sess-abc")
 	// Saving the same (key, agent) replaces.
-	if err := s.SaveResume("group:123", "claude", "sess-xyz"); err != nil {
-		t.Fatalf("re-save: %v", err)
-	}
-	if got, _ := s.Resume("group:123", "claude"); got != "sess-xyz" {
-		t.Fatalf("upsert (same agent) failed: got %q", got)
-	}
-	// A DIFFERENT agent's save for the same key does NOT overwrite
-	// fix: (session_key, agent) is the composite PK so Claude and Codex
-	// drivers can hold concurrent resume ids for the same logical session
-	// without one silently feeding the other a stale id.
-	if err := s.SaveResume("group:123", "codex", "thr-def"); err != nil {
-		t.Fatalf("save second agent: %v", err)
-	}
+	saveAndAssertResume(t, s, "group:123", "claude", "sess-xyz", "re-save: %v", "upsert (same agent) failed: got %q")
+}
+
+func assertSecondAgentResume(t *testing.T, s *Store) {
+	t.Helper()
+
+	saveAndAssertResume(t, s, "group:123", "codex", "thr-def", "save second agent: %v", "codex resume not stored: got %q")
 	if got, _ := s.Resume("group:123", "claude"); got != "sess-xyz" {
 		t.Fatalf("claude resume id should be unchanged after codex save: got %q", got)
 	}
-	if got, _ := s.Resume("group:123", "codex"); got != "thr-def" {
-		t.Fatalf("codex resume not stored: got %q", got)
-	}
-	// clear drops every agent's row for the key (a /reset clears the whole
-	// session, regardless of which driver authored it).
+}
+
+func assertClearResume(t *testing.T, s *Store) {
+	t.Helper()
+
 	if err := s.ClearResume("group:123"); err != nil {
 		t.Fatalf("clear: %v", err)
 	}
@@ -103,10 +106,17 @@ func TestMessagesChronologicalAndLimited(t *testing.T) {
 
 func TestListSessions(t *testing.T) {
 	s := openTemp(t)
+	got := createListedSessions(t, s)
+	assertListedSessionOrder(t, got)
+	assertListedSessionPreviews(t, got)
+}
+
+func createListedSessions(t *testing.T, s *Store) []SessionSummary {
+	t.Helper()
+
 	clk := time.Unix(1000, 0)
 	s.SetClock(func() time.Time { return clk })
 
-	// older session "a", then newer "b" (updated_at advances with the clock).
 	if _, err := s.GetOrCreate("a", "a", 2); err != nil {
 		t.Fatal(err)
 	}
@@ -132,11 +142,20 @@ func TestListSessions(t *testing.T) {
 	if len(got) != 3 {
 		t.Fatalf("want 3 sessions, got %d (%+v)", len(got), got)
 	}
-	// newest updated_at first: b(2000), c(1500), a(1000)
+	return got
+}
+
+func assertListedSessionOrder(t *testing.T, got []SessionSummary) {
+	t.Helper()
+
 	if got[0].Key != "b" || got[1].Key != "c" || got[2].Key != "a" {
 		t.Fatalf("order wrong: %s, %s, %s", got[0].Key, got[1].Key, got[2].Key)
 	}
-	// preview is the latest message
+}
+
+func assertListedSessionPreviews(t *testing.T, got []SessionSummary) {
+	t.Helper()
+
 	if got[0].Preview != "hi from b" || got[0].LastRole != RoleUser {
 		t.Fatalf("b preview wrong: %+v", got[0])
 	}
@@ -150,19 +169,33 @@ func TestListSessions(t *testing.T) {
 
 func TestTokenUsageAccumulates(t *testing.T) {
 	s := openTemp(t)
+	assertFreshUsage(t, s)
+	assertZeroUsageNoTurn(t, s)
+	addUsageDeltas(t, s)
+	assertAccumulatedUsage(t, s)
+}
 
-	// No turns yet → zero value.
+func assertFreshUsage(t *testing.T, s *Store) {
+	t.Helper()
+
 	if u, err := s.Usage(); err != nil || u.Turns != 0 || u.InputTokens != 0 {
 		t.Fatalf("fresh usage should be zero: %+v err=%v", u, err)
 	}
+}
 
-	// All-zero deltas are a no-op (don't advance the turn counter).
+func assertZeroUsageNoTurn(t *testing.T, s *Store) {
+	t.Helper()
+
 	if err := s.AddUsage(0, 0, 0, 0, 0); err != nil {
 		t.Fatal(err)
 	}
 	if u, _ := s.Usage(); u.Turns != 0 {
 		t.Fatalf("zero usage must not advance turns: %+v", u)
 	}
+}
+
+func addUsageDeltas(t *testing.T, s *Store) {
+	t.Helper()
 
 	if err := s.AddUsage(100, 20, 80, 200, 0.01); err != nil {
 		t.Fatal(err)
@@ -170,6 +203,11 @@ func TestTokenUsageAccumulates(t *testing.T) {
 	if err := s.AddUsage(50, 10, 40, 0, 0.005); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func assertAccumulatedUsage(t *testing.T, s *Store) {
+	t.Helper()
+
 	u, err := s.Usage()
 	if err != nil {
 		t.Fatalf("usage: %v", err)
@@ -222,7 +260,19 @@ func TestTokenUsageByDateRange(t *testing.T) {
 func TestTokenUsageMigratesLegacyAggregate(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "legacy.db")
-	// Build a DB with the OLD single-row token_usage table + a row.
+	createLegacyTokenUsageDB(t, path)
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("reopen/migrate: %v", err)
+	}
+	t.Cleanup(func() { s.Close() })
+	assertLegacyTokenUsageMigrated(t, s)
+}
+
+func createLegacyTokenUsageDB(t *testing.T, path string) {
+	t.Helper()
+
 	pre, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
@@ -239,13 +289,11 @@ func TestTokenUsageMigratesLegacyAggregate(t *testing.T) {
 		t.Fatal(err)
 	}
 	pre.Close()
+}
 
-	// Reopen: migration should fold the legacy row into the day=0 bucket.
-	s, err := Open(path)
-	if err != nil {
-		t.Fatalf("reopen/migrate: %v", err)
-	}
-	t.Cleanup(func() { s.Close() })
+func assertLegacyTokenUsageMigrated(t *testing.T, s *Store) {
+	t.Helper()
+
 	u, err := s.Usage()
 	if err != nil {
 		t.Fatal(err)
@@ -337,7 +385,24 @@ func TestSaveResumeAgainstLegacySchema(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "legacy.db")
 
-	// Step 1: create a DB with the legacy schema (single-column PK).
+	createLegacyAgentSessionsDB(t, dbPath)
+
+	// Step 2: reopen via the production path. The current schema runs all its
+	// IF NOT EXISTS DDL (incl. the new CREATE UNIQUE INDEX) without dropping
+	// the legacy table, so the table keeps its old single-column PK but
+	// gains the composite unique index that ON CONFLICT can target.
+	s, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer s.Close()
+
+	assertLegacyResumeUpsert(t, s)
+}
+
+func createLegacyAgentSessionsDB(t *testing.T, dbPath string) {
+	t.Helper()
+
 	legacy, err := Open(dbPath)
 	if err != nil {
 		t.Fatalf("legacy open: %v", err)
@@ -367,34 +432,24 @@ func TestSaveResumeAgainstLegacySchema(t *testing.T) {
 	if err := legacy.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
+}
 
-	// Step 2: reopen via the production path. The current schema runs all its
-	// IF NOT EXISTS DDL (incl. the new CREATE UNIQUE INDEX) without dropping
-	// the legacy table, so the table keeps its old single-column PK but
-	// gains the composite unique index that ON CONFLICT can target.
-	s, err := Open(dbPath)
-	if err != nil {
-		t.Fatalf("reopen: %v", err)
-	}
-	defer s.Close()
+func assertLegacyResumeUpsert(t *testing.T, s *Store) {
+	t.Helper()
 
-	// Step 3: SaveResume must succeed. Before the fix this errored
-	// with "ON CONFLICT clause does not match any PRIMARY KEY or UNIQUE
-	// constraint" and the daemon silently lost resume continuity on every
-	// existing user's first post-upgrade turn.
-	if err := s.SaveResume("dm:peer", "claude", "sess-new"); err != nil {
-		t.Fatalf("SaveResume against legacy schema must succeed: %v", err)
-	}
-	if got, _ := s.Resume("dm:peer", "claude"); got != "sess-new" {
-		t.Fatalf("Resume after upsert = %q, want sess-new", got)
-	}
+	saveAndAssertResume(t, s, "dm:peer", "claude", "sess-new", "SaveResume against legacy schema must succeed: %v", "Resume after upsert = %q, want sess-new")
 	// A different agent for the same session key should also work — that's
 	// the whole point of the composite uniqueness.
-	if err := s.SaveResume("dm:peer", "codex", "thr-new"); err != nil {
-		t.Fatalf("SaveResume for second agent must succeed: %v", err)
+	saveAndAssertResume(t, s, "dm:peer", "codex", "thr-new", "SaveResume for second agent must succeed: %v", "Resume codex = %q, want thr-new")
+}
+
+func saveAndAssertResume(t *testing.T, s *Store, key, agent, resumeID, saveFormat, gotFormat string) {
+	t.Helper()
+	if err := s.SaveResume(key, agent, resumeID); err != nil {
+		t.Fatalf(saveFormat, err)
 	}
-	if got, _ := s.Resume("dm:peer", "codex"); got != "thr-new" {
-		t.Fatalf("Resume codex = %q, want thr-new", got)
+	if got, _ := s.Resume(key, agent); got != resumeID {
+		t.Fatalf(gotFormat, got)
 	}
 }
 
