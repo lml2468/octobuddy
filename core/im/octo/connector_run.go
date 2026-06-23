@@ -58,11 +58,7 @@ func (c *Connector) Run(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		errStr := ""
-		if err != nil {
-			errStr = err.Error()
-		}
-		c.setStatus(false, errStr)
+		c.setStatus(false, errString(err))
 
 		// Connection dropped: back off, then force a fresh registration (token
 		// may have expired) before reconnecting. Re-check ctx after the sleep so
@@ -80,6 +76,13 @@ func (c *Connector) Run(ctx context.Context) error {
 			registered = false // force the retry path above
 		}
 	}
+}
+
+func errString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 // sleep waits for d or until ctx is cancelled.
