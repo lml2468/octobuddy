@@ -543,51 +543,9 @@ func (g *Gateway) runTurn(ctx context.Context, sessionKey string, msg router.Inb
 	// happy path keeps the cursor advanced.
 	turnDelivered := false
 	defer g.rewindGroupCursorUnlessDelivered(msg, &turnDelivered)()
-	prompt := g.buildGroupPrompt(sessionKey, msg)
-
-	// Persist the (original) user message. CronFire is persisted so the
-	// desktop GUI's cron badge survives a chat-window reload — without it,
-	// reopening a conversation would replay every prior scheduler-fired
-	// prompt as if it had been typed by a human.
-	if err := g.store.AppendUser(sessionKey, msg.Text, msg.FromName, msg.CronFire); err != nil {
-		return g.failTurn(sessionKey, "store.AppendUser", err)
-	}
-	g.notifySessionTouch(sessionKey, msg.ChannelID, msg.ChannelType)
-
-	// Resume the agent's prior session if we have one. A real read error (not
-	// "no row") degrades the turn to a fresh session — acceptable, but log it so
-	// silent loss of conversation continuity is diagnosable.
-	resumeID, err := g.store.Resume(sessionKey, g.driver.Name())
+	req, err := g.prepareAgentRequest(ctx, sessionKey, msg)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "[gateway] resume %s: %v\n", sessionKey, err)
-	}
-
-	// Resolve the per-session sandbox (cwd + memory + skills) when enabled.
-	cwd, memDir, err := g.resolveSandbox(sessionKey, msg)
-	if err != nil {
-		// Building the sandbox failed — running in the process cwd would leak
-		// across sessions, which is exactly what this guards against. Fail loud
-		// AND signal the user (don't leave them hanging on a silent failure).
-		return g.failTurn(sessionKey, "resolve sandbox cwd", err)
-	}
-
-	rosterPrefix := g.rosterPrefix(msg)
-
-	// Materialize inbound media/file attachments now that the session cwd is
-	// known but before driver.Query (inbound.ts G1/G2 + media-inbound.ts #86):
-	// images download into <cwd>/.octobuddy-media for the Read tool; small text files
-	// inline as a base64 <file_content> block. The returned hint/blocks go into
-	// THIS turn's prompt ONLY — never the stored history (already persisted as the
-	// original text above), so it can't accumulate stale paths or inlined bodies.
-	//
-	// Safety: this block sits after the current-message anchor but is NOT raw user
-	// text — it is gateway-authored hint strings with only (a) filenames already
-	// run through safety.SanitizeDisplayName (no brackets/newlines) and (b) file
-	// bodies base64-wrapped (the base64 alphabet can't forge the </file_content>
-	// tag or a section marker). So it cannot inject prompt structure even though
-	// it is not re-escaped here.
-	if media := g.materializeAttachments(ctx, cwd, msg.Attachments); media != "" {
-		prompt += media
+		return err
 	}
 
 	// Bound driver.Query + the stream loop with a per-turn IDLE timeout (#141).
@@ -601,22 +559,15 @@ func (g *Gateway) runTurn(ctx context.Context, sessionKey string, msg router.Inb
 	turnCtx, idle := newIdleGuard(ctx, g.dispatchTimeout)
 	defer idle.stop()
 
-	sysAppend := g.buildSystemPrompt(msg, rosterPrefix)
 	var reply strings.Builder
 	var newResume string
 	var termErr string
 	var termTransient bool
 	var termHint string
-	resume := resumeID
+	resume := req.SessionID
 	for attempt := 0; ; attempt++ {
-		events, err := g.driver.Query(turnCtx, agent.Request{
-			Prompt:       prompt,
-			SessionID:    resume,
-			Cwd:          cwd,
-			MemoryDir:    memDir,
-			Model:        g.model,
-			SystemAppend: sysAppend,
-		})
+		req.SessionID = resume
+		events, err := g.driver.Query(turnCtx, req)
 		if err != nil {
 			// Spawning/dispatching the agent failed (incl. the fresh retry after a
 			// stale resume). Signal the user instead of returning silently — a bare
@@ -754,6 +705,34 @@ func (g *Gateway) runTurn(ctx context.Context, sessionKey string, msg router.Inb
 	g.completeSuccessfulTurn(sessionKey, msg, newResume, text)
 	turnDelivered = true
 	return nil
+}
+
+func (g *Gateway) prepareAgentRequest(ctx context.Context, sessionKey string, msg router.InboundMessage) (agent.Request, error) {
+	prompt := g.buildGroupPrompt(sessionKey, msg)
+	if err := g.store.AppendUser(sessionKey, msg.Text, msg.FromName, msg.CronFire); err != nil {
+		return agent.Request{}, g.failTurn(sessionKey, "store.AppendUser", err)
+	}
+	g.notifySessionTouch(sessionKey, msg.ChannelID, msg.ChannelType)
+
+	resumeID, err := g.store.Resume(sessionKey, g.driver.Name())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[gateway] resume %s: %v\n", sessionKey, err)
+	}
+	cwd, memDir, err := g.resolveSandbox(sessionKey, msg)
+	if err != nil {
+		return agent.Request{}, g.failTurn(sessionKey, "resolve sandbox cwd", err)
+	}
+	if media := g.materializeAttachments(ctx, cwd, msg.Attachments); media != "" {
+		prompt += media
+	}
+	return agent.Request{
+		Prompt:       prompt,
+		SessionID:    resumeID,
+		Cwd:          cwd,
+		MemoryDir:    memDir,
+		Model:        g.model,
+		SystemAppend: g.buildSystemPrompt(msg, g.rosterPrefix(msg)),
+	}, nil
 }
 
 func (g *Gateway) handleDispatchTimeout(ctx context.Context, idle *idleGuard, sessionKey string, delivered *bool) bool {
