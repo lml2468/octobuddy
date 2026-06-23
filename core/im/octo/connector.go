@@ -11,7 +11,6 @@ import (
 	"github.com/lml2468/octobuddy/core/gateway"
 	"github.com/lml2468/octobuddy/core/groupctx"
 	"github.com/lml2468/octobuddy/core/persona"
-	"github.com/lml2468/octobuddy/core/router"
 )
 
 // Connector wires the Octo IM platform to the gateway: it registers the bot,
@@ -153,32 +152,6 @@ func (c *Connector) OnOwner(fn func(ownerUID string)) {
 	c.onOwner = fn
 }
 
-// EnqueueCron enqueues a cron-fired turn onto the per-session worker so it
-// serializes with real inbound on the same key. The
-// target — including any persona on-behalf-of binding — travels with the
-// queued turn so OnReply reads exactly the target the cron fire intended,
-// even if a real inbound enqueued in between and tried to write its own
-// target into the global map.
-//
-// Returns immediately. The actual gw.Handle call happens on the worker
-// goroutine that drainTurns owns; the bot's shutdown chain
-// (connector.WaitTurns + cm.Wait) ensures the in-flight turn finishes
-// before the store closes.
-//
-// Persona-grantor stamp: when persona is configured, the cron reply
-// speaks `on_behalf_of` the configured grantor — same identity as live
-// replies. The trust boundary is cron.SetOwnerUID's foreign-CreatedBy
-// prune: any task that survives that fence is
-// operator-authored on this bot, and the operator-configured persona is
-// allowed to speak for it. The persona is the cron's identity by design.
-func (c *Connector) EnqueueCron(sessionKey, channelID string, channelType ChannelType, inbound router.InboundMessage) {
-	tgt := replyTarget{channelID: channelID, channelType: channelType}
-	if c.persona.UID != "" {
-		tgt.onBehalfOf = c.persona.UID
-	}
-	c.enqueueTurn(sessionKey, inbound, tgt)
-}
-
 func (c *Connector) setStatus(connected bool, lastErr string) {
 	c.mu.Lock()
 	fn := c.onStatus
@@ -226,28 +199,6 @@ func NewConnector(rest *RESTClient) *Connector {
 		reconnectMax:  60 * time.Second,
 		receiptCh:     make(chan readReceiptReq, 64),
 	}
-}
-
-// turnQueue is the per-session-key serial dispatch state (guarded by Connector.mu).
-// pending holds turns awaiting execution in arrival order; running marks whether
-// a worker goroutine is draining them. See enqueueTurn/drainTurns.
-//
-// Each pending entry carries its OWN reply target: the
-// prior contract stored a SINGLE target per session key in c.targets, which
-// onInbound and RegisterReplyTarget both wrote. Real inbound + a concurrent
-// cron fire on the same session key would stomp the map and produce a
-// mis-delivered reply + a silently-dropped one. With the target traveling
-// with the queued turn, drainTurns is the only writer to c.targets, the
-// write happens immediately before gw.Handle, and the per-turn OnReply
-// reads exactly the target the producer attached.
-type queuedTurn struct {
-	inbound router.InboundMessage
-	tgt     replyTarget
-}
-
-type turnQueue struct {
-	pending []queuedTurn
-	running bool
 }
 
 // SetToolProgress enables/disables mirroring tool invocations to the channel as
@@ -533,105 +484,6 @@ func (c *Connector) heartbeatLoop(ctx context.Context) {
 			return
 		case <-t.C:
 			_ = c.rest.Heartbeat(ctx)
-		}
-	}
-}
-
-// enqueueTurn appends a turn to the per-session-key serial queue, starting a
-// worker goroutine for the key if none is running. Same-key turns run FIFO; the
-// worker exits when its queue drains, so idle keys hold no goroutine.
-func (c *Connector) enqueueTurn(key string, inbound router.InboundMessage, tgt replyTarget) {
-	c.mu.Lock()
-	if c.closed {
-		c.mu.Unlock()
-		return
-	}
-	q := c.turnQueues[key]
-	if q == nil {
-		q = &turnQueue{}
-		c.turnQueues[key] = q
-	}
-	q.pending = append(q.pending, queuedTurn{inbound: inbound, tgt: tgt})
-	start := !q.running
-	q.running = true
-	// turnsWG.Add(1) MUST happen under c.mu so it cannot race WaitTurns:
-	// WaitTurns sets c.closed=true under the same mu before calling
-	// turnsWG.Wait(). With Add() outside the lock, a goroutine that passed
-	// the closed check and was preempted could call Add(1) after WaitTurns
-	// observed counter==0 and returned — that's sync.WaitGroup misuse
-	// (Add concurrently with Wait) and the spawned drainTurns would run
-	// gw.Handle on a closed store.
-	if start {
-		c.turnsWG.Add(1)
-	}
-	c.mu.Unlock()
-
-	if start {
-		go c.drainTurns(key)
-	}
-}
-
-// drainTurns runs queued turns for one session key in order, then retires the
-// queue. New arrivals during a turn are picked up before the worker exits, so a
-// burst is handled by a single worker with no lost messages.
-// WaitTurns blocks until every drainTurns goroutine spawned by this
-// connector has finished its queue. Call this on graceful shutdown AFTER
-// the Run-ctx is cancelled (which closes the WS read loop and stops new
-// turns from being enqueued) and BEFORE closing the store / gateway / driver.
-//
-// Idempotent: a connector that has never enqueued a turn returns immediately.
-//
-// Sets the `closed` flag first so any late enqueueTurn call (a cron tick
-// that landed between Run returning and the bot's cm.Stop firing) is
-// refused at the door rather than spawning a fresh drainTurns into a
-// freshly-closed store. The flag was declared + checked in but
-// never actually set (`grep 'c\.closed =' returned nothing` per the
-// Go audit) — wiring it here closes the last shutdown gap.
-func (c *Connector) WaitTurns() {
-	c.mu.Lock()
-	c.closed = true
-	c.mu.Unlock()
-	c.turnsWG.Wait()
-}
-
-func (c *Connector) drainTurns(key string) {
-	defer c.turnsWG.Done()
-	for {
-		c.mu.Lock()
-		q := c.turnQueues[key]
-		if q == nil || len(q.pending) == 0 {
-			if q != nil {
-				delete(c.turnQueues, key)
-			}
-			c.mu.Unlock()
-			return
-		}
-		item := q.pending[0]
-		q.pending = q.pending[1:]
-		// Set the per-turn target IMMEDIATELY before releasing the lock and
-		// running gw.Handle, so OnReply (which reads via c.target(key))
-		// observes exactly the target the producer attached. drainTurns is
-		// the sole writer to c.targets, so cron+inbound concurrent enqueues
-		// no longer race.
-		c.targets[key] = item.tgt
-		c.mu.Unlock()
-
-		// Tests may enqueue without setting a gateway; skip dispatch in
-		// that case so the queue still drains cleanly.
-		if c.gateway == nil {
-			continue
-		}
-		dec, err := c.gateway.Handle(c.ctx(), item.inbound)
-		if err != nil {
-			c.logf("handle turn for %s: %v", key, err)
-		}
-		// A mention-free unmentioned message the router declined to run (bot-loop
-		// guard, or it turned out not to be mention-free after all) is still group
-		// chatter the agent should see later — observe it as background. runTurn
-		// already cached it on the Accepted path, so only observe on these drops.
-		if item.inbound.ChannelType == router.ChannelGroup && !item.inbound.Mentioned &&
-			(dec == router.DroppedBot || dec == router.DroppedNotMentioned) {
-			c.gateway.Observe(item.inbound)
 		}
 	}
 }
