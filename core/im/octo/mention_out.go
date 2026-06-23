@@ -170,12 +170,19 @@ func isMentionLeadBoundaryOK(prev rune, atStart bool) bool {
 	if atStart {
 		return true
 	}
-	if prev == ' ' || prev == '\t' || prev == '\n' || prev == '\r' || prev == '\f' || prev == '\v' {
+	// Non-alphanumeric (ASCII a-zA-Z0-9 are the only blacklisted lead chars).
+	if isASCIISpace(prev) {
 		return true
 	}
-	// Non-alphanumeric (ASCII a-zA-Z0-9 are the only blacklisted lead chars).
-	isAlnum := (prev >= 'a' && prev <= 'z') || (prev >= 'A' && prev <= 'Z') || (prev >= '0' && prev <= '9')
-	return !isAlnum
+	return !isASCIIAlnum(prev)
+}
+
+func isASCIISpace(r rune) bool {
+	return r == ' ' || r == '\t' || r == '\n' || r == '\r' || r == '\f' || r == '\v'
+}
+
+func isASCIIAlnum(r rune) bool {
+	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')
 }
 
 // tryLongestMemberMatch tries the longest displayName in sortedNames that the
@@ -310,29 +317,43 @@ var mentionAllRE = regexp.MustCompile(`(?i)^(all|所有人)`)
 func detectMentionAll(content string) bool {
 	runes := []rune(content)
 	for i := 0; i < len(runes); i++ {
-		if runes[i] != '@' {
-			continue
-		}
-		// Lead boundary: start, or preceded by whitespace.
-		if i > 0 {
-			p := runes[i-1]
-			if !(p == ' ' || p == '\t' || p == '\n' || p == '\r' || p == '\f' || p == '\v') {
-				continue
-			}
-		}
-		after := string(runes[i+1:])
-		loc := mentionAllRE.FindStringSubmatchIndex(after)
-		if loc == nil {
-			continue
-		}
-		// token = all|所有人; trailing char check.
-		tokenRunes := len([]rune(after[loc[2]:loc[3]]))
-		rest := runes[i+1+tokenRunes:]
-		if len(rest) == 0 || !nameCharRE.MatchString(string(rest[0])) {
+		if isMentionAllAt(runes, i) {
 			return true
 		}
 	}
 	return false
+}
+
+func isMentionAllAt(runes []rune, i int) bool {
+	if runes[i] != '@' {
+		return false
+	}
+	if !hasMentionAllLeadBoundary(runes, i) {
+		return false
+	}
+	after := string(runes[i+1:])
+	loc := mentionAllRE.FindStringSubmatchIndex(after)
+	if loc == nil {
+		return false
+	}
+	// token = all|所有人; trailing char check.
+	tokenRunes := len([]rune(after[loc[2]:loc[3]]))
+	rest := runes[i+1+tokenRunes:]
+	return hasMentionAllTrailBoundary(rest)
+}
+
+func hasMentionAllLeadBoundary(runes []rune, i int) bool {
+	if i == 0 {
+		return true
+	}
+	return isASCIISpace(runes[i-1])
+}
+
+func hasMentionAllTrailBoundary(rest []rune) bool {
+	if len(rest) == 0 {
+		return true
+	}
+	return !nameCharRE.MatchString(string(rest[0]))
 }
 
 // resolveMentions runs the structured and plain pipelines, deduplicates entities
