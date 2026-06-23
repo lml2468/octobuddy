@@ -22,10 +22,7 @@ func TestLoadGroupFile(t *testing.T) {
 	writeFile(t, dir, "g123.md", "  Be concise in this group.\n")
 
 	l := New(dir)
-	got, ok := l.Load("g123")
-	if !ok {
-		t.Fatal("expected group instructions, got none")
-	}
+	got := loadRequired(t, l, "g123", "expected group instructions, got none")
 	if got != "Be concise in this group." {
 		t.Fatalf("content = %q, want trimmed body", got)
 	}
@@ -85,10 +82,7 @@ func TestThreadPrefersThreadFile(t *testing.T) {
 	writeFile(t, dir, "g1____t9.md", "thread level")
 
 	l := New(dir)
-	got, ok := l.Load("g1____t9")
-	if !ok {
-		t.Fatal("expected thread instructions")
-	}
+	got := loadRequired(t, l, "g1____t9", "expected thread instructions")
 	if got != "thread level" {
 		t.Fatalf("thread should prefer its own file, got %q", got)
 	}
@@ -100,13 +94,19 @@ func TestThreadFallsBackToParent(t *testing.T) {
 	// No g1____t9.md present.
 
 	l := New(dir)
-	got, ok := l.Load("g1____t9")
-	if !ok {
-		t.Fatal("expected fallback to parent group file")
-	}
+	got := loadRequired(t, l, "g1____t9", "expected fallback to parent group file")
 	if got != "group level" {
 		t.Fatalf("thread should fall back to parent, got %q", got)
 	}
+}
+
+func loadRequired(t *testing.T, l *Loader, channelID, missingMsg string) string {
+	t.Helper()
+	got, ok := l.Load(channelID)
+	if !ok {
+		t.Fatal(missingMsg)
+	}
+	return got
 }
 
 func TestThreadNoFilesNothing(t *testing.T) {
