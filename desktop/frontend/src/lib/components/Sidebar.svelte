@@ -107,10 +107,14 @@
       <div class="empty">还没有会话 — 打个招呼吧</div>
     {:else}
       {#each store.botSessions as s (s.key)}
+        {@const name = s.channelName || s.title}
         <button class="tab" class:sel={s.key === store.selectedKey} onclick={() => store.selectSession(s.key)}>
-          <Avatar name={s.title} size={22} />
+          <Avatar name={name} size={22} />
           <span class="b">
-            <span class="r1"><span class="name">{s.title}</span><span class="time">{relTime(s.lastActivity)}</span></span>
+            <span class="r1">
+              <span class="name">{name}</span>
+              <span class="time">{relTime(s.lastActivity)}</span>
+            </span>
             <span class="sub" class:replying={s.awaiting}>{preview(s)}</span>
           </span>
         </button>

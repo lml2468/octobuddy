@@ -166,7 +166,12 @@
           <button class="icon sb-toggle" class:collapsed style="--wails-draggable: no-drag;" title={collapsed ? "展开侧栏" : "收起侧栏"} aria-label={collapsed ? "展开侧栏" : "收起侧栏"} aria-expanded={!collapsed} onclick={() => (collapsed = !collapsed)}>
             <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m14 6-6 6 6 6"/></svg>
           </button>
-          <span class="title">{store.currentSession?.title ?? "XClaw"}</span>
+          <span class="title">{(() => {
+            const s = store.currentSession;
+            const own = s?.channelName || s?.title;
+            if (!own) return "XClaw";
+            return s?.parentChannelName ? `${s.parentChannelName} > ${own}` : own;
+          })()}</span>
           {#if store.currentSession && !store.isConsole}
             <span class="ro-badge" title="此会话来自 Octo IM，桌面仅供查看；用户消息从 IM 客户端发送">来自 IM · 只读</span>
           {/if}

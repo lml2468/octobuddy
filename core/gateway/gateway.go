@@ -117,6 +117,15 @@ type Gateway struct {
 	// Effective settings surfaced by /config (no secrets). Set via WithCommandInfo.
 	maxPerMinute int
 	contextChars int
+
+	// sessionTouch, when set, is invoked after every successful AppendUser /
+	// AppendAssistant — i.e. anything that changes a session row's preview /
+	// updatedAt / first-existence. The GUI side subscribes here to broadcast
+	// a `session.upserted` event so the sidebar reflects new/touched rows
+	// without polling. Set via WithSessionTouchNotifier; nil = no-op. The
+	// callback receives only the minimal coordinates (key, channel id,
+	// channel type) — the subscriber builds whatever projection it needs.
+	sessionTouch func(sessionKey, channelID string, channelType router.ChannelType)
 }
 
 // defaultDispatchTimeout bounds a single turn as an idle deadline (#141 — config.ts
@@ -175,6 +184,29 @@ func (g *Gateway) WithGroupBackfill(botUID func() string, fetch func(channelID s
 	g.botUID = botUID
 	g.groupBackfill = fetch
 	return g
+}
+
+// WithSessionTouchNotifier registers a callback invoked after every successful
+// AppendUser / AppendAssistant — the two store writes that mutate a session
+// row's projectable state (preview, updatedAt, first-existence). The GUI side
+// subscribes here to push a `session.upserted` event, so the sidebar reflects
+// brand-new sessions (e.g. a freshly-created thread) immediately without
+// waiting for the next sessions.list pull.
+//
+// The callback receives only coordinates (sessionKey, channelID, channelType)
+// — the subscriber owns the projection (preview from store, channelName from
+// the IM cache, isThread from the key format).
+func (g *Gateway) WithSessionTouchNotifier(fn func(sessionKey, channelID string, channelType router.ChannelType)) *Gateway {
+	g.sessionTouch = fn
+	return g
+}
+
+// notifySessionTouch fires the session-touch notifier, swallowing the nil-fn
+// case. Called after every successful AppendUser / AppendAssistant.
+func (g *Gateway) notifySessionTouch(sessionKey, channelID string, channelType router.ChannelType) {
+	if g.sessionTouch != nil {
+		g.sessionTouch(sessionKey, channelID, channelType)
+	}
 }
 
 // WithSystemPrompt sets the operator-trusted system prompt (SOUL.md + AGENTS.md).
@@ -541,6 +573,7 @@ func (g *Gateway) runTurn(ctx context.Context, sessionKey string, msg router.Inb
 	if err := g.store.AppendUser(sessionKey, msg.Text, msg.FromName, msg.CronFire); err != nil {
 		return g.failTurn(sessionKey, "store.AppendUser", err)
 	}
+	g.notifySessionTouch(sessionKey, msg.ChannelID, msg.ChannelType)
 
 	// Resume the agent's prior session if we have one. A real read error (not
 	// "no row") degrades the turn to a fresh session — acceptable, but log it so
@@ -788,6 +821,7 @@ func (g *Gateway) runTurn(ctx context.Context, sessionKey string, msg router.Inb
 	if err := g.store.AppendAssistant(sessionKey, text, g.driver.Name()); err != nil {
 		fmt.Fprintf(os.Stderr, "[gateway] append assistant %s: %v\n", sessionKey, err)
 	}
+	g.notifySessionTouch(sessionKey, msg.ChannelID, msg.ChannelType)
 	turnDelivered = true
 	g.sink.OnReply(sessionKey, text)
 

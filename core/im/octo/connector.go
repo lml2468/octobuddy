@@ -29,6 +29,11 @@ type Connector struct {
 
 	botUID string
 
+	// names resolves uid→display-name (seeded for free from inbound BotMessage)
+	// and groupNo→channel-name (one REST call per group, cached). Powers the
+	// sidebar conversation titles and chat-bubble sender labels.
+	names *nameCache
+
 	// persona, when its grantor uid is set, makes this connector a persona clone
 	// (openclaw OBO): extended trigger gate, OBO v2 relevance filter, and
 	// on_behalf_of reply routing. Set once at startup via SetPersona; read-only
@@ -217,6 +222,7 @@ func (c *Connector) SetPersona(grantor persona.Grantor) { c.persona = grantor }
 func NewConnector(rest *RESTClient) *Connector {
 	return &Connector{
 		rest:          rest,
+		names:         newNameCache(rest),
 		targets:       make(map[string]replyTarget),
 		progress:      make(map[string]*toolProgressState),
 		typers:        make(map[string]*typingTicker),
@@ -285,6 +291,40 @@ func (c *Connector) MediaAuth() gateway.MediaAuth {
 // gateway.WithGroupBackfill so cold-start backfill can filter the bot's own
 // messages once the uid is known.
 func (c *Connector) BotUID() string { return c.uid() }
+
+// UserName returns the cached display name for uid, or "" if unknown. A miss
+// kicks a background REST fetch so the next call can see a resolved value.
+// The sender-name cache is also free-seeded from every inbound BotMessage,
+// so most uids never trigger a network call.
+func (c *Connector) UserName(uid string) string { return c.names.ResolveUser(uid) }
+
+// ChannelName returns the cached display name for a channel id, or "" if
+// unknown. For a bare group id it's the group's name; for a thread compound
+// "<g>____<s>" it's the THREAD's own name (the parent group's name is a
+// separate ChannelName call on the parent id). Composing the two for a
+// breadcrumb / fallback label is the caller's job — projection layers do
+// the composing to keep this cache shape simple and surface-agnostic.
+// A miss kicks a background REST fetch.
+func (c *Connector) ChannelName(channelID string) string {
+	return c.names.ResolveChannel(channelID)
+}
+
+// PrewarmChannelNames synchronously fetches names for any of the given channel
+// ids that aren't already cached, capped by timeout. Sessions.list calls this
+// before building summaries so the first sidebar paint shows group names
+// instead of bare ids.
+func (c *Connector) PrewarmChannelNames(channelIDs []string, timeout time.Duration) {
+	c.names.PrewarmChannels(channelIDs, timeout)
+}
+
+// PrewarmUserNames is the DM-peer counterpart of PrewarmChannelNames. DM rows
+// usually get their name free-fed from inbound BotMessage.FromName, but a
+// session with no inbound this restart (or one whose peer has only ever
+// been spoken to, never spoken back) needs an explicit lookup or the sidebar
+// row would stick at the bare peer uid.
+func (c *Connector) PrewarmUserNames(uids []string, timeout time.Duration) {
+	c.names.PrewarmUsers(uids, timeout)
+}
 
 // BackfillFetch pulls recent history for cold-start backfill (cc G4), adapting
 // octo.HistoricalMessage to the IM-agnostic groupctx.BackfillMessage. limit<=0
@@ -510,9 +550,29 @@ func (c *Connector) onInbound(m BotMessage) {
 	// Suppress streaming partial updates (inbound.ts settingStreamOn / G21): a
 	// streamOn message is an in-progress edit; only the final (streamOn=false)
 	// message carries the settled content. Routing partials would feed the agent
-	// half-typed text and re-fire turns on every keystroke.
+	// half-typed text and re-fire turns on every keystroke. Filtered FIRST so
+	// the per-message name-cache work below doesn't run on every keystroke.
 	if m.StreamOn {
 		return
+	}
+	// WuKongIM RECV packets carry only fromUid, not a display name. Kick a
+	// background fetch via the cache (non-blocking — ResolveUser returns ""
+	// on miss and the next message from the same uid sees it cached) and
+	// fall back to the cached value if it happens to be there already. The
+	// receive goroutine MUST NOT block on REST: a slow / unreachable name
+	// service would stall ALL inbound for this bot. First sight of an
+	// unseen sender lands in the chat with senderName empty (the GUI falls
+	// back to senderUid for the bubble label) — subsequent messages from
+	// the same uid carry the resolved name, and the persisted history row
+	// gets backfilled on the next history fetch via the warmed cache.
+	if m.FromName == "" && m.FromUID != "" {
+		m.FromName = c.names.ResolveUser(m.FromUID)
+	}
+	// Free-feed the name cache (no-op if FromName is empty). Also kick the
+	// channel-name fetch for groups so the sidebar can show it next render.
+	c.names.LearnUser(m.FromUID, m.FromName)
+	if m.ChannelType == ChannelGroup || m.ChannelType == ChannelCommunityTopic {
+		c.names.ResolveChannel(m.ChannelID)
 	}
 
 	// Render the payload to LLM-facing text. ResolveContent covers every type

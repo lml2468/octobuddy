@@ -8,6 +8,17 @@
   const isUser = $derived(message.role === "user");
   const isTool = $derived(message.role === "tool");
   const html = $derived(!isUser && !isTool ? renderMarkdown(message.text) : "");
+ // senderLabel resolves the human author of a user-role bubble. Fallback
+ // chain: name (resolved via the daemon's nameCache for IM senders) → uid
+ // (when name is unknown) → "You" (Console messages have neither). Group
+ // chats route N humans through one session — the name is what tells them
+ // apart in the transcript.
+  const senderLabel = $derived(message.senderName || message.senderUid || "You");
+ // Show the sender name as a small label above the bubble ONLY when it
+ // came from IM (senderName/senderUid present). Console-typed user
+ // messages have neither and stay unlabeled — the operator knows they
+ // typed it.
+  const showSenderLabel = $derived(isUser && (message.senderName || message.senderUid));
 
   let copied = $state(false);
   let copyTimer: ReturnType<typeof setTimeout> | undefined;
@@ -32,11 +43,15 @@
 {:else}
   <div class="row" class:user={isUser}>
     <span class="av">
-      {#if isUser}<Avatar name="You" size={36} />{:else}<Avatar octopus size={36} />{/if}
+      {#if isUser}<Avatar name={senderLabel} size={36} />{:else}<Avatar octopus size={36} />{/if}
     </span>
-    <div
-      class="bubble"
-      class:user={isUser}
+    <div class="bubble-col">
+      {#if showSenderLabel}
+        <div class="sender" title={message.senderUid || ""}>{senderLabel}</div>
+      {/if}
+      <div
+        class="bubble"
+        class:user={isUser}
       oncontextmenu={(e) => {
  // Hijack right-click ONLY when the user clicked outside any
  // interactive child (link, image, code block, table, form
@@ -92,6 +107,7 @@
       {:else}
         <div class="md" onclick={onMarkdownCopyClick} role="presentation">{@html html}</div>
       {/if}
+      </div>
     </div>
   </div>
 {/if}
@@ -103,6 +119,23 @@
   @media (prefers-reduced-motion: reduce) { .row { animation: none; } }
 
   .av { flex: 0 0 auto; margin-top: 1px; }
+
+ /* bubble-col stacks the sender-name label (when shown) above the bubble.
+    On user (row-reverse) rows the label aligns to the right edge so it
+    sits over the bubble's leading corner. min-width: 0 lets the inner
+    bubble's max-width work without the column hijacking the row width. */
+  .bubble-col { display: flex; flex-direction: column; gap: 3px; min-width: 0; max-width: 100%; align-items: flex-start; }
+  .row.user .bubble-col { align-items: flex-end; }
+  .sender {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--ink-soft);
+    padding: 0 4px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 240px;
+  }
 
   .bubble {
     position: relative;

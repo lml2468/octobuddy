@@ -368,6 +368,14 @@ type HistoryMessage struct {
 	// through persistence so a chat-window reload doesn't lose the marker
 	// on prior fires.
 	Cron bool `json:"cron,omitempty"`
+	// FromName is the IM platform's display name of the human author of a
+	// user-role row, persisted at append time. Carried so a chat-window
+	// reload of a multi-author group session can still attribute bubbles
+	// to the right speaker (without it, every history bubble would fall
+	// back to "You" and the conversation would read like a monologue).
+	// Empty for assistant rows and for legacy rows persisted before this
+	// field was added.
+	FromName string `json:"fromName,omitempty"`
 }
 
 // HistoryResponse is the session.history response. It echoes the requested botId
@@ -396,4 +404,29 @@ type SessionSummary struct {
 	UpdatedAt   int64  `json:"updatedAt"` // Unix seconds
 	Preview     string `json:"preview"`
 	LastRole    string `json:"lastRole"`
+	// ChannelName is the IM platform's display name for THIS session's channel:
+	// the DM peer's name for a DM, the thread's name for a thread, the group's
+	// name for a bare group. The two halves of a thread session ship separately
+	// (ParentChannelName carries the parent group) so each GUI surface can
+	// compose its own label — sidebar shows the short ChannelName; the chat
+	// header reads "<ParentChannelName> > <ChannelName>" for breadcrumb.
+	// Empty when the name isn't yet cached; the GUI falls back to the
+	// prettified key.
+	ChannelName string `json:"channelName,omitempty"`
+	// ParentChannelName is the parent group's name for a thread session,
+	// empty otherwise. Used by the chat header to render the breadcrumb
+	// "<group> > <thread>"; the sidebar ignores it.
+	ParentChannelName string `json:"parentChannelName,omitempty"`
+}
+
+// SessionUpsertedBody is broadcast as the "session.upserted" event whenever a
+// session row's projectable state changes — a new session is persisted, an
+// existing one's preview / updatedAt advances after a turn, or its
+// channelName resolves for the first time. The GUI upserts the Session row
+// into its sidebar without having to re-issue sessions.list. This is the
+// push counterpart to the sessions.list pull: list bootstraps, upserted
+// keeps the GUI in sync.
+type SessionUpsertedBody struct {
+	BotID   string         `json:"botId,omitempty"`
+	Session SessionSummary `json:"session"`
 }

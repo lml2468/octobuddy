@@ -55,6 +55,11 @@ type botRuntime struct {
 	store   *store.Store
 	secrets *secretStore  // in-memory tokens (seeded from cfg, updated by secret.inject)
 	cron    *cron.Manager // nil when agent.cron is disabled
+	// connector is the IM-edge for this bot. The control plane reaches into it
+	// for name resolution (sidebar channel titles, bubble sender labels — see
+	// summariesFromSessions in control.go); the gateway holds its own ref via
+	// Sink/MediaAuth/BackfillFetch wiring.
+	connector *octo.Connector
 
 	// target is the per-bot control-handler target, owned for the runtime's
 	// lifetime so the embedded turnsWG is shared across all session.send
@@ -319,6 +324,9 @@ func runBot(ctx context.Context, cfg config.Resolved, reg *botRegistry, srv *con
 		WithSandbox(cfg.CwdBase, cfg.MemoryBase).
 		WithDispatchTimeout(time.Duration(cfg.Agent.DispatchTimeoutSec) * time.Second).
 		WithMediaAuth(connector.MediaAuth())
+	if srv != nil {
+		gw = gw.WithSessionTouchNotifier(sessionTouchBroadcaster(srv, cfg.BotID, st, connector))
+	}
 	connector.SetGateway(gw)
 
 	// Eager-init the per-bot control-handler target so its embedded turnsWG is
@@ -328,7 +336,7 @@ func runBot(ctx context.Context, cfg config.Resolved, reg *botRegistry, srv *con
 	// go straight to gw.Handle, but the call must be wrapped in
 	// target.turnsWG.Add(1)/Done() so it joins the same shutdown barrier the
 	// per-bot session.send goroutines use.
-	target := &botTarget{id: cfg.BotID, gateway: gw, store: st, secrets: sec}
+	target := &botTarget{id: cfg.BotID, gateway: gw, store: st, secrets: sec, connector: connector}
 
 	// Cron scheduler (#115): when enabled, load <dataDir>/cron.json and fire due
 	// tasks through the gateway as synthetic CronFire messages. The owner uid that
@@ -360,7 +368,8 @@ func runBot(ctx context.Context, cfg config.Resolved, reg *botRegistry, srv *con
 	// resolve-side per-call write was racing concurrent reads.
 	rtBot := &botRuntime{
 		cfg: cfg, gateway: gw, store: st, secrets: sec, cron: cm,
-		target: target,
+		connector: connector,
+		target:    target,
 	}
 	// Single drain defer covers both happy path and panic. Earlier code
 	// expressed the same sequence THREE times (defer for connector/target,

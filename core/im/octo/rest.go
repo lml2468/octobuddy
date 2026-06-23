@@ -291,6 +291,63 @@ func (c *RESTClient) SendReadReceipt(ctx context.Context, channelID string, chan
 	}, nil)
 }
 
+// nameResponse is the shared shape of GetUserInfo / GetGroupInfo replies —
+// both endpoints carry the display name under "name" (plus other ignored
+// fields). Declared once so a future schema tweak lands in one place.
+type nameResponse struct {
+	Name string `json:"name"`
+}
+
+// GetUserInfo resolves a user uid to its display name (api-fetch.ts
+// fetchUserInfo, GET /v1/bot/user/info?uid={uid}). Returns "" when the server
+// has no record of the uid (404) or any other transient failure — callers fall
+// back to the bare uid for display. A short ctx timeout (e.g. 5s) is the
+// caller's responsibility, matching the upstream TS client.
+func (c *RESTClient) GetUserInfo(ctx context.Context, uid string) string {
+	if uid == "" {
+		return ""
+	}
+	var raw nameResponse
+	if err := c.getJSON(ctx, "/v1/bot/user/info?uid="+url.QueryEscape(uid), &raw, true); err != nil {
+		fmt.Fprintf(os.Stderr, "[octo] getUserInfo(%q) error: %v\n", uid, err)
+		return ""
+	}
+	return raw.Name
+}
+
+// GetGroupInfo resolves a bare group_no to its display name (api-fetch.ts
+// getGroupInfo, GET /v1/bot/groups/{groupNo}). Same soft-degrade contract as
+// GetUserInfo. Pass a thread compound id through ExtractParentGroupNo before
+// calling — this endpoint speaks group_no, not the thread "<g>____<s>" form.
+func (c *RESTClient) GetGroupInfo(ctx context.Context, groupNo string) string {
+	if groupNo == "" {
+		return ""
+	}
+	var raw nameResponse
+	if err := c.getJSON(ctx, "/v1/bot/groups/"+url.PathEscape(groupNo), &raw, true); err != nil {
+		fmt.Fprintf(os.Stderr, "[octo] getGroupInfo(%q) error: %v\n", groupNo, err)
+		return ""
+	}
+	return raw.Name
+}
+
+// GetThreadInfo resolves a thread (CommunityTopic / 子区) to its display name
+// (api-fetch.ts getThread, GET /v1/bot/groups/{groupNo}/threads/{shortId}).
+// Same soft-degrade contract as GetGroupInfo. The thread's parent group name
+// is a separate call (GetGroupInfo); compositing the two is the caller's job.
+func (c *RESTClient) GetThreadInfo(ctx context.Context, groupNo, shortID string) string {
+	if groupNo == "" || shortID == "" {
+		return ""
+	}
+	var raw nameResponse
+	path := "/v1/bot/groups/" + url.PathEscape(groupNo) + "/threads/" + url.PathEscape(shortID)
+	if err := c.getJSON(ctx, path, &raw, true); err != nil {
+		fmt.Fprintf(os.Stderr, "[octo] getThreadInfo(%q,%q) error: %v\n", groupNo, shortID, err)
+		return ""
+	}
+	return raw.Name
+}
+
 // HistoricalMessage is one row returned by /v1/bot/messages/sync (api.ts
 // HistoricalMessage). The server ships content/type/url/name inside a
 // base64-encoded JSON payload; GetChannelMessages decodes it and prefers a
@@ -426,6 +483,34 @@ func (c *RESTClient) postJSON(ctx context.Context, path string, body any, out an
 	// response, and truncate what we echo into an error so a large/sensitive
 	// error body doesn't flood logs (L26).
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, maxRESTResponseBytes))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("octo API %s failed (%d): %s", path, resp.StatusCode, truncateForError(data))
+	}
+	if out == nil || len(data) == 0 {
+		return nil
+	}
+	return json.Unmarshal(data, out)
+}
+
+// getJSON performs a GET with Bearer auth and decodes into out. notFoundOK
+// turns a 404 into a no-op success (out is left zero) instead of an error;
+// the name-lookup endpoints signal "unknown uid/group" with a 404 and the
+// caller wants a negative cache hit, not a logged failure.
+func (c *RESTClient) getJSON(ctx context.Context, path string, out any, notFoundOK bool) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.apiURL+path, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token())
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(io.LimitReader(resp.Body, maxRESTResponseBytes))
+	if notFoundOK && resp.StatusCode == http.StatusNotFound {
+		return nil
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("octo API %s failed (%d): %s", path, resp.StatusCode, truncateForError(data))
 	}

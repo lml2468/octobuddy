@@ -66,6 +66,7 @@ type (
 	SessionUsageBody       = wire.SessionUsageBody
 	SessionReplyBody       = wire.SessionReplyBody
 	SessionUserMessageBody = wire.SessionUserMessageBody
+	SessionUpsertedBody    = wire.SessionUpsertedBody
 	SessionActivityBody    = wire.SessionActivityBody
 	ErrorBody              = wire.ErrorBody
 	HistoryMessage         = wire.HistoryMessage

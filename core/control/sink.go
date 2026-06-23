@@ -5,6 +5,7 @@ import (
 
 	"github.com/lml2468/xclaw/core/agent"
 	"github.com/lml2468/xclaw/core/router"
+	"github.com/lml2468/xclaw/core/safety"
 )
 
 // EventSink adapts the control Server to gateway.Sink: it projects normalized
@@ -75,8 +76,12 @@ func (s *EventSink) OnUserMessage(sessionKey string, msg router.InboundMessage) 
 		ChannelType: int(msg.ChannelType),
 		Text:        msg.Text,
 		FromUID:     msg.FromUID,
-		FromName:    msg.FromName,
-		Ts:          time.Now().Unix(),
-		CronFire:    msg.CronFire,
+		// Sanitize at the wire boundary — IM FromName arrives unsanitized
+		// and would otherwise let a BiDi-override / control-char display
+		// name distort the GUI sidebar and bubble label. "" fallback so
+		// the GUI can drop back to FromUID when nothing survives.
+		FromName: safety.SanitizeDisplayName(msg.FromName, ""),
+		Ts:       time.Now().Unix(),
+		CronFire: msg.CronFire,
 	})
 }
