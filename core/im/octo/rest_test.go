@@ -59,6 +59,12 @@ func TestSendTextRequestShape(t *testing.T) {
 	if res.MessageID != "123" || res.MessageSeq != 7 {
 		t.Fatalf("result mapped wrong: %+v", res)
 	}
+	assertSendTextBody(t, body)
+}
+
+func assertSendTextBody(t *testing.T, body map[string]any) {
+	t.Helper()
+
 	if body["channel_id"] != "chan1" {
 		t.Fatalf("channel_id = %v", body["channel_id"])
 	}
@@ -112,10 +118,19 @@ func TestGetChannelMessagesDecodesPayload(t *testing.T) {
 	if len(msgs) != 1 {
 		t.Fatalf("want 1 message, got %d", len(msgs))
 	}
-	m := msgs[0]
+	assertDecodedHistoricalMessage(t, msgs[0])
+	assertSyncRequestBody(t, gotPath, body)
+}
+
+func assertDecodedHistoricalMessage(t *testing.T, m HistoricalMessage) {
+	t.Helper()
 	if m.FromUID != "user1" || m.FromName != "Alice" || m.Content != "hello world" || m.MessageSeq != 5 || m.Type != 1 {
 		t.Fatalf("message mapped wrong: %+v", m)
 	}
+}
+
+func assertSyncRequestBody(t *testing.T, gotPath string, body map[string]any) {
+	t.Helper()
 	if gotPath != "/v1/bot/messages/sync" {
 		t.Fatalf("path = %q", gotPath)
 	}
