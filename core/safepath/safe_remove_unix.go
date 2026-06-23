@@ -59,12 +59,14 @@ func SafeRemoveAll(root, rel string) error {
 // unlinked (not followed), matching os.RemoveAll's policy.
 func removeAllAt(dirfd int, name string) error {
 	// Try unlink first — works for files and symlinks, fast path.
-	if err := unix.Unlinkat(dirfd, name, 0); err == nil {
+	err := unix.Unlinkat(dirfd, name, 0)
+	switch {
+	case err == nil:
 		return nil
-	} else if errors.Is(err, unix.ENOENT) {
+	case errors.Is(err, unix.ENOENT):
 		// Already gone — idempotent success.
 		return nil
-	} else if !errors.Is(err, unix.EISDIR) && !errors.Is(err, unix.EPERM) {
+	case isNotDirUnlinkError(err):
 		// Genuine error on a non-directory (EACCES on a read-only mount,
 		// EROFS, EIO, chattr +i, …) — surface it. Falling through to the
 		// dir-handling branch below misclassified these as ENOTDIR (the
@@ -76,15 +78,15 @@ func removeAllAt(dirfd int, name string) error {
 	// Open as dir with O_NOFOLLOW: a symlink entry can't slip into the
 	// recursive descent.
 	sub, err := unix.Openat(dirfd, name, noFollowDirFlags, 0)
-	if err != nil {
-		if isSymlinkErrno(err) {
-			// Shouldn't reach here normally — symlinks unlink via the first
-			// Unlinkat above. Defensive: still refuse to descend.
-			return pathErrSymlink(name)
-		}
-		if errors.Is(err, unix.ENOENT) {
-			return nil
-		}
+	switch {
+	case err == nil:
+	case isSymlinkErrno(err):
+		// Shouldn't reach here normally — symlinks unlink via the first
+		// Unlinkat above. Defensive: still refuse to descend.
+		return pathErrSymlink(name)
+	case errors.Is(err, unix.ENOENT):
+		return nil
+	default:
 		return err
 	}
 	dir := os.NewFile(uintptr(sub), name)
@@ -101,6 +103,10 @@ func removeAllAt(dirfd int, name string) error {
 	}
 	dir.Close()
 	return unix.Unlinkat(dirfd, name, unix.AT_REMOVEDIR)
+}
+
+func isNotDirUnlinkError(err error) bool {
+	return !errors.Is(err, unix.EISDIR) && !errors.Is(err, unix.EPERM)
 }
 
 // SafeLstat returns Lstat-equivalent info for <root>/<rel> after verifying
