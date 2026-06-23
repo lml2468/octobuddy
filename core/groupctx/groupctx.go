@@ -41,6 +41,11 @@ type message struct {
 	content  string // stored RAW; escaped by the gateway over the whole block
 }
 
+type selectedContextLine struct {
+	line     string
+	answered bool
+}
+
 // GroupContext is a concurrency-safe per-channel context store.
 type GroupContext struct {
 	maxContextChars int
@@ -214,6 +219,25 @@ func (g *GroupContext) BuildContextSince(channelID string, sinceID, cutoffSeq in
 	defer g.mu.Unlock()
 
 	win := g.windows[channelID]
+	delta := collectContextDelta(win, sinceID)
+	if len(delta) == 0 {
+		return "", sinceID
+	}
+	lastID = delta[0].id // highest id (delta is newest-first)
+
+	budget := contextLineBudget(g.maxContextChars)
+	if budget <= 0 {
+		return "", lastID
+	}
+
+	selected := selectContextLines(delta, budget, cutoffSeq)
+	if len(selected) == 0 {
+		return "", lastID
+	}
+	return renderContextLines(selected), lastID
+}
+
+func collectContextDelta(win []message, sinceID int64) []message {
 	// collect messages with id > sinceID, newest-first (cap maxWindowSize)
 	var delta []message
 	for i := len(win) - 1; i >= 0 && len(delta) < maxWindowSize; i-- {
@@ -221,24 +245,18 @@ func (g *GroupContext) BuildContextSince(channelID string, sinceID, cutoffSeq in
 			delta = append(delta, win[i])
 		}
 	}
-	if len(delta) == 0 {
-		return "", sinceID
-	}
-	lastID = delta[0].id // highest id (delta is newest-first)
+	return delta
+}
 
-	budget := g.maxContextChars - utf16Len(header) - utf16Len(trailer)
-	if budget <= 0 {
-		return "", lastID
-	}
+func contextLineBudget(maxContextChars int) int {
+	return maxContextChars - utf16Len(header) - utf16Len(trailer)
+}
 
+func selectContextLines(delta []message, budget int, cutoffSeq int64) []selectedContextLine {
 	// Greedy newest-first selection within the char budget (same as the source).
 	// Each kept message remembers whether it was already answered so it can be
 	// routed into the right segment after selection.
-	type sel struct {
-		line     string
-		answered bool
-	}
-	var selected []sel
+	var selected []selectedContextLine
 	used := 0
 	for _, m := range delta { // newest -> oldest
 		line := m.fromName + sep + m.content
@@ -250,17 +268,17 @@ func (g *GroupContext) BuildContextSince(channelID string, sinceID, cutoffSeq in
 			break
 		}
 		answered := cutoffSeq > 0 && m.seq > 0 && m.seq <= cutoffSeq
-		selected = append(selected, sel{line: line, answered: answered})
+		selected = append(selected, selectedContextLine{line: line, answered: answered})
 		used += cost
-	}
-	if len(selected) == 0 {
-		return "", lastID
 	}
 	// reverse to chronological
 	for i, j := 0, len(selected)-1; i < j; i, j = i+1, j-1 {
 		selected[i], selected[j] = selected[j], selected[i]
 	}
+	return selected
+}
 
+func renderContextLines(selected []selectedContextLine) string {
 	var answered, fresh []string
 	for _, s := range selected {
 		if s.answered {
@@ -273,7 +291,7 @@ func (g *GroupContext) BuildContextSince(channelID string, sinceID, cutoffSeq in
 	// No answered segment (cold start or all-new): keep the single legacy block so
 	// the pre-segmentation rendering is unchanged when there's nothing answered.
 	if len(answered) == 0 {
-		return header + strings.Join(fresh, "\n") + trailer, lastID
+		return header + strings.Join(fresh, "\n") + trailer
 	}
 
 	var b strings.Builder
@@ -286,7 +304,7 @@ func (g *GroupContext) BuildContextSince(channelID string, sinceID, cutoffSeq in
 		b.WriteString(strings.Join(fresh, "\n"))
 	}
 	b.WriteString(trailer)
-	return b.String(), lastID
+	return b.String()
 }
 
 // ResolveMentions maps @name tokens in text to uids for the channel.
