@@ -13,6 +13,23 @@ type typingTicker struct {
 	done   chan struct{}
 }
 
+type typingHeartbeatConfig struct {
+	interval time.Duration
+	send     func(context.Context, string, ChannelType) error
+}
+
+func (c *Connector) typingHeartbeatConfig() typingHeartbeatConfig {
+	interval := c.typingInterval
+	if interval <= 0 {
+		interval = defaultTypingInterval
+	}
+	send := c.sendTyping
+	if send == nil {
+		send = c.rest.SendTyping
+	}
+	return typingHeartbeatConfig{interval: interval, send: send}
+}
+
 // startTyping begins (or re-arms) the typing heartbeat for a session. It is
 // idempotent: a second KindSessionStarted for an already-typing session is a
 // no-op so we never spawn two tickers for one turn. It fires one typing ping
@@ -23,15 +40,7 @@ func (c *Connector) startTyping(sessionKey string) {
 	if !ok {
 		return
 	}
-
-	interval := c.typingInterval
-	if interval <= 0 {
-		interval = defaultTypingInterval
-	}
-	send := c.sendTyping
-	if send == nil {
-		send = c.rest.SendTyping
-	}
+	cfg := c.typingHeartbeatConfig()
 
 	// Tie the heartbeat to the run context so a cancelled Run stops every ticker.
 	ctx, cancel := context.WithCancel(c.ctx())
@@ -47,20 +56,20 @@ func (c *Connector) startTyping(sessionKey string) {
 	c.mu.Unlock()
 
 	// Fire one immediately — don't wait for the first tick (stream-relay.ts:173).
-	if err := send(ctx, tgt.channelID, tgt.channelType); err != nil && ctx.Err() == nil {
+	if err := cfg.send(ctx, tgt.channelID, tgt.channelType); err != nil && ctx.Err() == nil {
 		c.logf("send typing for %s: %v", sessionKey, err)
 	}
 
 	go func() {
 		defer close(tt.done)
-		t := time.NewTicker(interval)
+		t := time.NewTicker(cfg.interval)
 		defer t.Stop()
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-t.C:
-				if err := send(ctx, tgt.channelID, tgt.channelType); err != nil && ctx.Err() == nil {
+				if err := cfg.send(ctx, tgt.channelID, tgt.channelType); err != nil && ctx.Err() == nil {
 					c.logf("send typing for %s: %v", sessionKey, err)
 				}
 			}
