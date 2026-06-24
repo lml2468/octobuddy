@@ -12,11 +12,13 @@ import (
 	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
+	"github.com/wailsapp/wails/v3/pkg/events"
 
 	"github.com/lml2468/octobuddy/desktop/internal/autostart"
 	"github.com/lml2468/octobuddy/desktop/internal/control"
 	"github.com/lml2468/octobuddy/desktop/internal/logfile"
 	"github.com/lml2468/octobuddy/desktop/internal/octocli"
+	"github.com/lml2468/octobuddy/desktop/internal/windowstate"
 )
 
 //go:embed all:frontend/dist
@@ -126,6 +128,10 @@ func main() {
 }
 
 // openConsole shows the console window, recreating it if it was closed.
+// Restores the last saved position+size when window.json exists, so
+// reopening the console after a quit (or after closing+reopening the
+// console window itself) lands in the same place users last left it —
+// macOS HIG expectation, mild affordance on Win/Linux.
 func openConsole() {
 	if app == nil {
 		return
@@ -135,7 +141,7 @@ func openConsole() {
 		w.Focus()
 		return
 	}
-	w := app.Window.NewWithOptions(application.WebviewWindowOptions{
+	opts := application.WebviewWindowOptions{
 		Name:      consoleWindow,
 		Title:     "OctoBuddy",
 		Width:     1040,
@@ -153,6 +159,36 @@ func openConsole() {
 		BackgroundType:   application.BackgroundTypeTransparent,
 		BackgroundColour: application.NewRGBA(0, 0, 0, 0),
 		URL:              baseURL,
+	}
+	// Restore saved bounds when present + sane (positive size; Wails clamps
+	// to MinWidth/MinHeight so we don't need to). Position 0,0 is the
+	// natural default; a saved 0,0 simply re-opens at the top-left, which
+	// is fine and indistinguishable from a never-saved state.
+	saved, err := windowstate.Load()
+	if err != nil {
+		log.Printf("octobuddy: window state load failed (using defaults): %v", err)
+	}
+	if !saved.IsZero() {
+		if saved.Width > 0 {
+			opts.Width = saved.Width
+		}
+		if saved.Height > 0 {
+			opts.Height = saved.Height
+		}
+		opts.X = saved.X
+		opts.Y = saved.Y
+	}
+	w := app.Window.NewWithOptions(opts)
+	// Persist bounds on close. The window-closing event fires before the
+	// window is destroyed, so Position()/Size() still return valid values.
+	// Save is best-effort: a failed write is logged but doesn't block the
+	// close.
+	w.RegisterHook(events.Common.WindowClosing, func(*application.WindowEvent) {
+		x, y := w.Position()
+		width, height := w.Size()
+		if err := windowstate.Save(windowstate.State{X: x, Y: y, Width: width, Height: height}); err != nil {
+			log.Printf("octobuddy: window state save failed: %v", err)
+		}
 	})
 	w.Show()
 	w.Focus()

@@ -10,11 +10,11 @@
         <key>CFBundleIdentifier</key>
             <string>com.mlt.octobuddy.desktop</string>
         <key>CFBundleVersion</key>
-            <string>0.1.0</string>
+            <string>1.2.2</string>
         <key>CFBundleGetInfoString</key>
             <string>OctoBuddy — agent gateway desktop</string>
         <key>CFBundleShortVersionString</key>
-            <string>0.1.0</string>
+            <string>1.2.2</string>
         <key>CFBundleIconFile</key>
             <string>icons</string>
         <key>LSMinimumSystemVersion</key>

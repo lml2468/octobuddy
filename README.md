@@ -90,6 +90,10 @@ SOUL/AGENTS + roster + GROUP.md + persona) → **driver.Query** → stream
 persist + send (sink emits `session.upserted` so the sidebar stays in sync).
 
 See [`CLAUDE.md`](CLAUDE.md) for the full pipeline, invariants, and security model.
+[`ARCHITECTURE.md`](ARCHITECTURE.md) is the navigation guide to the three
+modules + three layers. [`PLATFORMS.md`](PLATFORMS.md) lists per-platform
+dependencies and gotchas (read before shipping a change that might break
+Linux/Windows).
 
 ## Quick start
 

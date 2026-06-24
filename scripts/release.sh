@@ -3,7 +3,8 @@
 # under the hood, then renames the artifacts under a versioned scheme and
 # uploads them to a GitHub Release via `gh`.
 #
-#   zsh scripts/release.sh v1.0.0
+#   zsh scripts/release.sh           # reads ./VERSION (canonical)
+#   zsh scripts/release.sh v1.0.0    # verifies arg matches ./VERSION (drift guard)
 #
 # Prerequisites (one-time):
 #   1. Apple Developer ID Application cert in your login Keychain. The script
@@ -31,19 +32,39 @@
 # digests), so bump the patch version if you need to retry.
 set -euo pipefail
 
-if [[ $# -ne 1 ]]; then
-  echo "usage: zsh scripts/release.sh vX.Y.Z" >&2
-  exit 2
-fi
-
-tag="$1"
-if [[ "$tag" != v[0-9]*.[0-9]*.[0-9]* ]]; then
-  echo "✗ tag must be vMAJOR.MINOR.PATCH (got $tag)" >&2
-  exit 2
-fi
-ver="${tag#v}"
-
+# Canonical version lives in /VERSION. Reading it here is the single source of
+# truth — Info.plist's CFBundleShortVersionString gets stamped from this value
+# at package time, so there is exactly one place to bump for a release.
 repo_root="${0:A:h}/.."
+if [[ ! -f "$repo_root/VERSION" ]]; then
+  echo "✗ $repo_root/VERSION missing — create it (one line: MAJOR.MINOR.PATCH)" >&2
+  exit 2
+fi
+file_ver=$(< "$repo_root/VERSION")
+file_ver="${file_ver//[[:space:]]/}"
+
+if [[ $# -eq 0 ]]; then
+  ver="$file_ver"
+  tag="v$ver"
+elif [[ $# -eq 1 ]]; then
+  tag="$1"
+  if [[ "$tag" != v[0-9]*.[0-9]*.[0-9]* ]]; then
+    echo "✗ tag must be vMAJOR.MINOR.PATCH (got $tag)" >&2
+    exit 2
+  fi
+  ver="${tag#v}"
+  # Drift guard: an explicit arg MUST match VERSION (the source of truth).
+  # Bump VERSION first, commit, then run release.
+  if [[ "$ver" != "$file_ver" ]]; then
+    echo "✗ arg $tag does not match VERSION ($file_ver)" >&2
+    echo "  bump VERSION first (single source of truth), commit, then re-run" >&2
+    exit 2
+  fi
+else
+  echo "usage: zsh scripts/release.sh [vX.Y.Z]" >&2
+  echo "  no arg → read ./VERSION; arg → must match ./VERSION" >&2
+  exit 2
+fi
 out="$repo_root/output"
 stage="$out/release-$ver"
 

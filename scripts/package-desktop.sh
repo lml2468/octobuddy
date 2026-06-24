@@ -30,6 +30,13 @@ notary_key_id="${OCTOBUDDY_NOTARY_KEY_ID:-}"
 notary_issuer="${OCTOBUDDY_NOTARY_ISSUER:-}"
 universal="${OCTOBUDDY_UNIVERSAL:-}"
 version="${OCTOBUDDY_VERSION:-}"
+# Fall back to the canonical /VERSION (single source of truth) so a manual
+# `zsh scripts/package-desktop.sh` from a clean checkout stamps Info.plist
+# with the same value the release script would use. Explicit env wins.
+if [[ -z "$version" ]] && [[ -f "$repo_root/VERSION" ]]; then
+  version=$(< "$repo_root/VERSION")
+  version="${version//[[:space:]]/}"
+fi
 entitlements="$desktop/build/darwin/entitlements.plist"
 
 export PATH="$(go env GOPATH)/bin:$PATH"
