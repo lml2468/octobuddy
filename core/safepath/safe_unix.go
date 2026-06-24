@@ -213,41 +213,13 @@ func SafeWrite(root, rel string, data []byte, perm os.FileMode) error {
 
 	// Refuse to write through a leaf symlink (the invariant). AT_SYMLINK_
 	// NOFOLLOW makes fstatat report the symlink itself rather than its target.
-	var st unix.Stat_t
-	if err := unix.Fstatat(int(parent.Fd()), leaf, &st, unix.AT_SYMLINK_NOFOLLOW); err == nil {
-		if st.Mode&unix.S_IFMT == unix.S_IFLNK {
-			return pathErrSymlink(rel)
-		}
-	} else if !errors.Is(err, unix.ENOENT) {
+	if err := refuseLeafSymlink(parent, leaf, rel); err != nil {
 		return err
 	}
 
-	tmpName, err := randomTmpName(leaf)
+	tmpName, err := writeTempFile(parent, leaf, data, perm)
 	if err != nil {
 		return err
-	}
-	// O_CREAT|O_EXCL so a same-name pre-create races us cleanly (we error
-	// out instead of clobbering); O_NOFOLLOW for symmetry with the rest of
-	// the walk; perm sanitized by the kernel's umask.
-	tmpFD, err := unix.Openat(int(parent.Fd()), tmpName,
-		unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, uint32(perm))
-	if err != nil {
-		return err
-	}
-	tmp := os.NewFile(uintptr(tmpFD), tmpName)
-	if _, werr := tmp.Write(data); werr != nil {
-		tmp.Close()
-		_ = unix.Unlinkat(int(parent.Fd()), tmpName, 0)
-		return werr
-	}
-	if serr := tmp.Sync(); serr != nil {
-		tmp.Close()
-		_ = unix.Unlinkat(int(parent.Fd()), tmpName, 0)
-		return serr
-	}
-	if cerr := tmp.Close(); cerr != nil {
-		_ = unix.Unlinkat(int(parent.Fd()), tmpName, 0)
-		return cerr
 	}
 	// Renameat replaces the destination atomically; both ends use the same
 	// verified dirfd so neither path is re-traversed via the VFS.
@@ -256,6 +228,49 @@ func SafeWrite(root, rel string, data []byte, perm os.FileMode) error {
 		return rerr
 	}
 	return nil
+}
+
+func refuseLeafSymlink(parent *os.File, leaf, rel string) error {
+	var st unix.Stat_t
+	if err := unix.Fstatat(int(parent.Fd()), leaf, &st, unix.AT_SYMLINK_NOFOLLOW); err == nil {
+		if st.Mode&unix.S_IFMT == unix.S_IFLNK {
+			return pathErrSymlink(rel)
+		}
+	} else if !errors.Is(err, unix.ENOENT) {
+		return err
+	}
+	return nil
+}
+
+func writeTempFile(parent *os.File, leaf string, data []byte, perm os.FileMode) (string, error) {
+	tmpName, err := randomTmpName(leaf)
+	if err != nil {
+		return "", err
+	}
+	// O_CREAT|O_EXCL so a same-name pre-create races us cleanly (we error
+	// out instead of clobbering); O_NOFOLLOW for symmetry with the rest of
+	// the walk; perm sanitized by the kernel's umask.
+	tmpFD, err := unix.Openat(int(parent.Fd()), tmpName,
+		unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, uint32(perm))
+	if err != nil {
+		return "", err
+	}
+	tmp := os.NewFile(uintptr(tmpFD), tmpName)
+	if _, werr := tmp.Write(data); werr != nil {
+		tmp.Close()
+		_ = unix.Unlinkat(int(parent.Fd()), tmpName, 0)
+		return "", werr
+	}
+	if serr := tmp.Sync(); serr != nil {
+		tmp.Close()
+		_ = unix.Unlinkat(int(parent.Fd()), tmpName, 0)
+		return "", serr
+	}
+	if cerr := tmp.Close(); cerr != nil {
+		_ = unix.Unlinkat(int(parent.Fd()), tmpName, 0)
+		return "", cerr
+	}
+	return tmpName, nil
 }
 
 // SafeReadDir lists entries directly under <root>/<rel> (rel may be empty for
@@ -274,208 +289,4 @@ func SafeReadDir(root, rel string) ([]os.DirEntry, error) {
 	}
 	defer dir.Close()
 	return dir.ReadDir(-1)
-}
-
-// SafeMkdirAll creates the directory <root>/<rel> and any missing parents,
-// refusing to traverse OR create through a symlink. Each existing component
-// is opened with O_NOFOLLOW|O_DIRECTORY (symlink → ErrSymlink); each missing
-// component is mkdirat'd into the verified parent dirfd.
-func SafeMkdirAll(root, rel string, perm os.FileMode) error {
-	if rel == "" || rel == "." {
-		return nil
-	}
-	if _, err := ResolveLexical(root, rel); err != nil {
-		return err
-	}
-	rootFD, err := unix.Open(root, noFollowDirFlags, 0)
-	if err != nil {
-		return classifyOpenErr(0, root, err, root)
-	}
-	cur := rootFD
-	defer func() { unix.Close(cur) }()
-	parts := strings.Split(strings.Trim(filepath.ToSlash(rel), "/"), "/")
-	for i, p := range parts {
-		if p == "" || p == "." {
-			continue
-		}
-		if p == ".." {
-			return fmt.Errorf("path contains .. segment: %q", rel)
-		}
-		next, oerr := unix.Openat(cur, p, noFollowDirFlags, 0)
-		if oerr == nil {
-			unix.Close(cur)
-			cur = next
-			continue
-		}
-		// Component is either a symlink (classifyOpenErr translates),
-		// missing (then we mkdir it), or genuinely failing.
-		if isSymlinkErrno(oerr) {
-			return pathErrSymlink(strings.Join(parts[:i+1], "/"))
-		}
-		// If fstatat says it's a symlink, the kernel may have returned
-		// ENOTDIR (e.g. macOS with O_DIRECTORY|O_NOFOLLOW) — surface as
-		// ErrSymlink before treating as missing. If it exists as a real
-		// directory, another goroutine raced us to create it (concurrent
-		// SafeMkdirAll under the same parent): skip the mkdirat and
-		// re-open rather than surfacing the now-stale ENOENT from our
-		// Openat.
-		raced := false
-		var st unix.Stat_t
-		if serr := unix.Fstatat(cur, p, &st, unix.AT_SYMLINK_NOFOLLOW); serr == nil {
-			if st.Mode&unix.S_IFMT == unix.S_IFLNK {
-				return pathErrSymlink(strings.Join(parts[:i+1], "/"))
-			}
-			if st.Mode&unix.S_IFMT != unix.S_IFDIR {
-				// Exists but isn't a directory and isn't a symlink — surface
-				// the genuine open error.
-				return oerr
-			}
-			raced = true
-		} else if !errors.Is(oerr, unix.ENOENT) {
-			return oerr
-		}
-		if !raced {
-			// Component missing — mkdirat then re-open with O_NOFOLLOW.
-			if merr := unix.Mkdirat(cur, p, uint32(perm)); merr != nil {
-				// Race-tolerant: another caller may have created the dir
-				// between our openat and our mkdirat. EEXIST is fine as long
-				// as the now-existing component is a directory (re-openat
-				// with O_DIRECTORY|O_NOFOLLOW will succeed).
-				if !errors.Is(merr, unix.EEXIST) {
-					return merr
-				}
-			}
-		}
-		next, oerr = unix.Openat(cur, p, noFollowDirFlags, 0)
-		if oerr != nil {
-			return classifyOpenErr(cur, p, oerr, strings.Join(parts[:i+1], "/"))
-		}
-		unix.Close(cur)
-		cur = next
-	}
-	return nil
-}
-
-// SafeRemove unlinks a single file at <root>/<rel>. Refuses to traverse a
-// symlink at any path component. To delete a symlink ENTRY itself (rather
-// than its target), this is a no-op: SafeLstat will surface the symlink so
-// callers can decide; the dedicated SafeRemoveSymlink is exposed for the
-// rare "clean up tampering evidence" case.
-func SafeRemove(root, rel string) error {
-	if _, err := ResolveLexical(root, rel); err != nil {
-		return err
-	}
-	parentRel, leaf, err := splitLeaf(rel)
-	if err != nil {
-		return err
-	}
-	parent, err := walkToDir(root, parentRel)
-	if err != nil {
-		return err
-	}
-	defer parent.Close()
-	return unix.Unlinkat(int(parent.Fd()), leaf, 0)
-}
-
-// SafeRemoveAll recursively removes the file or directory at <root>/<rel>.
-// Refuses to traverse a symlink at any component, AND refuses to descend
-// into a symlinked subdirectory (it unlinks the symlink itself rather
-// than following it — same policy as os.RemoveAll). The dirfd walk to
-// the parent makes the operation race-free against parent-component
-// symlink swaps; within the target subtree, the walk uses dirfds at each
-// level so an attacker swapping a sub-component mid-delete is detected.
-func SafeRemoveAll(root, rel string) error {
-	if _, err := ResolveLexical(root, rel); err != nil {
-		return err
-	}
-	parentRel, leaf, err := splitLeaf(rel)
-	if err != nil {
-		return err
-	}
-	parent, err := walkToDir(root, parentRel)
-	if err != nil {
-		return err
-	}
-	defer parent.Close()
-	return removeAllAt(int(parent.Fd()), leaf)
-}
-
-// removeAllAt unlinks `name` relative to dirfd. If `name` is a directory,
-// recurses into it via openat(O_NOFOLLOW|O_DIRECTORY) and unlinks contents
-// before rmdir-ing the directory itself. Symlink entries inside are
-// unlinked (not followed), matching os.RemoveAll's policy.
-func removeAllAt(dirfd int, name string) error {
-	// Try unlink first — works for files and symlinks, fast path.
-	if err := unix.Unlinkat(dirfd, name, 0); err == nil {
-		return nil
-	} else if errors.Is(err, unix.ENOENT) {
-		// Already gone — idempotent success.
-		return nil
-	} else if !errors.Is(err, unix.EISDIR) && !errors.Is(err, unix.EPERM) {
-		// Genuine error on a non-directory (EACCES on a read-only mount,
-		// EROFS, EIO, chattr +i, …) — surface it. Falling through to the
-		// dir-handling branch below misclassified these as ENOTDIR (the
-		// Openat(O_DIRECTORY|O_NOFOLLOW) on a regular file returns
-		// ENOTDIR) and discarded the original errno.
-		return &os.PathError{Op: "unlinkat", Path: name, Err: err}
-	}
-	// EISDIR / EPERM on Linux: the entry is a directory.
-	// Open as dir with O_NOFOLLOW: a symlink entry can't slip into the
-	// recursive descent.
-	sub, err := unix.Openat(dirfd, name, noFollowDirFlags, 0)
-	if err != nil {
-		if isSymlinkErrno(err) {
-			// Shouldn't reach here normally — symlinks unlink via the first
-			// Unlinkat above. Defensive: still refuse to descend.
-			return pathErrSymlink(name)
-		}
-		if errors.Is(err, unix.ENOENT) {
-			return nil
-		}
-		return err
-	}
-	dir := os.NewFile(uintptr(sub), name)
-	entries, derr := dir.ReadDir(-1)
-	if derr != nil {
-		dir.Close()
-		return derr
-	}
-	for _, e := range entries {
-		if cerr := removeAllAt(int(dir.Fd()), e.Name()); cerr != nil {
-			dir.Close()
-			return cerr
-		}
-	}
-	dir.Close()
-	return unix.Unlinkat(dirfd, name, unix.AT_REMOVEDIR)
-}
-
-// SafeLstat returns Lstat-equivalent info for <root>/<rel> after verifying
-// the parent chain has no symlinks. The leaf itself MAY be a symlink — the
-// caller learns this from FileInfo.Mode and decides what to do.
-func SafeLstat(root, rel string) (os.FileInfo, error) {
-	if _, err := ResolveLexical(root, rel); err != nil {
-		return nil, err
-	}
-	parentRel, leaf, err := splitLeaf(rel)
-	if err != nil {
-		return nil, err
-	}
-	parent, err := walkToDir(root, parentRel)
-	if err != nil {
-		return nil, err
-	}
-	defer parent.Close()
-	var st unix.Stat_t
-	if err := unix.Fstatat(int(parent.Fd()), leaf, &st, unix.AT_SYMLINK_NOFOLLOW); err != nil {
-		return nil, err
-	}
-	return fileInfoFromStat(&st, leaf), nil
-}
-
-// SafeExists is a convenience: SafeLstat + IsNotExist check, treating any
-// non-not-found error as "exists" (operator should investigate separately).
-func SafeExists(root, rel string) bool {
-	_, err := SafeLstat(root, rel)
-	return err == nil
 }

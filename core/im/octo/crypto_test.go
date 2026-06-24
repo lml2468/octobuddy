@@ -29,14 +29,21 @@ func TestDeriveKeyShape(t *testing.T) {
 	if len(key) != 16 {
 		t.Fatalf("key must be 16 bytes, got %d", len(key))
 	}
-	for _, c := range key {
-		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
-			t.Fatalf("key must be lowercase hex chars, got %q", string(key))
-		}
+	if !isLowerHexKey(key) {
+		t.Fatalf("key must be lowercase hex chars, got %q", string(key))
 	}
 	if string(iv) != "0123456789abcdef" {
 		t.Fatalf("iv must be first 16 salt bytes, got %q", string(iv))
 	}
+}
+
+func isLowerHexKey(key []byte) bool {
+	for _, c := range key {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+			return false
+		}
+	}
+	return true
 }
 
 // TestDHSharedSecretSymmetric confirms X25519 agreement so both sides derive the

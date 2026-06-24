@@ -12,6 +12,17 @@ func TestBuildContextSinceDeltaOnly(t *testing.T) {
 
 	// from cursor 0, both messages are in the delta; cutoff 0 = nothing answered
 	text, lastID := g.BuildContextSince("c1", 0, 0)
+	assertInitialContextDelta(t, text, lastID)
+
+	// advance cursor; a new message is the only delta
+	g.SetCursor("c1", lastID)
+	g.Push("c1", "u1", "alice", "third", 3)
+	assertContextDeltaAfterCursor(t, g)
+}
+
+func assertInitialContextDelta(t *testing.T, text string, lastID int64) {
+	t.Helper()
+
 	if lastID != 2 {
 		t.Fatalf("lastID = %d, want 2", lastID)
 	}
@@ -29,10 +40,11 @@ func TestBuildContextSinceDeltaOnly(t *testing.T) {
 	if strings.Contains(text, answeredHeader) || strings.Contains(text, newHeader) {
 		t.Fatalf("unexpected segmentation headers with cutoff 0: %q", text)
 	}
+}
 
-	// advance cursor; a new message is the only delta
-	g.SetCursor("c1", lastID)
-	g.Push("c1", "u1", "alice", "third", 3)
+func assertContextDeltaAfterCursor(t *testing.T, g *GroupContext) {
+	t.Helper()
+
 	text2, lastID2 := g.BuildContextSince("c1", g.Cursor("c1"), 0)
 	if lastID2 != 3 || strings.Contains(text2, "first") || !strings.Contains(text2, "third") {
 		t.Fatalf("delta after cursor wrong: text=%q lastID=%d", text2, lastID2)
@@ -190,6 +202,14 @@ func TestBackfillRunsOnce(t *testing.T) {
 	}
 
 	cutoff, ran := g.Backfill("c1", "bot", fetch)
+	assertFirstBackfill(t, g, calls, cutoff, ran)
+	cutoff2, ran2 := g.Backfill("c1", "bot", fetch)
+	assertSecondBackfillSkipped(t, calls, cutoff2, ran2)
+}
+
+func assertFirstBackfill(t *testing.T, g *GroupContext, calls int, cutoff int64, ran bool) {
+	t.Helper()
+
 	if !ran {
 		t.Fatal("first backfill should run")
 	}
@@ -211,9 +231,11 @@ func TestBackfillRunsOnce(t *testing.T) {
 	if strings.Contains(text, "carol") {
 		t.Fatalf("empty-content message must be skipped: %q", text)
 	}
+}
 
-	// second call is a no-op (already attempted) and does not re-fetch
-	cutoff2, ran2 := g.Backfill("c1", "bot", fetch)
+func assertSecondBackfillSkipped(t *testing.T, calls int, cutoff2 int64, ran2 bool) {
+	t.Helper()
+
 	if ran2 {
 		t.Fatal("second backfill must not run again")
 	}

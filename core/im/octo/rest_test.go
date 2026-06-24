@@ -2,7 +2,6 @@ package octo
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -59,6 +58,12 @@ func TestSendTextRequestShape(t *testing.T) {
 	if res.MessageID != "123" || res.MessageSeq != 7 {
 		t.Fatalf("result mapped wrong: %+v", res)
 	}
+	assertSendTextBody(t, body)
+}
+
+func assertSendTextBody(t *testing.T, body map[string]any) {
+	t.Helper()
+
 	if body["channel_id"] != "chan1" {
 		t.Fatalf("channel_id = %v", body["channel_id"])
 	}
@@ -89,68 +94,6 @@ func TestRESTErrorStatus(t *testing.T) {
 	_, err := c.Register(context.Background(), false)
 	if err == nil {
 		t.Fatal("expected error on 403")
-	}
-}
-
-// TestGetChannelMessagesDecodesPayload verifies the sync endpoint request shape
-// and that content/type/url/name are merged from the base64 payload when absent
-// at the top level (api.ts C1/P1.5).
-func TestGetChannelMessagesDecodesPayload(t *testing.T) {
-	var body map[string]any
-	var gotPath string
-	plB64 := base64.StdEncoding.EncodeToString([]byte(`{"type":1,"content":"hello world"}`))
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath = r.URL.Path
-		raw, _ := io.ReadAll(r.Body)
-		_ = json.Unmarshal(raw, &body)
-		_, _ = w.Write([]byte(`{"messages":[{"from_uid":"user1","from_name":"Alice","timestamp":123,"message_id":"m1","message_seq":5,"payload":"` + plB64 + `"}]}`))
-	}))
-	defer srv.Close()
-
-	c := NewRESTClient(srv.URL, tok("bf"))
-	msgs := c.GetChannelMessages(context.Background(), "g1", ChannelGroup, 10)
-	if len(msgs) != 1 {
-		t.Fatalf("want 1 message, got %d", len(msgs))
-	}
-	m := msgs[0]
-	if m.FromUID != "user1" || m.FromName != "Alice" || m.Content != "hello world" || m.MessageSeq != 5 || m.Type != 1 {
-		t.Fatalf("message mapped wrong: %+v", m)
-	}
-	if gotPath != "/v1/bot/messages/sync" {
-		t.Fatalf("path = %q", gotPath)
-	}
-	if int(body["channel_type"].(float64)) != int(ChannelGroup) || int(body["limit"].(float64)) != 10 {
-		t.Fatalf("request body wrong: %+v", body)
-	}
-	if int(body["pull_mode"].(float64)) != 1 {
-		t.Fatalf("pull_mode must be 1: %+v", body["pull_mode"])
-	}
-}
-
-// TestGetChannelMessagesClientCap caps the returned slice when the server over-returns.
-func TestGetChannelMessagesClientCap(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"messages":[{"from_uid":"a","content":"1","message_seq":1},{"from_uid":"b","content":"2","message_seq":2},{"from_uid":"c","content":"3","message_seq":3}]}`))
-	}))
-	defer srv.Close()
-	c := NewRESTClient(srv.URL, tok("bf"))
-	msgs := c.GetChannelMessages(context.Background(), "g1", ChannelGroup, 2)
-	if len(msgs) != 2 {
-		t.Fatalf("client cap not applied: got %d, want 2", len(msgs))
-	}
-}
-
-// TestGetChannelMessagesErrorReturnsNil: any HTTP failure yields nil (the agent
-// runs fine without history).
-func TestGetChannelMessagesErrorReturnsNil(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(500)
-		_, _ = w.Write([]byte("boom"))
-	}))
-	defer srv.Close()
-	c := NewRESTClient(srv.URL, tok("bf"))
-	if msgs := c.GetChannelMessages(context.Background(), "g1", ChannelGroup, 10); msgs != nil {
-		t.Fatalf("expected nil on HTTP error, got %+v", msgs)
 	}
 }
 

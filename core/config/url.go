@@ -51,14 +51,19 @@ func isPrivateOrLocal(ip net.IP) bool {
 	}
 	// Carrier-grade NAT 100.64.0.0/10 (not covered by IsPrivate).
 	if v4 := ip.To4(); v4 != nil {
-		if v4[0] == 100 && v4[1] >= 64 && v4[1] <= 127 {
-			return true
-		}
-		if v4[0] == 0 { // 0.0.0.0/8
+		if isCarrierGradeNAT(v4) || isZeroIPv4(v4) {
 			return true
 		}
 	}
 	return false
+}
+
+func isCarrierGradeNAT(v4 net.IP) bool {
+	return v4[0] == 100 && v4[1] >= 64 && v4[1] <= 127
+}
+
+func isZeroIPv4(v4 net.IP) bool {
+	return v4[0] == 0 // 0.0.0.0/8
 }
 
 // IsPrivateOrLocalAddress reports whether the IP literal addr is in a
@@ -89,7 +94,7 @@ func AssertPublicURL(ctx context.Context, raw string) error {
 	if err != nil {
 		return fmt.Errorf("parse url: %w", err)
 	}
-	if u.Scheme != "http" && u.Scheme != "https" {
+	if !isHTTPURLScheme(u.Scheme) {
 		return fmt.Errorf("refusing non-http(s) URL: %q", u.Scheme)
 	}
 	host := u.Hostname()
@@ -117,4 +122,8 @@ func AssertPublicURL(ctx context.Context, raw string) error {
 		}
 	}
 	return nil
+}
+
+func isHTTPURLScheme(scheme string) bool {
+	return scheme == "http" || scheme == "https"
 }

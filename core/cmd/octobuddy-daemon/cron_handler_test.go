@@ -19,6 +19,22 @@ import (
 // clock so the schedule is deterministic.
 func TestCronControlHandlers(t *testing.T) {
 	const owner = "owner-1"
+	env := newCronHandlerTestEnv(t, owner, true)
+
+	assertNoCronBotRejected(t, env.call)
+	info := assertForgedCronCreate(t, env.call, env.mgr, owner)
+	assertCronListShowsTask(t, env.call, info.ID)
+	assertCronDeleteClearsTask(t, env.call, info.ID)
+}
+
+type cronHandlerTestEnv struct {
+	mgr  *cron.Manager
+	call func(string, any) (any, error)
+}
+
+func newCronHandlerTestEnv(t *testing.T, owner string, withNoCron bool) cronHandlerTestEnv {
+	t.Helper()
+
 	clk := time.Date(2026, 6, 9, 10, 0, 0, 0, time.Local)
 	store := cron.NewStore(filepath.Join(t.TempDir(), "cron.json"))
 	mgr := cron.NewManager(store, owner, func() time.Time { return clk })
@@ -26,21 +42,31 @@ func TestCronControlHandlers(t *testing.T) {
 	reg := newBotRegistry(nil)
 	b1 := &botRuntime{cfg: config.Resolved{BotID: "b1"}, cron: mgr}
 	b1.target = &botTarget{id: "b1", cron: mgr}
-	nocron := &botRuntime{cfg: config.Resolved{BotID: "nocron"}} // cron == nil
-	nocron.target = &botTarget{id: "nocron"}
 	reg.add(b1)
-	reg.add(nocron)
+	if withNoCron {
+		nocron := &botRuntime{cfg: config.Resolved{BotID: "nocron"}} // cron == nil
+		nocron.target = &botTarget{id: "nocron"}
+		reg.add(nocron)
+	}
 	h := makeMultiBotHandler(context.Background(), reg, time.Now())
-
 	call := func(typ string, body any) (any, error) {
 		raw, _ := json.Marshal(body)
 		return h(typ, raw)
 	}
+	return cronHandlerTestEnv{mgr: mgr, call: call}
+}
+
+func assertNoCronBotRejected(t *testing.T, call func(string, any) (any, error)) {
+	t.Helper()
 
 	// Not enabled for the nocron bot.
 	if _, err := call("cron.list", control.CronListBody{BotID: "nocron"}); err == nil {
 		t.Fatal("cron.list on a bot without cron should error")
 	}
+}
+
+func assertForgedCronCreate(t *testing.T, call func(string, any) (any, error), mgr *cron.Manager, owner string) control.CronTaskInfo {
+	t.Helper()
 
 	// A forged body uid (the deprecated UID field) is NOT an authorization
 	// claim: the create still succeeds (gated on the resolved owner) AND
@@ -71,6 +97,11 @@ func TestCronControlHandlers(t *testing.T) {
 	if stored[0].FromUID != "alice" {
 		t.Fatalf("FromUID must be the body peer (alice), got %q — the create handler must not stamp owner over the DM peer", stored[0].FromUID)
 	}
+	return info
+}
+
+func assertCronListShowsTask(t *testing.T, call func(string, any) (any, error), id string) {
+	t.Helper()
 
 	// List shows the task.
 	listRes, err := call("cron.list", control.CronListBody{BotID: "b1"})
@@ -78,16 +109,20 @@ func TestCronControlHandlers(t *testing.T) {
 		t.Fatalf("cron.list: %v", err)
 	}
 	tasks := listRes.(control.CronListResponse).Tasks
-	if len(tasks) != 1 || tasks[0].ID != info.ID {
+	if len(tasks) != 1 || tasks[0].ID != id {
 		t.Fatalf("list mismatch: %#v", tasks)
 	}
+}
+
+func assertCronDeleteClearsTask(t *testing.T, call func(string, any) (any, error), id string) {
+	t.Helper()
 
 	// Delete is likewise gated on the resolved owner, not the body uid: a forged
 	// uid does not block (it's ignored) — the delete succeeds.
-	if _, err := call("cron.delete", control.CronDeleteBody{BotID: "b1", UID: "intruder", ID: info.ID}); err != nil {
+	if _, err := call("cron.delete", control.CronDeleteBody{BotID: "b1", UID: "intruder", ID: id}); err != nil {
 		t.Fatalf("delete gated on server owner should succeed regardless of body uid: %v", err)
 	}
-	listRes, _ = call("cron.list", control.CronListBody{BotID: "b1"})
+	listRes, _ := call("cron.list", control.CronListBody{BotID: "b1"})
 	if n := len(listRes.(control.CronListResponse).Tasks); n != 0 {
 		t.Fatalf("expected empty list after delete, got %d", n)
 	}
@@ -122,19 +157,15 @@ func TestCronControlHandlersNoOwner(t *testing.T) {
 // ChannelID / ChannelType / FromName).
 func TestCronUpdateHandler(t *testing.T) {
 	const owner = "owner-1"
-	clk := time.Date(2026, 6, 9, 10, 0, 0, 0, time.Local)
-	store := cron.NewStore(filepath.Join(t.TempDir(), "cron.json"))
-	mgr := cron.NewManager(store, owner, func() time.Time { return clk })
+	env := newCronHandlerTestEnv(t, owner, false)
 
-	reg := newBotRegistry(nil)
-	b1 := &botRuntime{cfg: config.Resolved{BotID: "b1"}, cron: mgr}
-	b1.target = &botTarget{id: "b1", cron: mgr}
-	reg.add(b1)
-	h := makeMultiBotHandler(context.Background(), reg, time.Now())
-	call := func(typ string, body any) (any, error) {
-		raw, _ := json.Marshal(body)
-		return h(typ, raw)
-	}
+	id := createCronTaskForUpdate(t, env.call)
+	assertCronFullUpdate(t, env.call, id)
+	assertCronEnabledOnlyUpdate(t, env.call, id)
+}
+
+func createCronTaskForUpdate(t *testing.T, call func(string, any) (any, error)) string {
+	t.Helper()
 
 	created, err := call("cron.create", control.CronCreateBody{
 		BotID: "b1", Schedule: "0 9 * * *", Prompt: "morning",
@@ -143,7 +174,11 @@ func TestCronUpdateHandler(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	id := created.(control.CronTaskInfo).ID
+	return created.(control.CronTaskInfo).ID
+}
+
+func assertCronFullUpdate(t *testing.T, call func(string, any) (any, error), id string) {
+	t.Helper()
 
 	// Full update — change schedule + prompt + target. Body uid forged; ignored.
 	res, err := call("cron.update", control.CronUpdateBody{
@@ -160,15 +195,19 @@ func TestCronUpdateHandler(t *testing.T) {
 	if info.ChannelID != "grp-y" || info.ChannelType != 2 || info.FromName != "wrap-up" {
 		t.Fatalf("expanded CronTaskInfo missing channel coords: %+v", info)
 	}
+}
+
+func assertCronEnabledOnlyUpdate(t *testing.T, call func(string, any) (any, error), id string) {
+	t.Helper()
 
 	// Enabled-only fast path: send only Enabled=false, server preserves all
 	// other fields (no echoing of schedule/prompt needed).
 	off := false
-	res, err = call("cron.update", control.CronUpdateBody{BotID: "b1", ID: id, Enabled: &off})
+	res, err := call("cron.update", control.CronUpdateBody{BotID: "b1", ID: id, Enabled: &off})
 	if err != nil {
 		t.Fatalf("enabled-only update: %v", err)
 	}
-	info = res.(control.CronTaskInfo)
+	info := res.(control.CronTaskInfo)
 	if info.Enabled {
 		t.Fatal("enabled flag did not flip")
 	}

@@ -5,13 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
+	"io"
 	"os/exec"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
-	"unicode/utf8"
 )
 
 // ClaudeDriver drives Claude Code headlessly via:
@@ -109,37 +108,10 @@ func (d *ClaudeDriver) buildArgs(req Request) []string {
 }
 
 func (d *ClaudeDriver) Query(ctx context.Context, req Request) (<-chan AgentEvent, error) {
-	cmd := exec.CommandContext(ctx, d.Bin, d.buildArgs(req)...)
-	if req.Cwd != "" {
-		cmd.Dir = req.Cwd
-	}
-	// Feed the prompt on stdin (matches `-p -`). This is a private in-memory
-	// reader holding ONLY the prompt — never os.Stdin, which on the daemon
-	// carries the control-bus capability token. os/exec copies it to the
-	// child in a goroutine and closes the pipe at EOF.
-	cmd.Stdin = strings.NewReader(req.Prompt)
-	extraEnv := d.Env
-	if d.EnvFn != nil {
-		extraEnv = d.EnvFn()
-	}
-	cmd.Env = mergedEnv(extraEnv)
-	d.selfcheckOnce.Do(func() { d.logSelfcheck(cmd.Env, req.Cwd) })
-	// On ctx cancellation, CommandContext kills the process; WaitDelay bounds how
-	// long Wait then blocks if a grandchild keeps the output pipe open, so the
-	// reader goroutines can't hang the turn indefinitely.
-	cmd.WaitDelay = 10 * time.Second
-
-	stdout, err := cmd.StdoutPipe()
+	cmd := d.buildCommand(ctx, req)
+	stdout, stderr, err := commandPipes(cmd)
 	if err != nil {
-		return nil, fmt.Errorf("stdout pipe: %w", err)
-	}
-	// Merge stderr into the same stream so transport errors surface as events
-	// rather than being silently dropped (stderr is not stream-json, so the
-	// parser will pass non-JSON lines through as system/error events).
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		_ = stdout.Close()
-		return nil, fmt.Errorf("stderr pipe: %w", err)
+		return nil, err
 	}
 
 	if err := cmd.Start(); err != nil {
@@ -153,104 +125,31 @@ func (d *ClaudeDriver) Query(ctx context.Context, req Request) (<-chan AgentEven
 	}
 
 	out := make(chan AgentEvent, 64)
-
-	// Two readers feed `out`; a WaitGroup joins them so the channel is closed
-	// exactly once, AFTER both have finished. Closing from a single reader (e.g.
-	// stdout) while the other (stderr) is still sending would panic on a send to
-	// a closed channel — and calling cmd.Wait before both pipes are fully drained
-	// violates the exec contract.
 	var wg sync.WaitGroup
 	wg.Add(2)
-
-	// sawTurnDone records whether claude emitted a turn-final `result` line. It
-	// gates how we treat a non-zero process exit below: a turn's terminal signal
-	// is the `result` (is_error), NOT the exit code. claude can stream a complete,
-	// successful reply + result and THEN exit non-zero for an unrelated reason
-	// (post-run hook/telemetry failure, a broken stderr pipe, a node warning
-	// escalating the exit status). The WaitGroup join gives a happens-before edge
-	// from the stdout reader's stores to the cmd.Wait reader's load.
 	var sawTurnDone atomic.Bool
+	d.startReaders(ctx, stdout, stderr, req.SessionID, out, &wg, &sawTurnDone)
+	waitAndClose(ctx, cmd, out, &wg, &sawTurnDone)
+	return out, nil
+}
 
-	// emit sends an event unless the turn's context is cancelled. Selecting on
-	// ctx.Done means an abandoned/cancelled consumer can't wedge a reader on a
-	// full channel (which would leak the goroutine and the claude subprocess).
-	emit := func(ev AgentEvent) {
-		select {
-		case out <- ev:
-		case <-ctx.Done():
-		}
-	}
-
-	// Drain stderr; emit any non-empty lines as recoverable errors (e.g. node
-	// warnings) without blocking the child on a full pipe.
+func (d *ClaudeDriver) startReaders(ctx context.Context, stdout, stderr io.Reader, sessionID string, out chan<- AgentEvent, wg *sync.WaitGroup, sawTurnDone *atomic.Bool) {
 	go func() {
 		defer wg.Done()
-		sc := bufio.NewScanner(stderr)
-		// Match the stdout cap (16 MiB): a verbose stack trace / overload message
-		// that classification depends on can exceed the default 64 KiB token, and a
-		// dropped line would silently downgrade a transient error to the generic one.
-		sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
-		for sc.Scan() {
-			line := strings.TrimSpace(sc.Text())
-			if line == "" {
-				continue
-			}
-			// A stale --resume id makes claude abort at session init with
-			// "No conversation found with session ID: …". Tag it so the gateway
-			// can clear the resume mapping and retry the turn fresh.
-			if req.SessionID != "" && strings.Contains(line, "No conversation found with session ID") {
-				emit(AgentEvent{Kind: KindError, Err: line, Recoverable: true, ResumeInvalid: true, Raw: line})
-				continue
-			}
-			// Upstream rate-limit / overload printed on stderr: tag it transient so
-			// the gateway can reply "服务繁忙" instead of a generic error.
-			if isTransientUpstream(line) {
-				emit(AgentEvent{Kind: KindError, Err: line, Recoverable: true, Transient: true, RetryHint: retryHint(line), Raw: line})
-				continue
-			}
-			emit(AgentEvent{Kind: KindError, Err: line, Recoverable: true, Raw: line})
-		}
-		// A scan error (e.g. a line exceeding the buffer cap) would otherwise be
-		// swallowed; surface it as recoverable so it isn't silently lost.
-		if err := sc.Err(); err != nil {
-			emit(AgentEvent{Kind: KindError, Err: fmt.Sprintf("stderr scan: %v", err), Recoverable: true, Raw: err.Error()})
-		}
+		d.drainStderr(ctx, stderr, sessionID, out)
 	}()
-
 	go func() {
 		defer wg.Done()
-		sc := bufio.NewScanner(stdout)
-		// stream-json lines can be large (tool inputs with file contents).
-		sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
-		for sc.Scan() {
-			line := strings.TrimSpace(sc.Text())
-			if line == "" {
-				continue
-			}
-			for _, ev := range parseClaudeLine(line) {
-				if ev.Kind == KindTurnDone {
-					sawTurnDone.Store(true)
-				}
-				emit(ev)
-			}
-		}
-		// Surface a scan error (e.g. an over-cap line) as terminal: a truncated
-		// stream-json line means we may have lost the result, so don't let it pass
-		// silently as a successful empty turn.
-		if err := sc.Err(); err != nil {
-			emit(AgentEvent{Kind: KindError, Err: fmt.Sprintf("stdout scan: %v", err), Raw: err.Error()})
-		}
+		d.drainStdout(ctx, stdout, out, sawTurnDone)
 	}()
+}
 
+func waitAndClose(ctx context.Context, cmd *exec.Cmd, out chan AgentEvent, wg *sync.WaitGroup, sawTurnDone *atomic.Bool) {
 	go func() {
 		defer close(out)
 		wg.Wait()
 		if err := cmd.Wait(); err != nil {
-			// A non-zero exit AFTER a completed turn is not a turn failure: the
-			// reply + result already streamed, so surface it as recoverable
-			// (informational) and let the assembled reply stand. Only an exit
-			// with NO prior result is terminal — claude died before answering.
-			emit(AgentEvent{
+			emitAgentEvent(ctx, out, AgentEvent{
 				Kind:        KindError,
 				Err:         fmt.Sprintf("claude exited: %v", err),
 				Recoverable: sawTurnDone.Load(),
@@ -258,243 +157,92 @@ func (d *ClaudeDriver) Query(ctx context.Context, req Request) (<-chan AgentEven
 			})
 		}
 	}()
-
-	return out, nil
 }
 
-// --- stream-json line shapes (only the fields we consume) ---
-
-type claudeLine struct {
-	Type      string `json:"type"`    // system | assistant | user | result
-	Subtype   string `json:"subtype"` // init | api_retry | hook_* | success | error_*
-	SessionID string `json:"session_id"`
-
-	// assistant/user
-	Message *claudeMessage `json:"message"`
-
-	// result
-	Result     string          `json:"result"`
-	IsError    bool            `json:"is_error"`
-	TotalCost  float64         `json:"total_cost_usd"`
-	Usage      *claudeRawUsage `json:"usage"`
-	NumTurns   int             `json:"num_turns"`
-	DurationMs int             `json:"duration_ms"`
-
-	// system/api_retry
-	Error       string `json:"error"`
-	ErrorStatus int    `json:"error_status"`
+func (d *ClaudeDriver) drainStderr(ctx context.Context, stderr io.Reader, sessionID string, out chan<- AgentEvent) {
+	sc := newClaudeScanner(stderr)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" {
+			continue
+		}
+		emitAgentEvent(ctx, out, stderrLineEvent(line, sessionID))
+	}
+	if err := sc.Err(); err != nil {
+		emitAgentEvent(ctx, out, AgentEvent{Kind: KindError, Err: fmt.Sprintf("stderr scan: %v", err), Recoverable: true, Raw: err.Error()})
+	}
 }
 
-type claudeMessage struct {
-	Role    string          `json:"role"`
-	Content []claudeBlock   `json:"content"`
-	Usage   *claudeRawUsage `json:"usage"`
-}
-
-type claudeBlock struct {
-	Type  string          `json:"type"` // text | tool_use | thinking | tool_result
-	Text  string          `json:"text"`
-	Name  string          `json:"name"`  // tool_use
-	Input json.RawMessage `json:"input"` // tool_use params
-}
-
-type claudeRawUsage struct {
-	InputTokens              int `json:"input_tokens"`
-	OutputTokens             int `json:"output_tokens"`
-	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
-	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
-}
-
-// logSelfcheck emits one line summarizing the realized invocation environment
-// for the bot's first turn. The shape is deliberately greppable + paste-able:
-//
-//	[selfcheck] bot=<id> claude=<path-or-MISSING:err> auth=<masked-or-UNSET> base_url=<url-or-UNSET> cwd=<path> writable=<true|false>
-//
-// The token is masked (first 6 + last 4) so the line is safe to paste into a
-// support ticket without leaking the live key. claude=MISSING screams when the
-// CLI isn't installed/on PATH; auth=UNSET screams when the gateway-token
-// secret never made it into env (the actual root cause of the "出错了" report
-// we got from a fresh install). Anything else worth knowing — workspace cwd
-// not writable, custom base URL pointed at the wrong host — fits on the line.
-func (d *ClaudeDriver) logSelfcheck(env []string, cwd string) {
-	envMap := map[string]string{}
-	for _, kv := range env {
-		if i := strings.IndexByte(kv, '='); i >= 0 {
-			envMap[kv[:i]] = kv[i+1:]
+func (d *ClaudeDriver) drainStdout(ctx context.Context, stdout io.Reader, out chan<- AgentEvent, sawTurnDone *atomic.Bool) {
+	sc := newClaudeScanner(stdout)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" {
+			continue
+		}
+		for _, ev := range parseClaudeLine(line) {
+			if ev.Kind == KindTurnDone {
+				sawTurnDone.Store(true)
+			}
+			emitAgentEvent(ctx, out, ev)
 		}
 	}
-	binStr := d.Bin
-	if p, err := exec.LookPath(d.Bin); err == nil {
-		binStr = p
-	} else {
-		binStr = "MISSING:" + err.Error()
+	if err := sc.Err(); err != nil {
+		emitAgentEvent(ctx, out, AgentEvent{Kind: KindError, Err: fmt.Sprintf("stdout scan: %v", err), Raw: err.Error()})
 	}
-	auth := maskToken(envMap["ANTHROPIC_AUTH_TOKEN"])
-	baseURL := envMap["ANTHROPIC_BASE_URL"]
-	if baseURL == "" {
-		baseURL = "UNSET"
-	}
-	botID := envMap["OCTO_BOT_ID"]
-	if botID == "" {
-		botID = "?"
-	}
-	writable := isDirWritable(cwd)
-	fmt.Fprintf(os.Stderr, "[selfcheck] bot=%s claude=%s auth=%s base_url=%s cwd=%s writable=%t\n",
-		botID, binStr, auth, baseURL, cwd, writable)
 }
 
-// maskToken returns a redacted form safe to log: "UNSET" if empty, the literal
-// value if too short to mask meaningfully (< 10 chars), or first-6 + "..." +
-// last-4 otherwise. Preserves enough surface for the operator to recognize
-// which token is in play without exposing the secret.
-func maskToken(s string) string {
-	if s == "" {
-		return "UNSET"
-	}
-	if len(s) < 10 {
-		return "SHORT(" + s + ")"
-	}
-	return s[:6] + "..." + s[len(s)-4:]
+func newClaudeScanner(r io.Reader) *bufio.Scanner {
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
+	return sc
 }
 
-// isDirWritable probes write access via a no-op .write-test create+remove. The
-// claude CLI writes session state under CLAUDE_CONFIG_DIR and project files
-// under cwd; a read-only mount (or wrong-owner dir after a HOME override)
-// reproduces as a turn that fails immediately. Best-effort: returns false on
-// any error including "the dir doesn't exist".
-func isDirWritable(dir string) bool {
-	if dir == "" {
-		return false
+func stderrLineEvent(line, sessionID string) AgentEvent {
+	if sessionID != "" && strings.Contains(line, "No conversation found with session ID") {
+		return AgentEvent{Kind: KindError, Err: line, Recoverable: true, ResumeInvalid: true, Raw: line}
 	}
-	probe := dir + "/.octobuddy-writetest"
-	f, err := os.OpenFile(probe, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+	if isTransientUpstream(line) {
+		return AgentEvent{Kind: KindError, Err: line, Recoverable: true, Transient: true, RetryHint: retryHint(line), Raw: line}
+	}
+	return AgentEvent{Kind: KindError, Err: line, Recoverable: true, Raw: line}
+}
+
+func emitAgentEvent(ctx context.Context, out chan<- AgentEvent, ev AgentEvent) {
+	select {
+	case out <- ev:
+	case <-ctx.Done():
+	}
+}
+
+func (d *ClaudeDriver) buildCommand(ctx context.Context, req Request) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, d.Bin, d.buildArgs(req)...)
+	if req.Cwd != "" {
+		cmd.Dir = req.Cwd
+	}
+	cmd.Stdin = strings.NewReader(req.Prompt)
+	cmd.Env = mergedEnv(d.queryEnv())
+	d.selfcheckOnce.Do(func() { d.logSelfcheck(cmd.Env, req.Cwd) })
+	cmd.WaitDelay = 10 * time.Second
+	return cmd
+}
+
+func (d *ClaudeDriver) queryEnv() []string {
+	if d.EnvFn != nil {
+		return d.EnvFn()
+	}
+	return d.Env
+}
+
+func commandPipes(cmd *exec.Cmd) (stdout, stderr io.ReadCloser, err error) {
+	stdout, err = cmd.StdoutPipe()
 	if err != nil {
-		return false
+		return nil, nil, fmt.Errorf("stdout pipe: %w", err)
 	}
-	_ = f.Close()
-	_ = os.Remove(probe)
-	return true
-}
-
-// parseClaudeLine normalizes one stream-json line into zero or more AgentEvents.
-// Unknown shapes degrade to a KindSystem event carrying the raw line so nothing
-// is silently dropped (forward-compatible with new line types).
-func parseClaudeLine(line string) []AgentEvent {
-	var cl claudeLine
-	if err := json.Unmarshal([]byte(line), &cl); err != nil {
-		// Not JSON (e.g. a stderr line merged in) — surface as system info.
-		return []AgentEvent{{Kind: KindSystem, Text: line, Raw: line}}
+	stderr, err = cmd.StderrPipe()
+	if err != nil {
+		_ = stdout.Close()
+		return nil, nil, fmt.Errorf("stderr pipe: %w", err)
 	}
-
-	switch cl.Type {
-	case "system":
-		switch cl.Subtype {
-		case "init":
-			// First line of a run: carries the session id to persist for resume.
-			return []AgentEvent{{Kind: KindSessionStarted, SessionID: cl.SessionID, Raw: line}}
-		case "api_retry":
-			// claude is retrying upstream; classify rate-limit/overload as transient
-			// so a terminal failure after exhausted retries reads as "服务繁忙".
-			msg := fmt.Sprintf("api_retry status=%d: %s", cl.ErrorStatus, cl.Error)
-			ev := AgentEvent{Kind: KindError, Err: msg, Recoverable: true, Raw: line}
-			if cl.ErrorStatus == 429 || cl.ErrorStatus == 503 || cl.ErrorStatus == 529 || isTransientUpstream(cl.Error) {
-				ev.Transient = true
-				ev.RetryHint = retryHint(cl.Error)
-			}
-			return []AgentEvent{ev}
-		default:
-			// hook_started / hook_response / other informational system lines.
-			return []AgentEvent{{Kind: KindSystem, Text: cl.Subtype, Raw: line}}
-		}
-
-	case "assistant":
-		if cl.Message == nil {
-			return nil
-		}
-		var evs []AgentEvent
-		for _, b := range cl.Message.Content {
-			switch b.Type {
-			case "text":
-				if b.Text != "" {
-					evs = append(evs, AgentEvent{Kind: KindTextDelta, Text: b.Text, Raw: line})
-				}
-			case "thinking":
-				if b.Text != "" {
-					evs = append(evs, AgentEvent{Kind: KindThinking, Text: b.Text, Raw: line})
-				}
-			case "tool_use":
-				evs = append(evs, AgentEvent{
-					Kind:       KindToolUse,
-					ToolName:   b.Name,
-					ToolParams: truncateParams(b.Input),
-					Raw:        line,
-				})
-			}
-		}
-		return evs
-
-	case "user":
-		// tool_result blocks come back as a user-role message.
-		if cl.Message == nil {
-			return nil
-		}
-		var evs []AgentEvent
-		for _, b := range cl.Message.Content {
-			if b.Type == "tool_result" {
-				evs = append(evs, AgentEvent{Kind: KindToolResult, Raw: line})
-			}
-		}
-		return evs
-
-	case "result":
-		ev := AgentEvent{Kind: KindTurnDone, Raw: line}
-		if cl.Usage != nil {
-			ev.Usage = &TokenUsage{
-				InputTokens:              cl.Usage.InputTokens,
-				OutputTokens:             cl.Usage.OutputTokens,
-				CachedInputTokens:        cl.Usage.CacheReadInputTokens,
-				CacheCreationInputTokens: cl.Usage.CacheCreationInputTokens,
-				CostUSD:                  cl.TotalCost,
-			}
-		} else if cl.TotalCost != 0 {
-			ev.Usage = &TokenUsage{CostUSD: cl.TotalCost}
-		}
-		if cl.IsError {
-			errEv := AgentEvent{
-				Kind:        KindError,
-				Err:         fmt.Sprintf("result error (subtype=%s): %s", cl.Subtype, cl.Result),
-				Recoverable: false,
-				Raw:         line,
-			}
-			if isTransientUpstream(cl.Result) || isTransientUpstream(cl.Subtype) {
-				errEv.Transient = true
-				errEv.RetryHint = retryHint(cl.Result)
-			}
-			return []AgentEvent{errEv, ev}
-		}
-		return []AgentEvent{ev}
-
-	default:
-		return []AgentEvent{{Kind: KindSystem, Text: cl.Type, Raw: line}}
-	}
-}
-
-// truncateParams renders tool input JSON as a short one-liner for progress UI.
-func truncateParams(raw json.RawMessage) string {
-	if len(raw) == 0 {
-		return ""
-	}
-	s := string(raw)
-	s = strings.Join(strings.Fields(s), " ") // collapse whitespace/newlines
-	const max = 120
-	if len(s) > max {
-		// Back up to a rune boundary so we never split a multibyte codepoint
-		// and emit invalid UTF-8 into the progress event.
-		cut := max
-		for cut > 0 && !utf8.RuneStart(s[cut]) {
-			cut--
-		}
-		s = s[:cut] + "…"
-	}
-	return s
+	return stdout, stderr, nil
 }

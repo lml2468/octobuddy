@@ -156,129 +156,6 @@ func convertStructuredMentions(text string, mentions []structuredMention) conver
 	return convertResult{content: content.String(), entities: entities, uids: uids}
 }
 
-// fallbackResult is the output of buildEntitiesFromFallback.
-type fallbackResult struct {
-	entities []MentionEntity
-	uids     []string
-}
-
-// isMentionLeadBoundaryOK emulates MENTION_PATTERN's lookbehind
-// `(?:^|(?<=\s|[^a-zA-Z0-9]))`: the '@' must be at line start or preceded by a
-// whitespace / non-alphanumeric rune. prevRune is the rune immediately before
-// '@' (utf8.RuneError-equivalent handling: callers pass a sentinel for start).
-func isMentionLeadBoundaryOK(prev rune, atStart bool) bool {
-	if atStart {
-		return true
-	}
-	if prev == ' ' || prev == '\t' || prev == '\n' || prev == '\r' || prev == '\f' || prev == '\v' {
-		return true
-	}
-	// Non-alphanumeric (ASCII a-zA-Z0-9 are the only blacklisted lead chars).
-	isAlnum := (prev >= 'a' && prev <= 'z') || (prev >= 'A' && prev <= 'Z') || (prev >= '0' && prev <= '9')
-	return !isAlnum
-}
-
-// tryLongestMemberMatch tries the longest displayName in sortedNames that the
-// text starts with at the position just after '@' (afterAt = rune slice after
-// '@'). Boundary: the char after the name must be a name-terminator. Ports
-// tryLongestMemberMatch. Returns (name, uid, true) on success.
-func tryLongestMemberMatch(afterAt []rune, memberMap map[string]string, sortedNames []string) (string, string, bool) {
-	after := string(afterAt)
-	for _, candidate := range sortedNames {
-		if strings.HasPrefix(after, candidate) {
-			rest := afterAt[len([]rune(candidate)):]
-			if len(rest) == 0 || !nameCharRE.MatchString(string(rest[0])) {
-				if uid, ok := memberMap[candidate]; ok {
-					return candidate, uid, true
-				}
-			}
-		}
-	}
-	return "", "", false
-}
-
-// buildEntitiesFromFallback resolves plain @name mentions against memberMap
-// (displayName → uid), longest-prefix first, skipping @all / @所有人. Offsets are
-// UTF-16 code units into content. Ports buildEntitiesFromFallback.
-func buildEntitiesFromFallback(content string, memberMap map[string]string) fallbackResult {
-	var res fallbackResult
-	if len(memberMap) == 0 {
-		return res
-	}
-	sortedNames := make([]string, 0, len(memberMap))
-	for k := range memberMap {
-		sortedNames = append(sortedNames, k)
-	}
-	// Longest first; ties broken lexicographically for determinism.
-	sort.Slice(sortedNames, func(i, j int) bool {
-		if len(sortedNames[i]) != len(sortedNames[j]) {
-			return len(sortedNames[i]) > len(sortedNames[j])
-		}
-		return sortedNames[i] < sortedNames[j]
-	})
-
-	runes := []rune(content)
-	off16 := 0 // UTF-16 offset of runes[i]
-	for i := 0; i < len(runes); i++ {
-		r := runes[i]
-		if r != '@' {
-			off16 += utf16Width(r)
-			continue
-		}
-		var prev rune
-		atStart := i == 0
-		if !atStart {
-			prev = runes[i-1]
-		}
-		if !isMentionLeadBoundaryOK(prev, atStart) {
-			off16 += utf16Width(r)
-			continue
-		}
-		afterAt := runes[i+1:]
-		// Determine the captured plain name (charset run after '@').
-		nameLen := 0
-		for nameLen < len(afterAt) && nameCharRE.MatchString(string(afterAt[nameLen])) {
-			nameLen++
-		}
-		if nameLen == 0 {
-			off16 += utf16Width(r)
-			continue
-		}
-		name := string(afterAt[:nameLen])
-		// Skip @all / @所有人 — handled by mentionAll.
-		if strings.EqualFold(name, "all") || name == "所有人" {
-			off16 += utf16Width(r)
-			continue
-		}
-
-		matchedName := name
-		uid, ok := "", false
-		if mn, mu, found := tryLongestMemberMatch(afterAt, memberMap, sortedNames); found {
-			matchedName, uid, ok = mn, mu, true
-		} else if u, exists := memberMap[name]; exists {
-			uid, ok = u, true
-		}
-		if !ok {
-			off16 += utf16Width(r)
-			continue
-		}
-
-		atName := "@" + matchedName
-		atLen16 := utf16Len(atName)
-		res.entities = append(res.entities, MentionEntity{UID: uid, Offset: off16, Length: atLen16})
-		res.uids = append(res.uids, uid)
-
-		// Advance past the full match (whole @matchedName), in both rune and
-		// UTF-16 space, to avoid re-matching trailing chars of long names.
-		matchedRunes := len([]rune(matchedName))
-		// Move i to the last consumed rune (loop's i++ then steps past it).
-		consumed := 1 + matchedRunes // '@' + name runes
-		off16 += utf16Len(string(runes[i : i+consumed]))
-		i += consumed - 1
-	}
-	return res
-}
-
 // resolveResult is the output of resolveMentions.
 type resolveResult struct {
 	finalContent   string
@@ -301,29 +178,43 @@ var mentionAllRE = regexp.MustCompile(`(?i)^(all|所有人)`)
 func detectMentionAll(content string) bool {
 	runes := []rune(content)
 	for i := 0; i < len(runes); i++ {
-		if runes[i] != '@' {
-			continue
-		}
-		// Lead boundary: start, or preceded by whitespace.
-		if i > 0 {
-			p := runes[i-1]
-			if !(p == ' ' || p == '\t' || p == '\n' || p == '\r' || p == '\f' || p == '\v') {
-				continue
-			}
-		}
-		after := string(runes[i+1:])
-		loc := mentionAllRE.FindStringSubmatchIndex(after)
-		if loc == nil {
-			continue
-		}
-		// token = all|所有人; trailing char check.
-		tokenRunes := len([]rune(after[loc[2]:loc[3]]))
-		rest := runes[i+1+tokenRunes:]
-		if len(rest) == 0 || !nameCharRE.MatchString(string(rest[0])) {
+		if isMentionAllAt(runes, i) {
 			return true
 		}
 	}
 	return false
+}
+
+func isMentionAllAt(runes []rune, i int) bool {
+	if runes[i] != '@' {
+		return false
+	}
+	if !hasMentionAllLeadBoundary(runes, i) {
+		return false
+	}
+	after := string(runes[i+1:])
+	loc := mentionAllRE.FindStringSubmatchIndex(after)
+	if loc == nil {
+		return false
+	}
+	// token = all|所有人; trailing char check.
+	tokenRunes := len([]rune(after[loc[2]:loc[3]]))
+	rest := runes[i+1+tokenRunes:]
+	return hasMentionAllTrailBoundary(rest)
+}
+
+func hasMentionAllLeadBoundary(runes []rune, i int) bool {
+	if i == 0 {
+		return true
+	}
+	return isASCIISpace(runes[i-1])
+}
+
+func hasMentionAllTrailBoundary(rest []rune) bool {
+	if len(rest) == 0 {
+		return true
+	}
+	return !nameCharRE.MatchString(string(rest[0]))
 }
 
 // resolveMentions runs the structured and plain pipelines, deduplicates entities
@@ -377,158 +268,4 @@ func resolveMentions(content string, memberMap map[string]string, isValidUid fun
 		mentionEntries: entities,
 		mentionAll:     detectMentionAll(finalContent),
 	}
-}
-
-// protectedRange is a UTF-16 [start,end) span that splitMessage must not cut
-// through (used to keep a resolved @name whole). Mirrors ProtectedRange in
-// stream-relay.ts.
-type protectedRange struct {
-	start int
-	end   int
-}
-
-// segment is one output chunk plus its UTF-16 start offset within the full text,
-// so the connector can rebase global entity offsets to segment-local ones.
-type segment struct {
-	text  string
-	start int // UTF-16 offset of this segment's first code unit in the full text
-}
-
-// adjustSplitForProtectedRanges mirrors stream-relay.ts: if splitAt lands
-// strictly inside a protected range, pull back to the range start (move the
-// protected unit whole to the next segment). Returns (-1, false) when pulling
-// back would land at 0.
-// adjustSplitForProtectedRanges moves a candidate split point off of any
-// protected range it lands inside. If the range has room before it, split there;
-// if the range starts at 0 (a single mention longer than maxUnits at the segment
-// start), there is no earlier boundary, so split at the range END to keep the
-// mention intact in one (over-long) segment rather than slicing through it —
-// returning (rangeEnd, true). A mention can never realistically exceed maxUnits
-// (SanitizeDisplayName caps names well under 3500 UTF-16 units), so this is a
-// safety net, not a hot path.
-func adjustSplitForProtectedRanges(splitAt int, ranges []protectedRange) (int, bool) {
-	for _, r := range ranges {
-		if splitAt > r.start && splitAt < r.end {
-			if r.start > 0 {
-				return r.start, true
-			}
-			return r.end, true
-		}
-	}
-	return splitAt, true
-}
-
-// splitMessageProtected ports stream-relay.ts splitMessage: split text into
-// segments of at most maxUnits UTF-16 code units, preferring paragraph (\n\n) >
-// newline (\n) > space > hard cut, never cutting through a protected range, and
-// guarding against splitting a surrogate pair. Offsets in `ranges` are UTF-16,
-// global to the full text. Returns segments with their global UTF-16 starts.
-func splitMessageProtected(text string, maxUnits int, ranges []protectedRange) []segment {
-	if maxUnits < 1 {
-		maxUnits = 1
-	}
-	units := utf16.Encode([]rune(text))
-	if len(units) <= maxUnits {
-		return []segment{{text: text, start: 0}}
-	}
-
-	var segs []segment
-	remaining := units
-	consumed := 0
-
-	for len(remaining) > 0 {
-		if len(remaining) <= maxUnits {
-			segs = append(segs, segment{text: decodeUTF16(remaining), start: consumed})
-			break
-		}
-
-		chunk := remaining[:maxUnits]
-		// Translate global ranges to local (relative to consumed).
-		var local []protectedRange
-		for _, r := range ranges {
-			if r.end > consumed && r.start < consumed+len(remaining) {
-				local = append(local, protectedRange{start: r.start - consumed, end: r.end - consumed})
-			}
-		}
-
-		splitAt := -1
-		try := func(candidate int) bool {
-			adj, ok := adjustSplitForProtectedRanges(candidate, local)
-			if !ok || adj <= 0 || adj > maxUnits {
-				return false
-			}
-			splitAt = adj
-			return true
-		}
-
-		// 1. Paragraph break.
-		if idx := lastIndexUnits(chunk, "\n\n"); idx > 0 {
-			try(idx + 2)
-		}
-		// 2. Newline.
-		if splitAt == -1 {
-			if idx := lastIndexUnits(chunk, "\n"); idx > 0 {
-				try(idx + 1)
-			}
-		}
-		// 3. Space.
-		if splitAt == -1 {
-			if idx := lastIndexUnits(chunk, " "); idx > 0 {
-				try(idx + 1)
-			}
-		}
-		// 4. Hard cut — avoid surrogate split and protected ranges.
-		if splitAt == -1 {
-			splitAt = maxUnits
-			if c := remaining[splitAt-1]; c >= 0xD800 && c <= 0xDBFF {
-				splitAt--
-			}
-			if adj, ok := adjustSplitForProtectedRanges(splitAt, local); ok && adj > 0 {
-				// adj < splitAt: a protected range with room before it → cut earlier.
-				// adj > splitAt: a mention longer than maxUnits starting at 0 → cut at
-				// its end so the whole mention stays in this (over-long) segment
-				// instead of being sliced through.
-				splitAt = adj
-			}
-		}
-
-		// adj from a start-0 oversized mention can exceed the remaining length;
-		// clamp so the slice below never panics.
-		if splitAt > len(remaining) {
-			splitAt = len(remaining)
-		}
-		segs = append(segs, segment{text: decodeUTF16(remaining[:splitAt]), start: consumed})
-		remaining = remaining[splitAt:]
-		consumed += splitAt
-	}
-
-	return segs
-}
-
-// lastIndexUnits returns the UTF-16 code-unit index of the last occurrence of
-// the (BMP-only) substring sub within units, or -1. sub must contain no
-// surrogate-pair characters (callers pass "\n\n", "\n", " ").
-func lastIndexUnits(units []uint16, sub string) int {
-	subUnits := utf16.Encode([]rune(sub))
-	if len(subUnits) == 0 || len(subUnits) > len(units) {
-		return -1
-	}
-	for i := len(units) - len(subUnits); i >= 0; i-- {
-		match := true
-		for j := range subUnits {
-			if units[i+j] != subUnits[j] {
-				match = false
-				break
-			}
-		}
-		if match {
-			return i
-		}
-	}
-	return -1
-}
-
-// decodeUTF16 turns a UTF-16 code-unit slice back into a Go string.
-func decodeUTF16(units []uint16) string {
-	return string(utf16.Decode(units))
 }

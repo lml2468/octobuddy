@@ -236,24 +236,9 @@ func nextFrame(buf []byte) (pt packetType, body []byte, consumed int, ok bool, e
 		return pt, nil, 1, true, nil
 	}
 
-	// Decode remaining-length varint starting at byte 1.
-	remLen := 0
-	mult := 1
-	i := 1
-	for {
-		if i > len(buf)-1 {
-			return 0, nil, 0, false, nil // incomplete varint
-		}
-		if i-1 >= maxVarlenBytes {
-			return 0, nil, 0, false, ErrVarintTooLong
-		}
-		digit := buf[i]
-		i++
-		remLen += int(digit&127) * mult
-		mult *= 128
-		if digit&0x80 == 0 {
-			break
-		}
+	remLen, i, ok, err := decodeFrameLength(buf)
+	if !ok || err != nil {
+		return 0, nil, 0, ok, err
 	}
 	if remLen > maxFrameBodyBytes {
 		return 0, nil, 0, false, fmt.Errorf("%w (%d > %d)", ErrFrameBodyTooLarge, remLen, maxFrameBodyBytes)
@@ -263,6 +248,27 @@ func nextFrame(buf []byte) (pt packetType, body []byte, consumed int, ok bool, e
 		return 0, nil, 0, false, nil // body not fully buffered
 	}
 	return pt, buf[i:total], total, true, nil
+}
+
+func decodeFrameLength(buf []byte) (remLen int, offset int, ok bool, err error) {
+	mult := 1
+	i := 1
+	for {
+		if i > len(buf)-1 {
+			return 0, 0, false, nil // incomplete varint
+		}
+		if i-1 >= maxVarlenBytes {
+			return 0, 0, false, ErrVarintTooLong
+		}
+		digit := buf[i]
+		i++
+		remLen += int(digit&127) * mult
+		mult *= 128
+		if digit&0x80 == 0 {
+			break
+		}
+	}
+	return remLen, i, true, nil
 }
 
 // flags extracts the low-nibble flags from a header byte (for RECV/CONNACK).

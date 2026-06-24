@@ -9,6 +9,17 @@ import (
 // configs: distinct ids, tokens, per-bot overrides, and derived data dirs under
 // each bot's own subtree.
 func TestMultiBotIsolation(t *testing.T) {
+	a, b := loadMultiBotIsolationConfig(t)
+
+	assertMultiBotTokensAndAPI(t, a, b)
+	assertMultiBotContextIsolation(t, a, b)
+	assertMultiBotDataDirs(t, a, b)
+	assertMultiBotSandboxDirs(t, a, b)
+}
+
+func loadMultiBotIsolationConfig(t *testing.T) (Resolved, Resolved) {
+	t.Helper()
+
 	dir := t.TempDir()
 	cfg := filepath.Join(dir, "config.json")
 	writeFile(t, cfg, `{
@@ -33,34 +44,52 @@ func TestMultiBotIsolation(t *testing.T) {
 	}
 	a, b := byID["alpha"], byID["beta"]
 
-	// distinct tokens
+	return a, b
+}
+
+func assertMultiBotTokensAndAPI(t *testing.T, a, b Resolved) {
+	t.Helper()
+
 	if a.OctoToken != "bf_alpha" || b.OctoToken != "bf_beta" {
 		t.Fatalf("tokens not isolated: %q %q", a.OctoToken, b.OctoToken)
 	}
-	// apiUrl is per-bot.
 	if a.APIURL != "https://octo.example" || b.APIURL != a.APIURL {
 		t.Fatalf("apiUrl wrong: %q %q", a.APIURL, b.APIURL)
 	}
-	// per-bot context override only affects beta; alpha keeps the global
+}
+
+func assertMultiBotContextIsolation(t *testing.T, a, b Resolved) {
+	t.Helper()
+
 	if a.Context.MaxContextChars != 4000 {
 		t.Fatalf("alpha context = %d, want global 4000", a.Context.MaxContextChars)
 	}
 	if b.Context.MaxContextChars != 9000 {
 		t.Fatalf("beta context = %d, want override 9000", b.Context.MaxContextChars)
 	}
-	// derived data dirs are under each bot's own subtree, and distinct
-	if a.DataDir != filepath.Join(dir, "alpha", "data") ||
-		b.DataDir != filepath.Join(dir, "beta", "data") {
+}
+
+func assertMultiBotDataDirs(t *testing.T, a, b Resolved) {
+	t.Helper()
+
+	base := filepath.Dir(filepath.Dir(a.DataDir))
+	if a.DataDir != filepath.Join(base, "alpha", "data") ||
+		b.DataDir != filepath.Join(base, "beta", "data") {
 		t.Fatalf("data dirs wrong: %q %q", a.DataDir, b.DataDir)
 	}
 	if a.DataDir == b.DataDir {
 		t.Fatalf("data dirs not isolated between bots")
 	}
-	// sandbox dirs are per-bot: distinct workspace/memory/.claude across bots.
+}
+
+func assertMultiBotSandboxDirs(t *testing.T, a, b Resolved) {
+	t.Helper()
+
 	if a.CwdBase == b.CwdBase || a.MemoryBase == b.MemoryBase || a.ClaudeConfigDir == b.ClaudeConfigDir {
 		t.Fatalf("sandbox dirs not isolated: %+v / %+v", a, b)
 	}
-	if a.CwdBase != filepath.Join(dir, "alpha", "workspace") {
+	base := filepath.Dir(filepath.Dir(a.CwdBase))
+	if a.CwdBase != filepath.Join(base, "alpha", "workspace") {
 		t.Fatalf("alpha CwdBase wrong: %q", a.CwdBase)
 	}
 }

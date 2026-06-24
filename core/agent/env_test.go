@@ -34,39 +34,50 @@ func TestMergedEnvAllowlistsAndOverrides(t *testing.T) {
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "AKIA-leak-canary")
 
 	env := mergedEnv([]string{"OCTOBUDDY_TEST_EXTRA=added", "LANG=override-via-extra"})
+	seen := scanMergedEnv(env)
+	if !seen.sawLang {
+		t.Error("LANG (allowlisted) did not pass through")
+	}
+	if !seen.sawLCTime {
+		t.Error("LC_TIME (LC_* family) did not pass through")
+	}
+	if seen.sawAWS {
+		t.Error("AWS_SECRET_ACCESS_KEY (non-allowlisted) leaked through — env allowlist regression")
+	}
+	if !seen.sawExtra {
+		t.Error("extra entry did not append")
+	}
+	if seen.lastLang != "override-via-extra" {
+		t.Errorf("extra must come last (win), last LANG = %q", seen.lastLang)
+	}
+}
 
-	var sawLang, sawLCTime, sawAWS, sawExtra bool
-	lastLang := ""
+type mergedEnvSeen struct {
+	sawLang   bool
+	sawLCTime bool
+	sawAWS    bool
+	sawExtra  bool
+	lastLang  string
+}
+
+func scanMergedEnv(env []string) mergedEnvSeen {
+	var seen mergedEnvSeen
 	for _, e := range env {
 		switch {
 		case e == "LANG=en_US.UTF-8":
-			sawLang = true
-			lastLang = "from-os"
+			seen.sawLang = true
+			seen.lastLang = "from-os"
 		case e == "LANG=override-via-extra":
-			lastLang = "override-via-extra"
+			seen.lastLang = "override-via-extra"
 		case e == "LC_TIME=en_US.UTF-8":
-			sawLCTime = true
+			seen.sawLCTime = true
 		case e == "AWS_SECRET_ACCESS_KEY=AKIA-leak-canary":
-			sawAWS = true
+			seen.sawAWS = true
 		case e == "OCTOBUDDY_TEST_EXTRA=added":
-			sawExtra = true
+			seen.sawExtra = true
 		}
 	}
-	if !sawLang {
-		t.Error("LANG (allowlisted) did not pass through")
-	}
-	if !sawLCTime {
-		t.Error("LC_TIME (LC_* family) did not pass through")
-	}
-	if sawAWS {
-		t.Error("AWS_SECRET_ACCESS_KEY (non-allowlisted) leaked through — env allowlist regression")
-	}
-	if !sawExtra {
-		t.Error("extra entry did not append")
-	}
-	if lastLang != "override-via-extra" {
-		t.Errorf("extra must come last (win), last LANG = %q", lastLang)
-	}
+	return seen
 }
 
 // TestClaudeDriverInjectsEnv spawns a fake "claude" that echoes an env var; the
@@ -114,27 +125,43 @@ exit 3
 		t.Fatal(err)
 	}
 
-	var session, text, stderrErr, exitErr bool
-	for ev := range ch { // must drain to a clean close (no panic)
-		switch {
-		case ev.Kind == KindSessionStarted && ev.SessionID == "s1":
-			session = true
-		case ev.Kind == KindTextDelta && ev.Text == "hi":
-			text = true
-		case ev.Kind == KindError && ev.Recoverable && ev.Err == "a warning on stderr":
-			stderrErr = true
-		case ev.Kind == KindError && strings.Contains(ev.Err, "claude exited"):
-			exitErr = true
-		}
+	events := collectClaudeDrainEvents(ch)
+	if !events.session || !events.text {
+		t.Fatalf("missing stdout events: session=%v text=%v", events.session, events.text)
 	}
-	if !session || !text {
-		t.Fatalf("missing stdout events: session=%v text=%v", session, text)
-	}
-	if !stderrErr {
+	if !events.stderrErr {
 		t.Fatal("stderr line was not surfaced as a recoverable error event")
 	}
-	if !exitErr {
+	if !events.exitErr {
 		t.Fatal("non-zero exit was not surfaced as an error event")
+	}
+}
+
+type claudeDrainEvents struct {
+	session   bool
+	text      bool
+	stderrErr bool
+	exitErr   bool
+}
+
+func collectClaudeDrainEvents(ch <-chan AgentEvent) claudeDrainEvents {
+	var events claudeDrainEvents
+	for ev := range ch {
+		markClaudeDrainEvent(&events, ev)
+	}
+	return events
+}
+
+func markClaudeDrainEvent(events *claudeDrainEvents, ev AgentEvent) {
+	switch {
+	case ev.Kind == KindSessionStarted && ev.SessionID == "s1":
+		events.session = true
+	case ev.Kind == KindTextDelta && ev.Text == "hi":
+		events.text = true
+	case ev.Kind == KindError && ev.Recoverable && ev.Err == "a warning on stderr":
+		events.stderrErr = true
+	case ev.Kind == KindError && strings.Contains(ev.Err, "claude exited"):
+		events.exitErr = true
 	}
 }
 
@@ -201,18 +228,7 @@ func TestAgentStdinIsPromptNotTokenPipe(t *testing.T) {
 	const token = "OCTOBUDDY-CAP-TOKEN-sentinel-do-not-leak-7f3a9c"
 	const prompt = "the-real-prompt-payload"
 
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Pre-fill the pipe with the token (well under the 64 KiB pipe buffer, so
-	// the writes never block without a reader). A buggy child that inherited
-	// fd 0 would then read the token rather than the prompt — a clear failure.
-	for i := 0; i < 256; i++ {
-		if _, err := w.WriteString(token + "\n"); err != nil {
-			t.Fatalf("seed token pipe: %v", err)
-		}
-	}
+	r, w := seedTokenPipe(t, token)
 
 	oldStdin := os.Stdin
 	os.Stdin = r
@@ -222,9 +238,36 @@ func TestAgentStdinIsPromptNotTokenPipe(t *testing.T) {
 		r.Close()
 	})
 
-	// Fake agent CLI: read its fd 0, report what it saw on stderr (which the
-	// driver surfaces as a recoverable-error event), then emit a valid
-	// stream-json init line so the turn terminates cleanly.
+	report, sawReport := captureFakeAgentStdinReport(t, prompt)
+	if !sawReport {
+		t.Fatal("fake agent did not report its fd 0 contents")
+	}
+	if strings.Contains(report, token) {
+		t.Fatalf("agent fd 0 leaked the daemon capability token: %q", report)
+	}
+	if report != "STDIN0:["+prompt+"]" {
+		t.Fatalf("agent fd 0 must carry exactly the prompt; got %q", report)
+	}
+}
+
+func seedTokenPipe(t *testing.T, token string) (*os.File, *os.File) {
+	t.Helper()
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 256; i++ {
+		if _, err := w.WriteString(token + "\n"); err != nil {
+			t.Fatalf("seed token pipe: %v", err)
+		}
+	}
+	return r, w
+}
+
+func captureFakeAgentStdinReport(t *testing.T, prompt string) (string, bool) {
+	t.Helper()
+
 	bin := writeFakeBin(t, `
 data=$(cat)
 echo '{"type":"system","subtype":"init","session_id":"s1"}'
@@ -238,18 +281,10 @@ printf 'STDIN0:[%s]\n' "$data" 1>&2
 
 	var report string
 	var sawReport bool
-	for ev := range ch { // drain to a clean close
+	for ev := range ch {
 		if strings.HasPrefix(ev.Err, "STDIN0:") && !sawReport {
 			report, sawReport = ev.Err, true
 		}
 	}
-	if !sawReport {
-		t.Fatal("fake agent did not report its fd 0 contents")
-	}
-	if strings.Contains(report, token) {
-		t.Fatalf("agent fd 0 leaked the daemon capability token: %q", report)
-	}
-	if report != "STDIN0:["+prompt+"]" {
-		t.Fatalf("agent fd 0 must carry exactly the prompt; got %q", report)
-	}
+	return report, sawReport
 }

@@ -141,25 +141,54 @@ func (l *Loader) loadFile(id string) (string, bool) {
 	leaf := id + ".md"
 
 	st, err := safepath.SafeLstat(l.dir, leaf)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			// Surface symlink refusal / EACCES / EIO so the operator can
-			// tell "no GROUP.md" from "configured but rejected" — the prior
-			// silent empty-cache made misconfigured perms or an
-			// agent-planted symlink indistinguishable from a missing file.
-			fmt.Fprintf(os.Stderr, "[groupmd] refusing %s: %v\n", path, err)
-		}
-		// Missing, symlinked-leaf-refused, or symlinked-intermediate-refused —
-		// remember absence so a repeated miss is cheap; an unrelated load that
-		// later succeeds picks up the new content (SafeLstat runs every Load).
-		l.remember(path, cacheEntry{})
+	if l.rejectUnreadableFile(path, err) {
 		return "", false
 	}
-	if !st.Mode().IsRegular() {
-		l.remember(path, cacheEntry{modTime: st.ModTime().UnixNano(), size: st.Size()})
+	if l.rejectNonRegularFile(path, st) {
+		return "", false
+	}
+	if l.rejectWritableFile(path, st) {
 		return "", false
 	}
 
+	// Fast path: unchanged since last read (mtime + size both match).
+	mod := st.ModTime().UnixNano()
+	if cached, ok := l.lookupUnchanged(path, mod, st.Size()); ok {
+		return cached.content, cached.content != ""
+	}
+
+	content := readCapped(l.dir, leaf)
+	l.remember(path, cacheEntry{modTime: mod, size: st.Size(), content: content})
+	return content, content != ""
+}
+
+func (l *Loader) rejectUnreadableFile(path string, err error) bool {
+	if err == nil {
+		return false
+	}
+	if !os.IsNotExist(err) {
+		// Surface symlink refusal / EACCES / EIO so the operator can tell "no
+		// GROUP.md" from "configured but rejected" — the prior silent empty-cache
+		// made misconfigured perms or an agent-planted symlink indistinguishable
+		// from a missing file.
+		fmt.Fprintf(os.Stderr, "[groupmd] refusing %s: %v\n", path, err)
+	}
+	// Missing, symlinked-leaf-refused, or symlinked-intermediate-refused —
+	// remember absence so a repeated miss is cheap; an unrelated load that later
+	// succeeds picks up the new content (SafeLstat runs every Load).
+	l.remember(path, cacheEntry{})
+	return true
+}
+
+func (l *Loader) rejectNonRegularFile(path string, st os.FileInfo) bool {
+	if st.Mode().IsRegular() {
+		return false
+	}
+	l.remember(path, cacheEntry{modTime: st.ModTime().UnixNano(), size: st.Size()})
+	return true
+}
+
+func (l *Loader) rejectWritableFile(path string, st os.FileInfo) bool {
 	// Defense-in-depth: refuse a group/world-writable file. Its contents are
 	// injected UNSANITIZED into the system prompt, so a file anyone-but-the-
 	// operator can write is an untrusted injection sink. This is NOT a substitute
@@ -167,25 +196,24 @@ func (l *Loader) loadFile(id string) (string, bool) {
 	//
 	// Runs BEFORE the cache hot path: a `chmod 0666` that doesn't touch mtime
 	// would otherwise keep the previously-cached content live indefinitely
-	// (the perm check ran only on the slow path, so a stale cache hit
-	// silently bypassed the guard).
-	if st.Mode().Perm()&0o022 != 0 {
-		fmt.Fprintf(os.Stderr,
-			"[groupmd] refusing %s: file is group/world-writable (mode %04o). Make it writable only by the gateway user.\n",
-			path, st.Mode().Perm())
-		l.remember(path, cacheEntry{modTime: st.ModTime().UnixNano(), size: st.Size()})
-		return "", false
+	// (the perm check ran only on the slow path, so a stale cache hit silently
+	// bypassed the guard).
+	if st.Mode().Perm()&0o022 == 0 {
+		return false
 	}
+	fmt.Fprintf(os.Stderr,
+		"[groupmd] refusing %s: file is group/world-writable (mode %04o). Make it writable only by the gateway user.\n",
+		path, st.Mode().Perm())
+	l.remember(path, cacheEntry{modTime: st.ModTime().UnixNano(), size: st.Size()})
+	return true
+}
 
-	// Fast path: unchanged since last read (mtime + size both match).
-	mod := st.ModTime().UnixNano()
-	if cached, ok := l.lookup(path); ok && cached.modTime == mod && cached.size == st.Size() {
-		return cached.content, cached.content != ""
+func (l *Loader) lookupUnchanged(path string, modTime, size int64) (cacheEntry, bool) {
+	cached, ok := l.lookup(path)
+	if ok && cached.modTime == modTime && cached.size == size {
+		return cached, true
 	}
-
-	content := readCapped(l.dir, leaf)
-	l.remember(path, cacheEntry{modTime: mod, size: st.Size(), content: content})
-	return content, content != ""
+	return cacheEntry{}, false
 }
 
 // readCapped reads at most MaxBytes+1 bytes (so an oversized file can't allocate

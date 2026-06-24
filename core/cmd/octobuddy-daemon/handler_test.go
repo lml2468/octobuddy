@@ -3,12 +3,15 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/lml2468/octobuddy/core/config"
 	"github.com/lml2468/octobuddy/core/control"
 	"github.com/lml2468/octobuddy/core/control/wire"
+	"github.com/lml2468/octobuddy/core/im/octo"
+	"github.com/lml2468/octobuddy/core/router"
 )
 
 // TestSecretInjectHandler verifies the multi-bot secret.inject command routes a
@@ -47,4 +50,35 @@ func TestSecretInjectHandler(t *testing.T) {
 	if _, err := inject(control.SecretInjectBody{BotID: "b1", Kind: "bogus", Value: "x"}); err == nil {
 		t.Fatal("unknown kind should error")
 	}
+
+	exerciseBotAssemblyHelpers(t)
+}
+
+func exerciseBotAssemblyHelpers(t *testing.T) {
+	t.Helper()
+
+	base := t.TempDir()
+	cfg := config.Resolved{
+		BotID:           "b2",
+		DataDir:         filepath.Join(base, "data"),
+		ClaudeConfigDir: filepath.Join(base, "claude"),
+	}
+	if err := prepareBotDirs(cfg); err != nil {
+		t.Fatalf("prepareBotDirs: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	rt := router.New(router.Config{})
+	startRouterReaper(ctx, rt)
+	cancel()
+
+	connector := octo.NewConnector(octo.NewRESTClient("http://unused", func() string { return "" }))
+	target := &botTarget{id: "b2"}
+	drainBotRuntime(nil, connector, target)
+	startBotCron(nil, "b2")
+
+	cronOff := false
+	cfg.Agent.Cron = &cronOff
+	_ = newBotCronManager(context.Background(), cfg, connector, nil, target)
+	registerBotRuntime(&botRuntime{cfg: cfg, connector: connector}, newBotRegistry(nil), nil)
 }

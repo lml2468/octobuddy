@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"io"
 	"net"
@@ -111,37 +112,11 @@ func TestSessionHistoryGatedEndToEnd(t *testing.T) {
 	defer conn.Close()
 	sc := control.NewScanner(conn)
 
-	roundTrip := func(id, cmdType string, body any) control.Envelope {
-		t.Helper()
-		raw, _ := json.Marshal(body)
-		line, _ := control.Encode(control.Envelope{Kind: control.KindCommand, ID: id, Type: cmdType, Body: raw})
-		if _, err := conn.Write(line); err != nil {
-			t.Fatalf("write %s: %v", cmdType, err)
-		}
-		if !sc.Scan() {
-			t.Fatalf("no response to %s: %v", cmdType, sc.Err())
-		}
-		env, err := control.Decode(sc.Bytes())
-		if err != nil {
-			t.Fatalf("decode %s response: %v", cmdType, err)
-		}
-		return env
-	}
-
-	isUnauthorized := func(env control.Envelope) bool {
-		if env.Type != "error" {
-			return false
-		}
-		var eb control.ErrorBody
-		_ = json.Unmarshal(env.Body, &eb)
-		return strings.Contains(eb.Message, "unauthorized")
-	}
-
 	// Unauthenticated: both privileged reads are refused before dispatch.
-	if env := roundTrip("h1", "session.history", control.SessionHistoryBody{BotID: "b1", SessionKey: "victim", Limit: 1000}); !isUnauthorized(env) {
+	if env := roundTripControl(t, conn, sc, "h1", "session.history", control.SessionHistoryBody{BotID: "b1", SessionKey: "victim", Limit: 1000}); !isUnauthorized(env) {
 		t.Fatalf("unauthenticated session.history must be rejected, got %+v", env)
 	}
-	if env := roundTrip("c1", "cron.list", control.CronListBody{BotID: "b1"}); !isUnauthorized(env) {
+	if env := roundTripControl(t, conn, sc, "c1", "cron.list", control.CronListBody{BotID: "b1"}); !isUnauthorized(env) {
 		t.Fatalf("unauthenticated cron.list must be rejected, got %+v", env)
 	}
 	if handlerHits != 0 {
@@ -149,15 +124,41 @@ func TestSessionHistoryGatedEndToEnd(t *testing.T) {
 	}
 
 	// Authenticate (the GUI's first send), then the same command dispatches.
-	if env := roundTrip("a1", control.CmdAuth, control.AuthBody{Token: token}); env.Type == "error" {
+	if env := roundTripControl(t, conn, sc, "a1", control.CmdAuth, control.AuthBody{Token: token}); env.Type == "error" {
 		t.Fatalf("auth with valid token should succeed, got %+v", env)
 	}
-	if env := roundTrip("h2", "session.history", control.SessionHistoryBody{BotID: "b1", SessionKey: "self", Limit: 40}); env.Type == "error" {
+	if env := roundTripControl(t, conn, sc, "h2", "session.history", control.SessionHistoryBody{BotID: "b1", SessionKey: "self", Limit: 40}); env.Type == "error" {
 		t.Fatalf("authenticated session.history should dispatch, got %+v", env)
 	}
 	if handlerHits != 1 {
 		t.Fatalf("expected exactly one handler hit after auth, got %d", handlerHits)
 	}
+}
+
+func roundTripControl(t *testing.T, conn net.Conn, sc *bufio.Scanner, id, cmdType string, body any) control.Envelope {
+	t.Helper()
+	raw, _ := json.Marshal(body)
+	line, _ := control.Encode(control.Envelope{Kind: control.KindCommand, ID: id, Type: cmdType, Body: raw})
+	if _, err := conn.Write(line); err != nil {
+		t.Fatalf("write %s: %v", cmdType, err)
+	}
+	if !sc.Scan() {
+		t.Fatalf("no response to %s: %v", cmdType, sc.Err())
+	}
+	env, err := control.Decode(sc.Bytes())
+	if err != nil {
+		t.Fatalf("decode %s response: %v", cmdType, err)
+	}
+	return env
+}
+
+func isUnauthorized(env control.Envelope) bool {
+	if env.Type != "error" {
+		return false
+	}
+	var eb control.ErrorBody
+	_ = json.Unmarshal(env.Body, &eb)
+	return strings.Contains(eb.Message, "unauthorized")
 }
 
 // pipeListener is an in-memory net.Listener over net.Pipe, mirroring the helper

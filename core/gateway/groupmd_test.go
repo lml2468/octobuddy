@@ -20,13 +20,26 @@ func TestGroupMDInjection(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	gw, drv := newGroupMDGateway(t, dir)
+
+	assertGroupMDGroupTurn(t, gw, drv)
+	assertGroupMDDMTurn(t, dir, gw, drv)
+}
+
+func newGroupMDGateway(t *testing.T, dir string) (*Gateway, *fakeDriver) {
+	t.Helper()
+
 	st := newTestStore(t)
 	drv := &fakeDriver{threadID: "t", reply: "ok"}
 	gw := New(drv, st, router.New(router.Config{MaxPerMinute: 100}), newCaptureSink()).
 		WithSystemPrompt("you are OctoBuddy").
 		WithGroupMD(groupmd.New(dir))
+	return gw, drv
+}
 
-	// Group turn for channel c1 → instructions injected.
+func assertGroupMDGroupTurn(t *testing.T, gw *Gateway, drv *fakeDriver) {
+	t.Helper()
+
 	if _, err := gw.Handle(context.Background(), router.InboundMessage{
 		ChannelType: router.ChannelGroup, ChannelID: "c1", FromUID: "bob", FromName: "bob",
 		Text: "hi", Mentioned: true,
@@ -47,9 +60,11 @@ func TestGroupMDInjection(t *testing.T) {
 	if !(secIdx >= 0 && secIdx < soulIdx && soulIdx < instrIdx) {
 		t.Fatalf("ordering wrong: sec=%d soul=%d instr=%d\n%s", secIdx, soulIdx, instrIdx, sp)
 	}
+}
 
-	// DM turn (no shared channel) → no group instructions even if a file with the
-	// peer id existed.
+func assertGroupMDDMTurn(t *testing.T, dir string, gw *Gateway, drv *fakeDriver) {
+	t.Helper()
+
 	if err := os.WriteFile(filepath.Join(dir, "dave.md"), []byte("secret persona"), 0o644); err != nil {
 		t.Fatal(err)
 	}

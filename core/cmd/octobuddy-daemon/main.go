@@ -16,14 +16,12 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"flag"
 	"fmt"
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
 
@@ -38,52 +36,131 @@ import (
 )
 
 func main() {
-	var (
-		claudeBin   = flag.String("claude-bin", "", "claude executable (default: 'claude' on PATH)")
-		fromUID     = flag.String("uid", "repl-user", "synthetic from_uid for REPL inbound (DM session key)")
-		dbPath      = flag.String("db", filepath.Join(os.TempDir(), "octobuddy-daemon.db"), "sqlite path")
-		maxPerMin   = flag.Int("rate", 30, "max messages per minute per session")
-		controlSock = flag.String("control", "", "serve the control bus on this Unix socket path (enables GUI clients)")
-		noREPL      = flag.Bool("no-repl", false, "disable the stdin REPL (control-bus only)")
-		octoAPI     = flag.String("octo-api", "", "Octo API base URL (enables the Octo IM connector)")
-		octoToken   = flag.String("octo-token", "", "Octo bot token (bf_*); or set OCTOBUDDY_OCTO_TOKEN")
-		configPath  = flag.String("config", "", "load ~/.octobuddy/config.json (or given path) and run all configured bots")
-		exitParent  = flag.Bool("exit-with-parent", false, "exit when the parent process dies (set by the GUI so the daemon never outlives the app)")
-		authStdin   = flag.Bool("control-auth-stdin", false, "read the control-bus capability token as the first line of stdin (set by the GUI; out-of-band, never an env/argv). Off = no token: privileged bus commands are denied")
-	)
-	flag.Parse()
+	flags := parseDaemonFlags()
 
 	// Config mode: load the single ~/.octobuddy/config.json and run every bot in its
 	// own isolated stack. Mutually exclusive with the single-bot flag front ends.
 	// `-config` with no value uses the default ~/.octobuddy/config.json. `-control`
 	// additionally serves the bus so a GUI can manage all bots.
 	if configFlagSet() {
-		runConfigMode(*configPath, *controlSock, *exitParent, *authStdin)
+		runConfigMode(flags.configPath, flags.controlSock, flags.exitParent, flags.authStdin)
 		return
 	}
 
-	st, err := store.Open(*dbPath)
+	runSingleBotMode(flags)
+}
+
+type daemonFlags struct {
+	claudeBin   string
+	fromUID     string
+	dbPath      string
+	maxPerMin   int
+	controlSock string
+	noREPL      bool
+	octoAPI     string
+	octoToken   string
+	configPath  string
+	exitParent  bool
+	authStdin   bool
+}
+
+func parseDaemonFlags() daemonFlags {
+	claudeBin := flag.String("claude-bin", "", "claude executable (default: 'claude' on PATH)")
+	fromUID := flag.String("uid", "repl-user", "synthetic from_uid for REPL inbound (DM session key)")
+	dbPath := flag.String("db", filepath.Join(os.TempDir(), "octobuddy-daemon.db"), "sqlite path")
+	maxPerMin := flag.Int("rate", 30, "max messages per minute per session")
+	controlSock := flag.String("control", "", "serve the control bus on this Unix socket path (enables GUI clients)")
+	noREPL := flag.Bool("no-repl", false, "disable the stdin REPL (control-bus only)")
+	octoAPI := flag.String("octo-api", "", "Octo API base URL (enables the Octo IM connector)")
+	octoToken := flag.String("octo-token", "", "Octo bot token (bf_*); or set OCTOBUDDY_OCTO_TOKEN")
+	configPath := flag.String("config", "", "load ~/.octobuddy/config.json (or given path) and run all configured bots")
+	exitParent := flag.Bool("exit-with-parent", false, "exit when the parent process dies (set by the GUI so the daemon never outlives the app)")
+	authStdin := flag.Bool("control-auth-stdin", false, "read the control-bus capability token as the first line of stdin (set by the GUI; out-of-band, never an env/argv). Off = no token: privileged bus commands are denied")
+	flag.Parse()
+	return daemonFlags{
+		claudeBin:   *claudeBin,
+		fromUID:     *fromUID,
+		dbPath:      *dbPath,
+		maxPerMin:   *maxPerMin,
+		controlSock: *controlSock,
+		noREPL:      *noREPL,
+		octoAPI:     *octoAPI,
+		octoToken:   *octoToken,
+		configPath:  *configPath,
+		exitParent:  *exitParent,
+		authStdin:   *authStdin,
+	}
+}
+
+func runSingleBotMode(flags daemonFlags) {
+	st, err := store.Open(flags.dbPath)
 	if err != nil {
 		fatal("store open: %v", err)
 	}
 	defer st.Close()
 
-	drv := agent.NewClaudeDriver(*claudeBin)
+	drv := agent.NewClaudeDriver(flags.claudeBin)
 
 	started := time.Now()
 
-	// Run context: cancelled on SIGINT/SIGTERM so an in-flight control-bus turn
-	// (session.send) and the IM connector shut down cleanly and the deferred
-	// cleanup (socket removal, store close) actually runs — previously a bare
-	// context meant Ctrl-C killed the process with defers unexecuted.
+	// Signal cancellation lets control-bus and IM turns finish before defers run.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// Lone secret store for the single-bot flag path: seeded from the flag/env
-	// token, updatable via secret.inject over the control bus. The driver reads
-	// any injected gateway token lazily per turn.
+	// Single-bot secrets are seeded from flags/env and can be updated via control.
 	sec := &secretStore{}
-	drv.EnvFn = func() []string {
+	drv.EnvFn = singleBotEnvFn(sec, flags.octoAPI)
+
+	rt := router.New(router.Config{MaxPerMinute: flags.maxPerMin})
+	sinks, srv := singleBotSinks(flags.controlSock)
+	connector := singleBotConnector(flags.octoAPI, flags.octoToken, sec, &sinks)
+	gw := singleBotGateway(drv, st, rt, sinks, connector)
+
+	if srv != nil {
+		waitTurns, closeBus := configureSingleBotControl(ctx, srv, gw, st, drv, sec, started, flags)
+		defer waitTurns()
+		defer closeBus()
+	}
+
+	if connector != nil {
+		startSingleBotConnector(ctx, connector, gw, flags.octoAPI)
+		defer connector.WaitTurns()
+	}
+
+	fmt.Printf("octobuddy-daemon — driver=%s caps=%+v\n", drv.Name(), drv.Capabilities())
+	fmt.Printf("db=%s  session=dm:%s\n", flags.dbPath, flags.fromUID)
+
+	if flags.noREPL || connector != nil {
+		waitSingleBot(ctx, stop, flags.exitParent)
+		return
+	}
+
+	fmt.Println("type a message and press enter; /reset clears the session; Ctrl-D to exit")
+	runREPL(context.Background(), gw, st, flags.fromUID)
+}
+
+func singleBotSinks(controlSock string) (multiSink, *control.Server) {
+	sinks := multiSink{&stdoutSink{}}
+	if controlSock == "" {
+		return sinks, nil
+	}
+	srv := control.NewServer(nil)
+	sinks = append(sinks, control.NewEventSink(srv))
+	return sinks, srv
+}
+
+func singleBotGateway(drv agent.Driver, st *store.Store, rt *router.Router, sinks multiSink, connector *octo.Connector) *gateway.Gateway {
+	gw := gateway.New(drv, st, rt, sinks)
+	if connector == nil {
+		return gw
+	}
+	return gw.WithGroupContext(groupctx.New(6000)).
+		WithMediaAuth(connector.MediaAuth()).
+		WithGroupBackfill(connector.BotUID, connector.BackfillFetch)
+}
+
+func singleBotEnvFn(sec *secretStore, octoAPI string) func() []string {
+	return func() []string {
 		var out []string
 		if t := sec.GatewayToken(); t != "" {
 			out = append(out, "ANTHROPIC_AUTH_TOKEN="+t)
@@ -93,235 +170,60 @@ func main() {
 		if t := sec.OctoToken(); t != "" {
 			out = append(out, "OCTO_BOT_TOKEN="+t)
 		}
-		if *octoAPI != "" {
-			out = append(out, "OCTO_API_BASE_URL="+*octoAPI)
+		if octoAPI != "" {
+			out = append(out, "OCTO_API_BASE_URL="+octoAPI)
 		}
 		return out
 	}
+}
 
-	// Sinks fan out: stdout always, control bus + Octo connector when enabled.
-	sinks := multiSink{&stdoutSink{}}
-	rt := router.New(router.Config{MaxPerMinute: *maxPerMin})
-
-	var srv *control.Server
-	if *controlSock != "" {
-		srv = control.NewServer(nil) // handler installed after gw exists
-		sinks = append(sinks, control.NewEventSink(srv))
-	}
-
-	// Octo IM connector: it is both an inbound source (feeds the gateway) and a
-	// gateway.Sink (delivers replies via REST), so build it before the gateway.
-	token := *octoToken
+func singleBotConnector(octoAPI, octoToken string, sec *secretStore, sinks *multiSink) *octo.Connector {
+	token := octoToken
 	if token == "" {
 		token = os.Getenv("OCTOBUDDY_OCTO_TOKEN")
 	}
-	var connector *octo.Connector
-	if *octoAPI != "" {
-		if token == "" {
-			fatal("-octo-api set but no token (use -octo-token or OCTOBUDDY_OCTO_TOKEN)")
-		}
-		_ = sec.Set(wire.SecretKindOcto, token)
-		connector = octo.NewConnector(octo.NewRESTClient(*octoAPI, sec.OctoToken))
-		sinks = append(sinks, connector)
+	if octoAPI == "" {
+		return nil
 	}
-
-	gw := gateway.New(drv, st, rt, sinks)
-	// Group-context injection is useful whenever an IM front end is active.
-	if connector != nil {
-		gw = gw.WithGroupContext(groupctx.New(6000)).
-			WithMediaAuth(connector.MediaAuth()).
-			WithGroupBackfill(connector.BotUID, connector.BackfillFetch)
+	if token == "" {
+		fatal("-octo-api set but no token (use -octo-token or OCTOBUDDY_OCTO_TOKEN)")
 	}
-
-	if srv != nil {
-		handler, target := makeCommandHandler(ctx, gw, st, drv, sec, srv, started)
-		srv.SetHandler(handler)
-		configureBusAuth(srv, *authStdin) // arm the capability-token gate before serving
-		// Wait for control-bus turns to finish before defer st.Close fires.
-		// Defers are LIFO; the actual single-bot shutdown chain is:
-		//   connector.WaitTurns (registered below)
-		//   → close control listener (serveControlBus) — refuses new commands
-		//   → wait for in-flight session.send (target.turnsWG, here)
-		//   → signal stop()
-		//   → st.Close (the earliest defer at the top of main)
-		defer target.turnsWG.Wait()
-		defer serveControlBus(srv, *controlSock)()
-	}
-
-	if connector != nil {
-		connector.SetGateway(gw)
-		// Wait for any in-flight drainTurns workers before st.Close fires.
-		defer connector.WaitTurns()
-		go func() {
-			if err := connector.Run(ctx); err != nil {
-				fmt.Fprintf(os.Stderr, "octo connector: %v\n", err)
-			}
-		}()
-		fmt.Printf("octo connector started (api=%s)\n", *octoAPI)
-	}
-
-	fmt.Printf("octobuddy-daemon — driver=%s caps=%+v\n", drv.Name(), drv.Capabilities())
-	fmt.Printf("db=%s  session=dm:%s\n", *dbPath, *fromUID)
-
-	if *noREPL || connector != nil {
-		// Exit when the parent dies (GUI use) by cancelling ctx, so the same
-		// deferred cleanup runs as on a signal — not os.Exit, which skips defers (L32).
-		if *exitParent {
-			watchParentExit(func() {
-				fmt.Fprintln(os.Stderr, "parent exited; shutting down")
-				stop()
-			})
-		}
-		fmt.Println("running (control bus / IM connector); press Ctrl-C to exit")
-		<-ctx.Done() // block until a signal or parent-exit cancels the context
-		fmt.Fprintln(os.Stderr, "shutting down")
-		return
-	}
-
-	fmt.Println("type a message and press enter; /reset clears the session; Ctrl-D to exit")
-
-	runREPL(context.Background(), gw, st, *fromUID)
+	_ = sec.Set(wire.SecretKindOcto, token)
+	connector := octo.NewConnector(octo.NewRESTClient(octoAPI, sec.OctoToken))
+	*sinks = append(*sinks, connector)
+	return connector
 }
 
-// runREPL reads stdin lines and feeds each as an inbound DM through the gateway.
-func runREPL(ctx context.Context, gw *gateway.Gateway, st *store.Store, fromUID string) {
-	sc := bufio.NewScanner(os.Stdin)
-	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-	for {
-		fmt.Print("\n> ")
-		if !sc.Scan() {
-			break
-		}
-		text := strings.TrimSpace(sc.Text())
-		if text == "" {
-			continue
-		}
-		if text == "/reset" {
-			_ = st.ClearResume(fromUID)
-			fmt.Println("(session reset)")
-			continue
-		}
+func configureSingleBotControl(ctx context.Context, srv *control.Server, gw *gateway.Gateway, st *store.Store, drv *agent.ClaudeDriver, sec *secretStore, started time.Time, flags daemonFlags) (func(), func()) {
+	handler, target := makeCommandHandler(ctx, gw, st, drv, sec, srv, started)
+	srv.SetHandler(handler)
+	configureBusAuth(srv, flags.authStdin)
+	return target.turnsWG.Wait, serveControlBus(srv, flags.controlSock)
+}
 
-		d, err := gw.Handle(ctx, router.InboundMessage{
-			ChannelType: router.ChannelDM,
-			FromUID:     fromUID,
-			FromName:    fromUID,
-			Text:        text,
+func startSingleBotConnector(ctx context.Context, connector *octo.Connector, gw *gateway.Gateway, octoAPI string) {
+	connector.SetGateway(gw)
+	go func() {
+		if err := connector.Run(ctx); err != nil {
+			fmt.Fprintf(os.Stderr, "octo connector: %v\n", err)
+		}
+	}()
+	fmt.Printf("octo connector started (api=%s)\n", octoAPI)
+}
+
+func waitSingleBot(ctx context.Context, stop context.CancelFunc, exitParent bool) {
+	if exitParent {
+		watchParentExit(func() {
+			fmt.Fprintln(os.Stderr, "parent exited; shutting down")
+			stop()
 		})
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "handle error: %v\n", err)
-			continue
-		}
-		if d != router.Accepted {
-			fmt.Printf("(dropped: %s)\n", d)
-		}
 	}
-}
-
-// stdoutSink renders the live event stream and the final reply to the terminal.
-type stdoutSink struct{}
-
-func (s *stdoutSink) OnEvent(sessionKey string, ev agent.AgentEvent) {
-	switch ev.Kind {
-	case agent.KindSessionStarted:
-		fmt.Printf("  [session] %s\n", ev.SessionID)
-	case agent.KindTextDelta:
-		fmt.Printf("  [text]    %s\n", oneLine(ev.Text))
-	case agent.KindThinking:
-		fmt.Printf("  [think]   %s\n", oneLine(ev.Text))
-	case agent.KindToolUse:
-		fmt.Printf("  [tool]    🔧 %s(%s)\n", ev.ToolName, ev.ToolParams)
-	case agent.KindToolResult:
-		fmt.Printf("  [result]  (tool returned)\n")
-	case agent.KindTurnDone:
-		if ev.Usage != nil {
-			line := fmt.Sprintf("  [done]    in=%d out=%d tokens", ev.Usage.InputTokens, ev.Usage.OutputTokens)
-			if ev.Usage.CachedInputTokens > 0 {
-				line += fmt.Sprintf(" (cached=%d)", ev.Usage.CachedInputTokens)
-			}
-			if ev.Usage.CostUSD > 0 {
-				line += fmt.Sprintf(" cost=$%.4f", ev.Usage.CostUSD)
-			}
-			fmt.Println(line)
-		} else {
-			fmt.Printf("  [done]\n")
-		}
-	case agent.KindError:
-		tag := "ERR"
-		if ev.Recoverable {
-			tag = "retry"
-		}
-		fmt.Printf("  [%s]   %s\n", tag, oneLine(ev.Err))
-	case agent.KindSystem:
-		fmt.Printf("  [sys]     %s\n", oneLine(ev.Text))
-	}
-}
-
-func (s *stdoutSink) OnReply(sessionKey string, text string) {
-	if text != "" {
-		fmt.Printf("\n💬 %s\n", text)
-	}
-}
-
-// OnUserMessage is a no-op for the REPL/stdout sink — the user just typed
-// the line into stdin and sees it in their own terminal already.
-func (s *stdoutSink) OnUserMessage(string, router.InboundMessage) {}
-
-func oneLine(s string) string {
-	s = strings.Join(strings.Fields(s), " ")
-	if len(s) > 120 {
-		s = s[:120] + "…"
-	}
-	return s
+	fmt.Println("running (control bus / IM connector); press Ctrl-C to exit")
+	<-ctx.Done()
+	fmt.Fprintln(os.Stderr, "shutting down")
 }
 
 func fatal(format string, a ...any) {
 	fmt.Fprintf(os.Stderr, format+"\n", a...)
 	os.Exit(1)
-}
-
-// multiSink fans gateway events out to several sinks (stdout + control bus).
-type multiSink []gateway.Sink
-
-func (m multiSink) OnEvent(key string, ev agent.AgentEvent) {
-	for _, s := range m {
-		s.OnEvent(key, ev)
-	}
-}
-func (m multiSink) OnReply(key, text string) {
-	for _, s := range m {
-		s.OnReply(key, text)
-	}
-}
-func (m multiSink) OnUserMessage(key string, msg router.InboundMessage) {
-	for _, s := range m {
-		s.OnUserMessage(key, msg)
-	}
-}
-
-// makeCommandHandler builds the single-bot control-bus dispatcher. All command
-// logic lives in the shared makeHandler; this only supplies the fixed target,
-// the synthetic one-bot roster, and the broadcast hook.
-//
-// Returns the handler AND the shared target so the caller can block on
-// target.turnsWG before closing the store on shutdown (turns in flight under
-// session.send would otherwise race the deferred st.Close).
-func makeCommandHandler(ctx context.Context, gw *gateway.Gateway, st *store.Store, drv agent.Driver, sec *secretStore, srv *control.Server, started time.Time) (control.CommandHandler, *botTarget) {
-	target := &botTarget{gateway: gw, store: st, secrets: sec}
-	var broadcast func(string, any)
-	if srv != nil {
-		broadcast = srv.Broadcast
-	}
-	return makeHandler(ctx, handlerDeps{
-		started:  started,
-		driver:   drv.Name(),
-		botCount: func() int { return 1 },
-		// Single-bot mode has one implicit bot so a GUI client's bots.list
-		// bootstrap works the same as in multi-bot mode (proto parity).
-		list: func() []control.BotInfo {
-			return []control.BotInfo{{ID: "default", Connected: true}}
-		},
-		resolve:   func(string) (*botTarget, error) { return target, nil },
-		broadcast: broadcast,
-	}), target
 }

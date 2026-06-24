@@ -2,6 +2,11 @@ package octo
 
 import "testing"
 
+type threadStringCase struct {
+	id   string
+	want string
+}
+
 func TestIsThreadChannelID(t *testing.T) {
 	cases := []struct {
 		id   string
@@ -26,10 +31,7 @@ func TestIsThreadChannelID(t *testing.T) {
 }
 
 func TestExtractParentGroupNo(t *testing.T) {
-	cases := []struct {
-		id   string
-		want string
-	}{
+	runThreadStringCases(t, "ExtractParentGroupNo", []threadStringCase{
 		{"grp1____topicA", "grp1"},
 		{"123____abc", "123"},
 		{"grp1____", "grp1"}, // empty short-id
@@ -38,19 +40,11 @@ func TestExtractParentGroupNo(t *testing.T) {
 		{"", ""},             // empty
 		{"a____b____c", "a"}, // splits on the FIRST separator
 		{"grp_1", "grp_1"},   // single underscores are not a separator
-	}
-	for _, c := range cases {
-		if got := ExtractParentGroupNo(c.id); got != c.want {
-			t.Errorf("ExtractParentGroupNo(%q) = %q, want %q", c.id, got, c.want)
-		}
-	}
+	}, ExtractParentGroupNo)
 }
 
 func TestExtractThreadShortID(t *testing.T) {
-	cases := []struct {
-		id   string
-		want string
-	}{
+	runThreadStringCases(t, "extractThreadShortID", []threadStringCase{
 		{"grp1____topicA", "topicA"},
 		{"123____abc", "abc"},
 		{"grp1____", ""},          // empty short-id portion → ""
@@ -59,10 +53,14 @@ func TestExtractThreadShortID(t *testing.T) {
 		{"", ""},                  // empty
 		{"a____b____c", "b____c"}, // everything after the FIRST separator
 		{"grp_1", ""},             // single underscores are not a separator
-	}
+	}, extractThreadShortID)
+}
+
+func runThreadStringCases(t *testing.T, name string, cases []threadStringCase, fn func(string) string) {
+	t.Helper()
 	for _, c := range cases {
-		if got := extractThreadShortID(c.id); got != c.want {
-			t.Errorf("extractThreadShortID(%q) = %q, want %q", c.id, got, c.want)
+		if got := fn(c.id); got != c.want {
+			t.Errorf("%s(%q) = %q, want %q", name, c.id, got, c.want)
 		}
 	}
 }
@@ -96,13 +94,27 @@ func TestThreadSessionKeyDistinctFromParent(t *testing.T) {
 }
 
 func TestRerouteTarget(t *testing.T) {
-	cases := []struct {
-		name         string
-		current      string
-		target       string
-		wantChannel  string
-		wantRerouted bool
-	}{
+	for _, c := range rerouteTargetCases() {
+		t.Run(c.name, func(t *testing.T) {
+			got, rerouted := RerouteTarget(c.current, c.target)
+			if got != c.wantChannel || rerouted != c.wantRerouted {
+				t.Errorf("RerouteTarget(%q, %q) = (%q, %v), want (%q, %v)",
+					c.current, c.target, got, rerouted, c.wantChannel, c.wantRerouted)
+			}
+		})
+	}
+}
+
+type rerouteTargetCase struct {
+	name         string
+	current      string
+	target       string
+	wantChannel  string
+	wantRerouted bool
+}
+
+func rerouteTargetCases() []rerouteTargetCase {
+	return []rerouteTargetCase{
 		{
 			name:         "bare parent inside thread reroutes to thread",
 			current:      "grp1____topicA",
@@ -145,14 +157,5 @@ func TestRerouteTarget(t *testing.T) {
 			wantChannel:  "grp1",
 			wantRerouted: false,
 		},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			got, rerouted := RerouteTarget(c.current, c.target)
-			if got != c.wantChannel || rerouted != c.wantRerouted {
-				t.Errorf("RerouteTarget(%q, %q) = (%q, %v), want (%q, %v)",
-					c.current, c.target, got, rerouted, c.wantChannel, c.wantRerouted)
-			}
-		})
 	}
 }

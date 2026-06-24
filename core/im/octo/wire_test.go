@@ -41,6 +41,13 @@ func TestFrameHeaderAndSplit(t *testing.T) {
 	if pkt[0]>>4 != byte(pktConnect) {
 		t.Fatalf("header packet type = %d", pkt[0]>>4)
 	}
+	body := assertConnectFrameSplit(t, pkt)
+	assertConnectBody(t, body)
+}
+
+func assertConnectFrameSplit(t *testing.T, pkt []byte) []byte {
+	t.Helper()
+
 	pt, body, consumed, ok, err := nextFrame(pkt)
 	if err != nil || !ok {
 		t.Fatalf("nextFrame: ok=%v err=%v", ok, err)
@@ -51,7 +58,12 @@ func TestFrameHeaderAndSplit(t *testing.T) {
 	if consumed != len(pkt) {
 		t.Fatalf("consumed %d != %d", consumed, len(pkt))
 	}
-	// Re-parse the body fields.
+	return body
+}
+
+func assertConnectBody(t *testing.T, body []byte) {
+	t.Helper()
+
 	d := &decoder{buf: body}
 	ver, _ := d.readByte()
 	flag, _ := d.readByte()

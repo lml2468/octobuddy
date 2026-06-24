@@ -109,4 +109,32 @@ func TestSafeWriteAtomic(t *testing.T) {
 	if string(b) != "hi" {
 		t.Errorf("round-trip mismatch: %q", string(b))
 	}
+	exerciseRemovalExports(t, root)
+}
+
+func exerciseRemovalExports(t *testing.T, root string) {
+	t.Helper()
+
+	if _, err := SafeReadDir(root, "a/b"); err != nil {
+		t.Fatalf("SafeReadDir: %v", err)
+	}
+	if !SafeExists(root, "a/b/c.txt") {
+		t.Fatal("SafeExists should see written file")
+	}
+	if err := SafeRemove(root, "a/b/c.txt"); err != nil {
+		t.Fatalf("SafeRemove: %v", err)
+	}
+	if err := SafeWrite(root, "a/b/d.txt", []byte("bye"), 0o600); err != nil {
+		t.Fatalf("SafeWrite second file: %v", err)
+	}
+	if err := SafeRemoveAll(root, "a"); err != nil {
+		t.Fatalf("SafeRemoveAll: %v", err)
+	}
+	abs := filepath.Join(root, "abs")
+	if err := SafeMkdirAllAbs(abs, 0o755); err != nil {
+		t.Fatalf("SafeMkdirAllAbs: %v", err)
+	}
+	if err := SafeRemoveAllAbs(abs); err != nil {
+		t.Fatalf("SafeRemoveAllAbs: %v", err)
+	}
 }
