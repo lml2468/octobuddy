@@ -130,6 +130,13 @@ func (c *Connector) drainTurns(key string) {
 			return
 		}
 		item := q.pending[0]
+		// Zero the popped slot before reslicing — otherwise the popped
+		// queuedTurn (carrying a full InboundMessage with potentially
+		// large Text + Attachments) stays pinned in slot 0 of the backing
+		// array until the slice gets reallocated by future appends. Under
+		// bursty per-session traffic the queue can hold dead payloads for
+		// its entire lifetime.
+		q.pending[0] = queuedTurn{}
 		q.pending = q.pending[1:]
 		// Set the per-turn target IMMEDIATELY before releasing the lock
 		// and running gw.Handle, so OnReply (which reads via

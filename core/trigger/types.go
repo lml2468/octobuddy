@@ -187,7 +187,6 @@ type TriggerDecision struct {
 	PersonaOBO   bool
 	ReplyRouting ReplyRouting
 	MatchedRules []string
-	Latency      time.Duration
 }
 
 // ShouldReply reports whether this decision warrants running an agent turn.

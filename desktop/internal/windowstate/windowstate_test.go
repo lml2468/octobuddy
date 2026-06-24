@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/lml2468/octobuddy/desktop/internal/desktest"
 )
 
 // TestLoadMissingReturnsZero: fresh install (no window.json) returns the
@@ -57,11 +59,10 @@ func TestLoadCorruptedReturnsZero(t *testing.T) {
 	}
 }
 
-// withHome overrides the home directory for the test. Sets BOTH `HOME`
-// (POSIX) and `USERPROFILE` (Windows) so os.UserHomeDir resolves into
-// the test temp dir on every supported runner. t.Setenv handles cleanup.
+// withHome is the package-local shim around desktest.WithHome — keeps
+// the call sites concise and lets future per-package overrides slot in
+// without touching every test.
 func withHome(t *testing.T, dir string) {
 	t.Helper()
-	t.Setenv("HOME", dir)
-	t.Setenv("USERPROFILE", dir)
+	desktest.WithHome(t, dir)
 }

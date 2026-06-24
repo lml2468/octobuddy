@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/lml2468/octobuddy/core/control/wire"
+	"github.com/lml2468/octobuddy/desktop/internal/desktest"
 )
 
 // TestAccountRejectsInvalidBotID is the security regression: every
@@ -130,11 +131,10 @@ func TestEnvBackendRespectsLookupEnv(t *testing.T) {
 	}
 }
 
-// withHome overrides the home directory for the test. Sets BOTH `HOME`
-// (POSIX) and `USERPROFILE` (Windows) so os.UserHomeDir resolves into
-// the temp dir on every supported runner.
+// withHome is the package-local shim around desktest.WithHome — keeps
+// call sites concise. See desktest.WithHome for the cross-platform
+// rationale (HOME + USERPROFILE).
 func withHome(t *testing.T, dir string) {
 	t.Helper()
-	t.Setenv("HOME", dir)
-	t.Setenv("USERPROFILE", dir)
+	desktest.WithHome(t, dir)
 }

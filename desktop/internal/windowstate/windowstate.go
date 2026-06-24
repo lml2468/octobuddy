@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 
 	"github.com/lml2468/octobuddy/core/safepath"
+	"github.com/lml2468/octobuddy/desktop/internal/configstore"
 )
 
 // State captures the bounds we care about restoring. Negative or zero
@@ -38,14 +39,15 @@ func (s State) IsZero() bool {
 }
 
 // filePath returns ~/.octobuddy/window.json or "" when HOME is unset.
-// HOME is required by the rest of the desktop too — a missing HOME is
-// fatal at main(), so we don't try to recover here either.
+// Resolves the daemon-state directory through configstore.Dir() so the
+// root layout has a single source of truth — if it ever moves (e.g.
+// macOS Application Support), windowstate moves with it for free.
 func filePath() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("windowstate: resolve home: %w", err)
+	dir := configstore.Dir()
+	if dir == "" {
+		return "", fmt.Errorf("windowstate: resolve home: %w", os.ErrNotExist)
 	}
-	return filepath.Join(home, ".octobuddy", "window.json"), nil
+	return filepath.Join(dir, "window.json"), nil
 }
 
 // Load returns the persisted window state, or (zero, nil) when the file

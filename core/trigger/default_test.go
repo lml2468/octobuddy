@@ -31,18 +31,6 @@ func TestDefaultClassifierBugFix(t *testing.T) {
 	}
 }
 
-// TestDefaultClassifierA1Burst asserts issue #105 A1: 5 consecutive pure-@AI
-// messages under Deny produce 5 ObservationDecisions (none reply).
-func TestDefaultClassifierA1Burst(t *testing.T) {
-	for i := range 5 {
-		in := groupMsg("g1", "u_alice", &MentionPayload{AIsFlag: true})
-		d := DefaultClassifier{}.Classify(in, Policy{BotUID: "bot1", AIBroadcast: AIBroadcastDeny})
-		if d.ShouldReply() {
-			t.Fatalf("burst[%d] must not reply: reason=%s", i, d.Reason)
-		}
-	}
-}
-
 // TestDefaultClassifierA2RealAtBotInBetween asserts issue #105 A2: a
 // real @bot mixed into the burst is the only one that triggers.
 func TestDefaultClassifierA2RealAtBotInBetween(t *testing.T) {

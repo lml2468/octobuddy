@@ -169,11 +169,6 @@ func (r *Router) groupBotGuards(msg InboundMessage) Decision {
 	if r.blocklisted[msg.FromUID] {
 		return DroppedBot
 	}
-	if !msg.ShouldReply() {
-		// Observations / invariant-break / OBO-irrelevant: nothing for
-		// the loop guard to chew on.
-		return Accepted
-	}
 	// Loop guard scope: ONLY mention-free triggers, matching legacy
 	// gate.go behavior. Explicit @bot, persona, reply-to-bot, @AI are all
 	// unambiguous intent in a normal mentioned group — let them through

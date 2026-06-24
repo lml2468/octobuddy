@@ -158,7 +158,19 @@ func (g *GroupContext) pushLocked(channelID, fromUID, fromName, content string, 
 	id := g.nextID[channelID]
 	win := append(g.windows[channelID], message{id: id, seq: seq, fromUID: fromUID, fromName: safeName, content: content})
 	if len(win) > maxWindowSize {
-		win = win[len(win)-maxWindowSize:]
+		// Slide the tail down in place rather than `win = win[len-N:]`:
+		// the slice expression would keep the head's content strings
+		// (raw group-message text, potentially several KB each) alive
+		// through the backing array until the next grow. copy+reslice
+		// zeroes the unused tail slots so dropped messages become
+		// unreachable immediately — the daemon is designed to bound
+		// exactly this memory.
+		drop := len(win) - maxWindowSize
+		copy(win, win[drop:])
+		for i := maxWindowSize; i < len(win); i++ {
+			win[i] = message{}
+		}
+		win = win[:maxWindowSize]
 	}
 	g.windows[channelID] = win
 	g.learnMemberLocked(channelID, fromUID, safeName)

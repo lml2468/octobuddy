@@ -77,10 +77,10 @@ func (c *Connector) prepareInboundTurn(m BotMessage, botUID string) (router.Inbo
 	// Register via setUID). Without this override the classifier would
 	// never match an @bot mention in production (the regression bot.go's
 	// note flagged: "policy.BotUID is the configured bot id, not the
-	// post-register uid"). Override at classify time so the live uid is
-	// always authoritative; nothing else in Policy depends on BotUID.
-	if uid := c.uid(); uid != "" {
-		policy.BotUID = uid
+	// post-register uid"). The caller already resolved c.uid() into
+	// botUID — reuse it instead of re-acquiring c.mu on the hot path.
+	if botUID != "" {
+		policy.BotUID = botUID
 	}
 	canonical := c.buildCanonicalInbound(m, baseText, botUID)
 	decision := classifier.Classify(canonical, policy)
@@ -98,7 +98,7 @@ func (c *Connector) prepareInboundTurn(m BotMessage, botUID string) (router.Inbo
 		return router.InboundMessage{}, "", replyTarget{}, false
 	}
 
-	tgt := c.targetFromDecision(m, inbound.ChannelType, decision)
+	tgt := c.targetFromDecision(m, decision)
 	return inbound, key, tgt, true
 }
 
@@ -161,7 +161,7 @@ func (c *Connector) inboundMessageFromCanonical(canonical trigger.CanonicalInbou
 // targetFromDecision derives the reply target from the classifier's
 // ReplyRouting plus the IM channel coords. OBO v2 reroutes redirect to the
 // origin channel; on_behalf_of stamps the grantor uid.
-func (c *Connector) targetFromDecision(m BotMessage, chType router.ChannelType, decision trigger.TriggerDecision) replyTarget {
+func (c *Connector) targetFromDecision(m BotMessage, decision trigger.TriggerDecision) replyTarget {
 	tgt := replyTarget{channelID: m.ChannelID, channelType: m.ChannelType}
 	if decision.ReplyRouting.HasOBOReroute() {
 		rerouteKind := ChannelType(decision.ReplyRouting.OBORerouteKind)
@@ -171,10 +171,10 @@ func (c *Connector) targetFromDecision(m BotMessage, chType router.ChannelType, 
 		}
 		tgt.channelID = decision.ReplyRouting.OBORerouteChannelID
 		tgt.channelType = rerouteKind
-	} else if chType == router.ChannelGroup && decision.PersonaOBO {
-		// Persona widening fires in a normal group (not OBO v2 relay):
-		// keep the inbound channel as the target but stamp the grantor.
 	}
+	// Persona widening (PersonaOBO without an OBO reroute) keeps the
+	// inbound channel as the target — only the OnBehalfOf stamp below
+	// matters, which fires unconditionally from ReplyRouting.
 	tgt.onBehalfOf = decision.ReplyRouting.OnBehalfOf
 	return tgt
 }

@@ -50,11 +50,17 @@ build_octobuddy-daemon() { # $1=GOOS $2=GOARCH $3=out
   ( cd "$core" && CGO_ENABLED=0 GOOS="$1" GOARCH="$2" go build -trimpath -buildvcs=false -ldflags "-s -w" -o "$3" ./cmd/octobuddy-daemon )
 }
 # Daemon binaries for all four platforms (CI picks these up for win/linux).
-build_octobuddy-daemon darwin  arm64 "$out/octobuddy-daemon-darwin-arm64"
-build_octobuddy-daemon darwin  amd64 "$out/octobuddy-daemon-darwin-amd64"
-build_octobuddy-daemon windows amd64 "$out/octobuddy-daemon-windows-amd64.exe"
-build_octobuddy-daemon linux   amd64 "$out/octobuddy-daemon-linux-amd64"
-build_octobuddy-daemon linux   arm64 "$out/octobuddy-daemon-linux-arm64"
+# Run the five cross-compiles in parallel — independent inputs, independent
+# outputs, idle CPU cores otherwise. `wait` collects all PIDs and aborts the
+# script via `set -e` if any background build returns non-zero.
+build_octobuddy-daemon darwin  arm64 "$out/octobuddy-daemon-darwin-arm64"   &
+build_octobuddy-daemon darwin  amd64 "$out/octobuddy-daemon-darwin-amd64"   &
+build_octobuddy-daemon windows amd64 "$out/octobuddy-daemon-windows-amd64.exe" &
+build_octobuddy-daemon linux   amd64 "$out/octobuddy-daemon-linux-amd64"    &
+build_octobuddy-daemon linux   arm64 "$out/octobuddy-daemon-linux-arm64"    &
+fail=0
+for pid in $(jobs -p); do wait "$pid" || fail=1; done
+(( fail == 0 )) || { echo "✗ one or more octobuddy-daemon cross-compiles failed"; exit 1; }
 lipo -create -output "$out/octobuddy-daemon" "$out/octobuddy-daemon-darwin-arm64" "$out/octobuddy-daemon-darwin-amd64"
 echo "  ✓ octobuddy-daemon (mac universal + win/linux in $out)"
 
