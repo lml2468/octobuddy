@@ -4,16 +4,23 @@
   import { Events } from "@wailsio/runtime";
   import { store } from "./lib/store.svelte";
   import Sidebar from "./lib/components/Sidebar.svelte";
-  import CommandPalette from "./lib/components/CommandPalette.svelte";
   import Transcript from "./lib/components/Transcript.svelte";
   import StatusBar from "./lib/components/StatusBar.svelte";
   import Composer from "./lib/components/Composer.svelte";
-  import SettingsModal from "./lib/components/SettingsModal.svelte";
   import TrafficLights from "./lib/components/TrafficLights.svelte";
   import WorkspacePanel from "./lib/components/WorkspacePanel.svelte";
   import FilePreview from "./lib/components/FilePreview.svelte";
-  import TokenUsage from "./lib/components/TokenUsage.svelte";
   import { confirm } from "./lib/confirm.svelte";
+
+  // Lazy-loaded chunks: these UIs are only reached via tray menu, ⌘K, or
+  // explicit sidebar click — they don't belong in the first-paint critical
+  // path. Vite splits each into its own chunk; the initial index.js drops
+  // by ~the combined size of these components and their sub-trees
+  // (SettingsModal alone owns 5 panes incl. SchedulesPane). The import
+  // resolves before showSettings flips, so the modal never paints empty.
+  let SettingsModalCmp = $state<any>(null);
+  let TokenUsageCmp = $state<any>(null);
+  let CommandPaletteCmp = $state<any>(null);
 
   type FileSource = "workspace" | "memory";
 
@@ -46,6 +53,30 @@
   let collapsed = $state(false);
  // The file open in the wide preview pane (which overlays the chat). Null = chat.
   let previewPath = $state<string | null>(null);
+
+  // Preload the lazy chunks when the initial URL asks for them, so the
+  // first paint isn't a blank screen waiting on import().
+  $effect(() => {
+    if (initialSettings.show && !SettingsModalCmp) {
+      void loadSettingsModal();
+    }
+    if (showUsage && !TokenUsageCmp) {
+      void loadTokenUsage();
+    }
+  });
+
+  async function loadSettingsModal() {
+    if (SettingsModalCmp) return;
+    SettingsModalCmp = (await import("./lib/components/SettingsModal.svelte")).default;
+  }
+  async function loadTokenUsage() {
+    if (TokenUsageCmp) return;
+    TokenUsageCmp = (await import("./lib/components/TokenUsage.svelte")).default;
+  }
+  async function loadCommandPalette() {
+    if (CommandPaletteCmp) return;
+    CommandPaletteCmp = (await import("./lib/components/CommandPalette.svelte")).default;
+  }
 
  // The preview path belongs to one session's workspace; clear it when the
  // selected bot/session changes, or it would render the old file against the
@@ -94,7 +125,11 @@
   function onKey(e: KeyboardEvent) {
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
       e.preventDefault();
-      showPalette = !showPalette;
+      if (!showPalette) {
+        void loadCommandPalette().then(() => { showPalette = true; });
+      } else {
+        showPalette = false;
+      }
     } else if (e.key === "Escape" && showPalette) {
       showPalette = false;
     }
@@ -106,13 +141,17 @@
 
  // Tray opens the unified Settings modal at a specific tab, or the standalone
  // Token Usage modal. Mutual exclusion: only one top-level modal at a time.
-  function openSettings(tab: SettingsTab = "basic", openWizard: boolean = false) {
+ // Both await the lazy chunk before flipping the show flag so the modal
+ // never paints empty during the initial chunk fetch (~tens of ms one-time).
+  async function openSettings(tab: SettingsTab = "basic", openWizard: boolean = false) {
     settingsTab = tab;
     settingsOpenWizard = openWizard;
+    await loadSettingsModal();
     showSettings = true;
     showUsage = false;
   }
-  function openUsage() {
+  async function openUsage() {
+    await loadTokenUsage();
     showUsage = true;
     showSettings = false;
   }
@@ -122,9 +161,9 @@
   $effect(() => {
     const offSettings = Events.On("octobuddy:open-settings", (e: any) => {
       const tab = e?.data?.tab as SettingsTab | undefined;
-      openSettings(tab && TABS.includes(tab) ? tab : "basic");
+      void openSettings(tab && TABS.includes(tab) ? tab : "basic");
     });
-    const offUsage = Events.On("octobuddy:open-usage", () => openUsage());
+    const offUsage = Events.On("octobuddy:open-usage", () => void openUsage());
     return () => { try { offSettings?.(); offUsage?.(); } catch {} };
   });
 
@@ -144,10 +183,10 @@
 {/if}
 <div class="shell">
   <Sidebar
-    onedit={() => openSettings("basic")}
-    onaddbot={() => openSettings("basic", true)}
-    onusage={openUsage}
-    onpalette={() => (showPalette = true)}
+    onedit={() => void openSettings("basic")}
+    onaddbot={() => void openSettings("basic", true)}
+    onusage={() => void openUsage()}
+    onpalette={() => void loadCommandPalette().then(() => { showPalette = true; })}
     {collapsed}
   />
   <div class="content">
@@ -213,20 +252,20 @@
   </div>
 </div>
 
-{#if showPalette}
-  <CommandPalette
+{#if showPalette && CommandPaletteCmp}
+  <CommandPaletteCmp
     onclose={() => (showPalette = false)}
-    onedit={() => openSettings("basic")}
-    onskills={() => openSettings("skills")}
-    onworkflows={() => openSettings("workflows")}
-    onusage={openUsage}
+    onedit={() => void openSettings("basic")}
+    onskills={() => void openSettings("skills")}
+    onworkflows={() => void openSettings("workflows")}
+    onusage={() => void openUsage()}
   />
 {/if}
-{#if showSettings}
-  <SettingsModal onclose={() => { showSettings = false; settingsOpenWizard = false; }} initialTab={settingsTab} openWizardOnMount={settingsOpenWizard} />
+{#if showSettings && SettingsModalCmp}
+  <SettingsModalCmp onclose={() => { showSettings = false; settingsOpenWizard = false; }} initialTab={settingsTab} openWizardOnMount={settingsOpenWizard} />
 {/if}
-{#if showUsage}
-  <TokenUsage onclose={() => (showUsage = false)} />
+{#if showUsage && TokenUsageCmp}
+  <TokenUsageCmp onclose={() => (showUsage = false)} />
 {/if}
 
 <style>
