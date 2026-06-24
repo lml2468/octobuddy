@@ -123,21 +123,33 @@ Key invariants to preserve:
   `claude -p - --output-format stream-json --verbose --permission-mode bypassPermissions`,
   feeding the prompt on **stdin** (`-p -`, not an argv element, so a large prompt
   can't hit ARG_MAX — and never inherits the daemon's fd 0, which carries the
-  control-bus cap token; MLT-40). Bypass is mandatory — there is no terminal to
-  answer approval prompts, so any other mode hangs the turn; it also grants every
-  tool, so no `--allowedTools` is passed (claude 2.1+ rejects `*` in allow rules).
-  Output is **plain stream-json** (one event per complete content block) — the
-  driver does NOT request `--include-partial-messages`, so there is no token-level
-  delta path or dedup. `--append-system-prompt` is re-sent every turn including
+  control-bus cap token; MLT-40). Bypass is mandatory in **both** prompt modes —
+  there is no terminal to answer approval prompts, so any other mode auto-denies
+  write-class tools or hangs the turn. The tool SURFACE is scoped by `--tools`
+  (orthogonal to the permission mode), NOT `--allowedTools` (which is only the
+  auto-approve list under prompt-based modes and doesn't restrict what the model
+  sees). The headless-safe default tool set is **probed from the live binary**
+  (`ProbeTools` reads the `system/init` line's `tools` array) minus a small
+  `interactiveExclusions` denylist — never a hand-maintained Go allowlist (it
+  drifts per claude release: `Agent`→`Task`, `TodoWrite` dropped). Per-bot /
+  per-channel whitelists + setting-source scopes flow through `agent.Request`
+  (`AllowedTools`, `SettingSources`); MCP servers load from the per-bot
+  `<CLAUDE_CONFIG_DIR>/.mcp.json` via `--mcp-config <path> --strict-mcp-config`
+  when present (`.mcp.json` is project-scope, so `--setting-sources=user` won't
+  auto-load it). `ProbeMCP` reads the same init line's `mcp_servers[].status`
+  for the desktop's MCP health check. Output is **plain stream-json** (one event
+  per complete content block) — the driver does NOT request
+  `--include-partial-messages`, so there is no token-level delta path or dedup.
+  `--append-system-prompt` (claude_code mode) is re-sent every turn including
   resumes: it does NOT persist across `--resume`, so skipping it would drop the
   non-overridable `SecurityPrefix` + SOUL (its tokens are a prompt-cache hit
-  anyway). The `result` line populates `TokenUsage` with cached-input tokens
+  anyway); minimal mode uses `--system-prompt` (REPLACE) instead. The `result`
+  line populates `TokenUsage` with cached-input tokens
   (`cache_read_input_tokens`) and `CostUSD` (`total_cost_usd`). Upstream
   rate-limit / overload / usage-cap conditions (HTTP 429/503/529, "usage limit
   reached", …) are classified as `AgentEvent.Transient` (`core/agent/classify.go`)
   with a reset-window `RetryHint`; the gateway replies `busyReply` ("服务繁忙") for
-  a transient terminal error instead of the generic errorReply. Tool/permission
-  policy is intentionally NOT in `agent.Request`; it is a fixed claude-only invariant.
+  a transient terminal error instead of the generic errorReply.
 - **Feature modules layered on the pipeline** (each cites its TS source in its
   package doc): `core/cron/` — per-bot scheduled tasks, owner-gated
   `cron.create/list/delete` over the control bus; `core/groupmd/` — operator

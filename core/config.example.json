@@ -47,7 +47,8 @@
         "replyToBotEnabled": true,
         "mentionFreeGroups": []
       },
-      "_comment_skills": "Skills/workflows are NOT configured here. Each bot owns its own under ~/.octobuddy/<id>/.claude/skills/<name>/ and ~/.octobuddy/<id>/.claude/workflows/<name>.js."
+      "_comment_skills": "Skills/workflows are NOT configured here. Each bot owns its own under ~/.octobuddy/<id>/.claude/skills/<name>/ and ~/.octobuddy/<id>/.claude/workflows/<name>.js.",
+      "_comment_mcp": "MCP servers are NOT configured here either. Write a standard mcp.json to ~/.octobuddy/<id>/.claude/.mcp.json; the daemon loads it per turn via --mcp-config --strict-mcp-config. The desktop manages it (with a connection test) on the bot's 基础信息 page. To expose MCP tools, include matching tool names (or mcp__*) in agent.tools."
     },
     {
       "id": "admin-clone",

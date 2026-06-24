@@ -70,10 +70,23 @@ func runBot(ctx context.Context, cfg config.Resolved, reg *botRegistry, srv *con
 	drv.BinFn = resolveClaudeBin
 	// Resolve the gateway token lazily per turn so an injected token takes effect.
 	drv.EnvFn = func() []string { return cfg.DriverEnv(sec.GatewayToken(), sec.OctoToken(), sec.Secret) }
+	// Load this bot's MCP servers from <ClaudeConfigDir>/.mcp.json when the
+	// desktop has written one. Resolved per Query so a freshly-saved file
+	// applies on the next turn without a restart. Suppressed when the bot
+	// inherits the operator's ~/.claude (then MCP is whatever ~/.claude has).
+	if mcpPath := botMCPConfigPath(cfg); mcpPath != "" {
+		drv.MCPConfigFn = func() string { return existingFilePath(mcpPath) }
+	}
 
 	rtBot, connector, cm, err := assembleBotRuntime(ctx, cfg, srv, st, rt, sec, drv)
 	if err != nil {
 		return err
+	}
+	// MCP health-check hook for the control bus (desktop "test connection").
+	// Built here where the concrete driver + secret store are in scope so the
+	// probe runs with the bot's real bin + env + .mcp.json path.
+	if botMCPConfigPath(cfg) != "" {
+		rtBot.target.mcpCheck = makeMCPChecker(cfg, sec, drv)
 	}
 	defer drainBotRuntime(cm, connector, rtBot.target)
 	registerBotRuntime(rtBot, reg, srv)
@@ -185,6 +198,65 @@ func toBoolSet(vals []string) map[string]bool {
 		}
 	}
 	return m
+}
+
+// botMCPConfigPath returns the bot's .mcp.json path (under its isolated
+// CLAUDE_CONFIG_DIR), or "" when MCP doesn't apply — no config dir, or the bot
+// inherits the operator's ~/.claude (then MCP is whatever ~/.claude carries,
+// not a per-bot file). Single source of the path so the driver's per-turn
+// loader and the health-check probe never drift.
+func botMCPConfigPath(cfg config.Resolved) string {
+	if cfg.ClaudeConfigDir == "" || cfg.Agent.InheritUserConfig {
+		return ""
+	}
+	return filepath.Join(cfg.ClaudeConfigDir, ".mcp.json")
+}
+
+// makeMCPChecker builds the control-bus MCP health probe for one bot. It runs
+// agent.ProbeMCP against the bot's saved .mcp.json with the bot's resolved bin
+// + env (so the result matches a real turn), reading the per-server
+// connected/failed status from claude's system/init line. Returns
+// {Configured:false} when no .mcp.json exists yet. Capped at 60s.
+func makeMCPChecker(cfg config.Resolved, sec *secretStore, drv agent.Driver) func(context.Context) (wire.MCPCheckResponse, error) {
+	cd, ok := drv.(*agent.ClaudeDriver)
+	if !ok {
+		return nil
+	}
+	mcpPath := botMCPConfigPath(cfg)
+	return func(ctx context.Context) (wire.MCPCheckResponse, error) {
+		if mcpPath == "" || existingFilePath(mcpPath) == "" {
+			return wire.MCPCheckResponse{Configured: false}, nil
+		}
+		ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+		defer cancel()
+		env := cfg.DriverEnv(sec.GatewayToken(), sec.OctoToken(), sec.Secret)
+		statuses, err := agent.ProbeMCP(ctx, cd.ResolveBin(), env, mcpPath)
+		if err != nil {
+			return wire.MCPCheckResponse{}, err
+		}
+		out := wire.MCPCheckResponse{Configured: true}
+		for _, s := range statuses {
+			out.Servers = append(out.Servers, wire.MCPServerHealth{Name: s.Name, Status: s.Status, Tools: s.Tools})
+		}
+		return out, nil
+	}
+}
+
+// existingFilePath returns path if it is a regular, non-symlink, non-empty
+// file, else "". Used to gate --mcp-config on the bot's .mcp.json existing.
+// Refuses symlinks: the rest of the codebase treats symlinks under
+// ~/.octobuddy as hostile (an agent with Bash+bypass could plant
+// `.mcp.json → /etc/something`), so a symlinked config is ignored rather
+// than followed.
+func existingFilePath(path string) string {
+	fi, err := os.Lstat(path)
+	if err != nil {
+		return ""
+	}
+	if fi.Mode()&os.ModeSymlink != 0 || fi.IsDir() || fi.Size() == 0 {
+		return ""
+	}
+	return path
 }
 
 // toolPolicyArgs unpacks a (possibly nil) per-bot ToolPolicy into the

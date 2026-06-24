@@ -334,6 +334,45 @@ func TestClaudeArgsSettingSources(t *testing.T) {
 	}
 }
 
+// TestClaudeArgsMCPConfig pins that MCPConfigFn, when it returns a path, emits
+// `--mcp-config <path> --strict-mcp-config`; an empty/nil return emits neither.
+func TestClaudeArgsMCPConfig(t *testing.T) {
+	d := newTestDriver()
+	d.MCPConfigFn = func() string { return "/cfg/.mcp.json" }
+	args := d.buildArgs(Request{Prompt: "hi"})
+	if !contains(args, "--mcp-config") || !contains(args, "/cfg/.mcp.json") || !contains(args, "--strict-mcp-config") {
+		t.Fatalf("want --mcp-config <path> --strict-mcp-config: %v", args)
+	}
+
+	d2 := newTestDriver()
+	d2.MCPConfigFn = func() string { return "" }
+	if a := d2.buildArgs(Request{Prompt: "hi"}); contains(a, "--mcp-config") {
+		t.Fatalf("empty MCPConfigFn must not emit --mcp-config: %v", a)
+	}
+
+	if a := newTestDriver().buildArgs(Request{Prompt: "hi"}); contains(a, "--mcp-config") {
+		t.Fatalf("nil MCPConfigFn must not emit --mcp-config: %v", a)
+	}
+}
+
+// TestMCPToolsForServer pins the mcp__<server>__* attribution.
+func TestMCPToolsForServer(t *testing.T) {
+	tools := []string{"Read", "mcp__echo__ping", "mcp__echo__pong", "mcp__other__x", "Bash"}
+	got := mcpToolsForServer("echo", tools)
+	want := []string{"mcp__echo__ping", "mcp__echo__pong"}
+	if len(got) != len(want) {
+		t.Fatalf("mcpToolsForServer = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("at %d: got %q want %q", i, got[i], want[i])
+		}
+	}
+	if n := len(mcpToolsForServer("none", tools)); n != 0 {
+		t.Fatalf("unknown server should attribute 0 tools, got %d", n)
+	}
+}
+
 func contains(xs []string, want string) bool {
 	for _, x := range xs {
 		if x == want {

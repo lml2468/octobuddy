@@ -73,4 +73,7 @@ type (
 	HistoryMessage         = wire.HistoryMessage
 	HistoryResponse        = wire.HistoryResponse
 	SessionsListResponse   = wire.SessionsListResponse
+	MCPCheckBody           = wire.MCPCheckBody
+	MCPServerHealth        = wire.MCPServerHealth
+	MCPCheckResponse       = wire.MCPCheckResponse
 )

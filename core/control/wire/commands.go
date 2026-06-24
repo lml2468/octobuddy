@@ -213,3 +213,28 @@ type CronListResponse struct {
 	BotID string         `json:"botId"`
 	Tasks []CronTaskInfo `json:"tasks"`
 }
+
+// MCPCheckBody is the mcp.check request: probe the addressed bot's currently
+// saved .mcp.json (under its CLAUDE_CONFIG_DIR) and report each server's
+// health. Backs the desktop's MCP "test connection" button + post-save check.
+type MCPCheckBody struct {
+	BotID string `json:"botId"`
+}
+
+// MCPServerHealth is one MCP server's probed state: Status is "connected" /
+// "failed" (claude's own wording from the system/init line); Tools are the
+// mcp__<name>__* tools it contributed (empty when failed).
+type MCPServerHealth struct {
+	Name   string   `json:"name"`
+	Status string   `json:"status"`
+	Tools  []string `json:"tools"`
+}
+
+// MCPCheckResponse is the mcp.check response, tagged with botId for routing.
+// Configured is false when the bot has no .mcp.json at all (so the UI can say
+// "no MCP servers configured" rather than "all failed").
+type MCPCheckResponse struct {
+	BotID      string            `json:"botId"`
+	Configured bool              `json:"configured"`
+	Servers    []MCPServerHealth `json:"servers"`
+}

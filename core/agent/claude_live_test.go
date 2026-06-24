@@ -3,7 +3,9 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -107,4 +109,82 @@ func TestProbeToolsReturnsTools(t *testing.T) {
 	if !has("Read") || !has("Bash") {
 		t.Fatalf("probe missing core tools (Read/Bash): %v", tools)
 	}
+}
+
+// echoMCPServer is a minimal stdio MCP server (initialize + tools/list + a
+// single "ping" tool) used by the live MCP probe test. No network.
+const echoMCPServer = `const send=(o)=>process.stdout.write(JSON.stringify(o)+"\n");let buf="";
+process.stdin.on("data",(d)=>{buf+=d;let i;while((i=buf.indexOf("\n"))>=0){const line=buf.slice(0,i).trim();buf=buf.slice(i+1);if(!line)continue;let m;try{m=JSON.parse(line)}catch{continue}h(m)}});
+function h(m){const{id,method}=m;if(method==="initialize")send({jsonrpc:"2.0",id,result:{protocolVersion:"2024-11-05",capabilities:{tools:{}},serverInfo:{name:"echo",version:"0"}}});
+else if(method==="tools/list")send({jsonrpc:"2.0",id,result:{tools:[{name:"ping",description:"pong",inputSchema:{type:"object",properties:{}}}]}});
+else if(method==="tools/call")send({jsonrpc:"2.0",id,result:{content:[{type:"text",text:"pong"}]}});
+else if(id!==undefined)send({jsonrpc:"2.0",id,error:{code:-32601,message:"no"}})}`
+
+// TestProbeMCPReportsHealth is a live wiring check: it writes a stub stdio MCP
+// server + a .mcp.json, then asserts ProbeMCP reports the server connected and
+// surfaces its mcp__echo__ping tool. A second config with a missing binary
+// must report "failed". No API spend. Skips without claude or node on PATH.
+func TestProbeMCPReportsHealth(t *testing.T) {
+	bin, err := exec.LookPath("claude")
+	if err != nil {
+		t.Skip("claude not on PATH; skipping live MCP probe")
+	}
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node not on PATH; skipping live MCP probe (stub server needs node)")
+	}
+	dir := t.TempDir()
+	serverPath := filepath.Join(dir, "echo-mcp.mjs")
+	if err := os.WriteFile(serverPath, []byte(echoMCPServer), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := []string{
+		"ANTHROPIC_API_KEY=sk-ant-probe",
+		"ANTHROPIC_BASE_URL=http://127.0.0.1:9",
+		"CLAUDE_CONFIG_DIR=" + filepath.Join(dir, "cfg"),
+	}
+
+	// Connected case.
+	okCfg := filepath.Join(dir, "ok.mcp.json")
+	writeMCP(t, okCfg, `{"mcpServers":{"echo":{"command":"node","args":[`+jsonStr(serverPath)+`]}}}`)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	servers, err := ProbeMCP(ctx, bin, env, okCfg)
+	if err != nil {
+		t.Skipf("MCP probe unusable in this env (%v); skipping", err)
+	}
+	if len(servers) != 1 || servers[0].Name != "echo" {
+		t.Fatalf("want one server 'echo', got %+v", servers)
+	}
+	if servers[0].Status != "connected" {
+		t.Fatalf("echo should be connected, got %q", servers[0].Status)
+	}
+	if len(servers[0].Tools) == 0 {
+		t.Fatalf("connected server should surface tools, got none: %+v", servers[0])
+	}
+
+	// Failed case (missing binary).
+	badCfg := filepath.Join(dir, "bad.mcp.json")
+	writeMCP(t, badCfg, `{"mcpServers":{"broken":{"command":"/nonexistent/xyz-octobuddy","args":[]}}}`)
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel2()
+	bad, err := ProbeMCP(ctx2, bin, env, badCfg)
+	if err != nil {
+		t.Fatalf("probe (bad cfg) errored: %v", err)
+	}
+	if len(bad) != 1 || bad[0].Status == "connected" {
+		t.Fatalf("missing-binary server must not be connected, got %+v", bad)
+	}
+}
+
+func writeMCP(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// jsonStr quotes s as a JSON string literal (for embedding a path in .mcp.json).
+func jsonStr(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
 }

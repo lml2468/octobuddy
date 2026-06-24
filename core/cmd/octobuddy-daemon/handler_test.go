@@ -82,3 +82,49 @@ func exerciseBotAssemblyHelpers(t *testing.T) {
 	_ = newBotCronManager(context.Background(), cfg, connector, nil, target)
 	registerBotRuntime(&botRuntime{cfg: cfg, connector: connector}, newBotRegistry(nil), nil)
 }
+
+// TestMCPCheckHandler verifies mcp.check routes to the addressed bot's hook
+// (returning its health), reports "not configured" when no hook is wired, and
+// errors on an unknown bot. The hook is faked — the real probe is covered by
+// agent.TestProbeMCPReportsHealth.
+func TestMCPCheckHandler(t *testing.T) {
+	reg := newBotRegistry(nil)
+	withHook := &botRuntime{cfg: config.Resolved{BotID: "hooked"}}
+	withHook.target = &botTarget{id: "hooked", mcpCheck: func(context.Context) (control.MCPCheckResponse, error) {
+		return control.MCPCheckResponse{Configured: true, Servers: []control.MCPServerHealth{{Name: "echo", Status: "connected", Tools: []string{"mcp__echo__ping"}}}}, nil
+	}}
+	noHook := &botRuntime{cfg: config.Resolved{BotID: "bare"}}
+	noHook.target = &botTarget{id: "bare"}
+	reg.add(withHook)
+	reg.add(noHook)
+	h := makeMultiBotHandler(context.Background(), reg, time.Now())
+
+	check := func(botID string) (control.MCPCheckResponse, error) {
+		raw, _ := json.Marshal(control.MCPCheckBody{BotID: botID})
+		out, err := h("mcp.check", raw)
+		if err != nil {
+			return control.MCPCheckResponse{}, err
+		}
+		return out.(control.MCPCheckResponse), nil
+	}
+
+	res, err := check("hooked")
+	if err != nil {
+		t.Fatalf("check hooked: %v", err)
+	}
+	if !res.Configured || res.BotID != "hooked" || len(res.Servers) != 1 || res.Servers[0].Status != "connected" {
+		t.Fatalf("hooked result wrong: %+v", res)
+	}
+
+	bare, err := check("bare")
+	if err != nil {
+		t.Fatalf("check bare: %v", err)
+	}
+	if bare.Configured || bare.BotID != "bare" {
+		t.Fatalf("bare bot must report not-configured: %+v", bare)
+	}
+
+	if _, err := check("nope"); err == nil {
+		t.Fatal("unknown bot should error")
+	}
+}

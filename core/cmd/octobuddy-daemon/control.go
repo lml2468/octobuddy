@@ -32,6 +32,13 @@ type botTarget struct {
 	// the REPL single-bot path where no Octo connector is wired.
 	connector *octo.Connector
 
+	// mcpCheck probes this bot's saved .mcp.json and returns each server's
+	// health. Wired at assembly (it needs the bot's resolved bin + env +
+	// config dir). nil when the bot has no isolated CLAUDE_CONFIG_DIR
+	// (inheritUserConfig) or in test/REPL wiring; the handler then reports
+	// "not configured".
+	mcpCheck func(ctx context.Context) (control.MCPCheckResponse, error)
+
 	// turnsWG tracks every in-flight session.send goroutine so the daemon
 	// can wait for them before closing the store. The Octo connector tracks
 	// its own queue via Connector.WaitTurns; this is the symmetric guard for
@@ -72,6 +79,7 @@ func makeHandler(ctx context.Context, deps handlerDeps) control.CommandHandler {
 		"cron.list":       d.cronList,
 		"cron.delete":     d.cronDelete,
 		"cron.update":     d.cronUpdate,
+		"mcp.check":       d.mcpCheck,
 	}
 	return func(cmdType string, body json.RawMessage) (any, error) {
 		handler, ok := handlers[cmdType]
@@ -248,6 +256,31 @@ func usageForRequest(st *store.Store, since int64) (store.TokenUsage, error) {
 		return st.UsageSince(since)
 	}
 	return st.Usage()
+}
+
+// mcpCheck probes the addressed bot's saved .mcp.json and reports each MCP
+// server's health (the desktop's "test connection"). The probe is wired at
+// bot assembly (it needs the bot's resolved bin + env + config dir); a nil
+// hook means MCP isn't applicable to this bot (no isolated config dir, or
+// test/REPL wiring) — reported as "not configured", not an error.
+func (d controlCommandDispatcher) mcpCheck(body json.RawMessage) (any, error) {
+	b, err := decodeControlBody[control.MCPCheckBody](body)
+	if err != nil {
+		return nil, err
+	}
+	t, err := d.deps.resolve(b.BotID)
+	if err != nil {
+		return nil, err
+	}
+	if t.mcpCheck == nil {
+		return control.MCPCheckResponse{BotID: b.BotID, Configured: false}, nil
+	}
+	res, err := t.mcpCheck(d.ctx)
+	if err != nil {
+		return nil, err
+	}
+	res.BotID = b.BotID
+	return res, nil
 }
 
 func (d controlCommandDispatcher) sessionReset(body json.RawMessage) (any, error) {

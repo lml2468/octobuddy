@@ -30,11 +30,15 @@ import (
 // broader cross-session disclosure than a single session.history read.
 // usage.stats is privileged too: it returns the bot's cumulative token/cost
 // totals — operator billing metadata, not something the agent has a path to.
-// sessionKeys are low-entropy (DM = uid, group = channelId) and an injected agent
-// already sees peer uids / channel ids, so targeting is trivial; leaving these
-// open defeats the cross-session boundary this gate establishes. The GUI is the
-// only sanctioned caller and it authenticates before issuing them (the auth send
-// precedes all other sends on its FIFO connection), so gating does not break it.
+// mcp.check is privileged for the same shape of reason as sessions.list: it
+// takes an attacker-controllable botId, spawns a probe process, and returns the
+// bot's configured MCP server names + health — operator infrastructure metadata
+// with no sanctioned agent path. sessionKeys are low-entropy (DM = uid, group =
+// channelId) and an injected agent already sees peer uids / channel ids, so
+// targeting is trivial; leaving these open defeats the cross-session boundary
+// this gate establishes. The GUI is the only sanctioned caller and it
+// authenticates before issuing them (the auth send precedes all other sends on
+// its FIFO connection), so gating does not break it.
 //
 // Open commands (health, bots.list) stay open: low-value daemon/roster metadata
 // the agent's own config already implies, with no cross-session disclosure.
@@ -45,6 +49,7 @@ var privilegedControlCommands = []string{
 	"session.history",
 	"sessions.list",
 	"usage.stats",
+	"mcp.check",
 	"cron.create",
 	"cron.list",
 	"cron.delete",

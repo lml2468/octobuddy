@@ -75,7 +75,7 @@ func TestPrivilegedControlCommandsCoverThreat(t *testing.T) {
 	}
 	for _, want := range []string{
 		"session.send", "session.reset", "secret.inject",
-		"session.history", "sessions.list", "usage.stats", "cron.create", "cron.list", "cron.delete",
+		"session.history", "sessions.list", "usage.stats", "mcp.check", "cron.create", "cron.list", "cron.delete",
 	} {
 		if !priv[want] {
 			t.Errorf("expected %q to be privileged", want)

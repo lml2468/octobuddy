@@ -90,6 +90,13 @@ type ClaudeDriver struct {
 	// EnvFn, when set, is evaluated on every Query to build the extra env,
 	// overriding the static Env.
 	EnvFn func() []string
+	// MCPConfigFn, when set, is evaluated per Query to resolve the path to
+	// this bot's .mcp.json (under its CLAUDE_CONFIG_DIR). A non-empty result
+	// adds `--mcp-config <path> --strict-mcp-config` so the bot's configured
+	// MCP servers load (and only those). Resolved per turn so a freshly-
+	// written .mcp.json takes effect on the next message without a restart;
+	// return "" when the file is absent.
+	MCPConfigFn func() string
 
 	// selfcheckOnce gates a one-time diagnostic line emitted on the
 	// FIRST Query: claude path resolution, masked ANTHROPIC_AUTH_TOKEN,
@@ -172,6 +179,16 @@ func (d *ClaudeDriver) buildArgs(req Request) []string {
 	if req.MemoryDir != "" {
 		if b, err := json.Marshal(map[string]string{"autoMemoryDirectory": req.MemoryDir}); err == nil {
 			args = append(args, "--settings", string(b))
+		}
+	}
+	// Load this bot's MCP servers (and only those) when a .mcp.json exists.
+	// .mcp.json is a project-scope file; --setting-sources=user does NOT
+	// auto-scan CLAUDE_CONFIG_DIR for it, so the explicit --mcp-config is
+	// required. --strict-mcp-config ignores any other MCP source. Resolved
+	// per Query so a freshly-written file applies next turn.
+	if d.MCPConfigFn != nil {
+		if p := d.MCPConfigFn(); p != "" {
+			args = append(args, "--mcp-config", p, "--strict-mcp-config")
 		}
 	}
 	args = append(args, d.ExtraArgs...)
@@ -297,31 +314,45 @@ func filterTools(tools []string) []string {
 	return out
 }
 
-// ProbeTools spawns the claude binary headlessly and returns the built-in
-// tool names it actually offers, read from the `system/init` stream-json line
-// the CLI emits BEFORE any API call. It makes NO API request: it reads the
-// first init line and kills the process. The returned names are the
-// authoritative tool surface for `bin` (which drifts per claude release), so
-// the driver sources its headless default from this rather than a
-// hand-maintained constant. env is layered onto the process environment the
-// same way Query does, so a per-bot CLAUDE_CONFIG_DIR (and thus its MCP
-// servers) is reflected in the result.
-func ProbeTools(ctx context.Context, bin string, env []string) ([]string, error) {
-	args := []string{
+// MCPServerStatus is one MCP server's health as reported by the claude
+// `system/init` line: Name + Status ("connected" | "failed" | …) and the
+// mcp__<name>__* tools it contributed (empty when failed). Drives the
+// desktop's MCP "test connection" feature.
+type MCPServerStatus struct {
+	Name   string   `json:"name"`
+	Status string   `json:"status"`
+	Tools  []string `json:"tools"`
+}
+
+// initInfo is the subset of the claude `system/init` stream-json line the
+// probes consume.
+type initInfo struct {
+	Tools      []string
+	MCPServers []MCPServerStatus
+}
+
+// probeInit spawns the claude binary headlessly with extraArgs, reads the
+// FIRST `system/init` stream-json line (emitted BEFORE any API call — no
+// spend), kills the process, and returns the parsed tool surface + MCP server
+// statuses. The shared core of ProbeTools / ProbeMCP. env is layered onto the
+// process environment the same way Query does (so a per-bot CLAUDE_CONFIG_DIR
+// is reflected).
+func probeInit(ctx context.Context, bin string, env, extraArgs []string) (initInfo, error) {
+	args := append([]string{
 		"-p", "-", "--output-format", "stream-json", "--verbose",
 		"--permission-mode", "bypassPermissions", "--setting-sources=user",
-		"--system-prompt", "", "--tools", "default",
-	}
+		"--system-prompt", "",
+	}, extraArgs...)
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Env = mergedEnv(env)
 	cmd.Stdin = strings.NewReader("probe")
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return nil, fmt.Errorf("probe stdout pipe: %w", err)
+		return initInfo{}, fmt.Errorf("probe stdout pipe: %w", err)
 	}
 	if err := cmd.Start(); err != nil {
 		_ = stdout.Close()
-		return nil, fmt.Errorf("probe start %s: %w", bin, err)
+		return initInfo{}, fmt.Errorf("probe start %s: %w", bin, err)
 	}
 	defer func() {
 		_ = cmd.Process.Kill()
@@ -335,18 +366,78 @@ func ProbeTools(ctx context.Context, bin string, env []string) ([]string, error)
 			continue
 		}
 		var init struct {
-			Type    string   `json:"type"`
-			Subtype string   `json:"subtype"`
-			Tools   []string `json:"tools"`
+			Type       string   `json:"type"`
+			Subtype    string   `json:"subtype"`
+			Tools      []string `json:"tools"`
+			MCPServers []struct {
+				Name   string `json:"name"`
+				Status string `json:"status"`
+			} `json:"mcp_servers"`
 		}
-		if json.Unmarshal([]byte(line), &init) == nil && init.Type == "system" && init.Subtype == "init" {
-			return init.Tools, nil
+		if json.Unmarshal([]byte(line), &init) != nil || init.Type != "system" || init.Subtype != "init" {
+			continue
 		}
+		out := initInfo{Tools: init.Tools}
+		for _, s := range init.MCPServers {
+			out.MCPServers = append(out.MCPServers, MCPServerStatus{
+				Name:   s.Name,
+				Status: s.Status,
+				Tools:  mcpToolsForServer(s.Name, init.Tools),
+			})
+		}
+		return out, nil
 	}
 	if err := sc.Err(); err != nil {
-		return nil, fmt.Errorf("probe scan: %w", err)
+		return initInfo{}, fmt.Errorf("probe scan: %w", err)
 	}
-	return nil, fmt.Errorf("no system/init line from %s", bin)
+	return initInfo{}, fmt.Errorf("no system/init line from %s", bin)
+}
+
+// mcpToolsForServer returns the mcp__<server>__* tool names from the flat tool
+// list attributable to one MCP server.
+func mcpToolsForServer(server string, tools []string) []string {
+	prefix := "mcp__" + server + "__"
+	var out []string
+	for _, t := range tools {
+		if strings.HasPrefix(t, prefix) {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// ProbeTools spawns the claude binary headlessly and returns the built-in
+// tool names it actually offers, read from the `system/init` stream-json line
+// the CLI emits BEFORE any API call. It makes NO API request: it reads the
+// first init line and kills the process. The returned names are the
+// authoritative tool surface for `bin` (which drifts per claude release), so
+// the driver sources its headless default from this rather than a
+// hand-maintained constant. env is layered onto the process environment the
+// same way Query does, so a per-bot CLAUDE_CONFIG_DIR (and thus its MCP
+// servers) is reflected in the result.
+func ProbeTools(ctx context.Context, bin string, env []string) ([]string, error) {
+	info, err := probeInit(ctx, bin, env, []string{"--tools", "default"})
+	if err != nil {
+		return nil, err
+	}
+	return info.Tools, nil
+}
+
+// ProbeMCP spawns the claude binary with the given .mcp.json loaded and
+// returns each configured MCP server's health (connected/failed) plus the
+// tools it contributed — the backend for the desktop's MCP "test connection"
+// feature. It exercises claude's real MCP-load path (--mcp-config +
+// --strict-mcp-config, tool surface scoped to mcp__*), so the reported status
+// matches what a real turn would see. No API spend. A server reporting a
+// non-"connected" status (with empty Tools) is the failure signal.
+func ProbeMCP(ctx context.Context, bin string, env []string, mcpConfigPath string) ([]MCPServerStatus, error) {
+	info, err := probeInit(ctx, bin, env, []string{
+		"--tools", "mcp__*", "--mcp-config", mcpConfigPath, "--strict-mcp-config",
+	})
+	if err != nil {
+		return nil, err
+	}
+	return info.MCPServers, nil
 }
 
 func (d *ClaudeDriver) Query(ctx context.Context, req Request) (<-chan AgentEvent, error) {
@@ -479,6 +570,11 @@ func (d *ClaudeDriver) binPath() string {
 	}
 	return d.Bin
 }
+
+// ResolveBin exposes the per-turn resolved binary path (binPath) so callers
+// that drive an out-of-turn probe (e.g. the daemon's MCP health check via
+// ProbeMCP) use the same binary a real Query would.
+func (d *ClaudeDriver) ResolveBin() string { return d.binPath() }
 
 func (d *ClaudeDriver) queryEnv() []string {
 	if d.EnvFn != nil {
