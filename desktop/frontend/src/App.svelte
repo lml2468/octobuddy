@@ -11,6 +11,7 @@
   import WorkspacePanel from "./lib/components/WorkspacePanel.svelte";
   import FilePreview from "./lib/components/FilePreview.svelte";
   import { confirm } from "./lib/confirm.svelte";
+  import { clientLog, installGlobalErrorCapture } from "./lib/clientLog";
 
   // Lazy-loaded chunks: these UIs are only reached via tray menu, ⌘K, or
   // explicit sidebar click — they don't belong in the first-paint critical
@@ -116,6 +117,14 @@
     s.setProperty("--grad-b", b);
   });
 
+  // Global error capture: window.onerror + unhandledrejection forward to
+  // the daemon log (~/.octobuddy/logs/octobuddy.log). Idempotent so HMR
+  // can re-run this effect without stacking listeners. Component-tree
+  // errors are caught by <svelte:boundary> below — clientLog() is shared.
+  $effect(() => {
+    installGlobalErrorCapture();
+  });
+
  // ⌘K / Ctrl-K toggles the command palette. Listen on document (NOT both
  // window AND document — registering on both fired onKey twice per
  // keydown, so the toggle was cancelling itself and the palette never
@@ -178,6 +187,11 @@
   }
 </script>
 
+<svelte:boundary onerror={(e: unknown, reset: () => void) => {
+  const err = e as Error;
+  clientLog("svelte:boundary", err?.message ?? String(e), err?.stack ?? "");
+  void reset;
+}}>
 {#if !collapsed}
   <TrafficLights />
 {/if}
@@ -268,6 +282,20 @@
   <TokenUsageCmp onclose={() => (showUsage = false)} />
 {/if}
 
+{#snippet failed(error: unknown, reset: () => void)}
+  <div class="boundary-fallback" role="alert">
+    <h2>Something went wrong</h2>
+    <p class="msg">{(error as Error)?.message ?? String(error)}</p>
+    <p class="hint">
+      The full trace was written to the desktop log
+      (<code>~/.octobuddy/logs/octobuddy.log</code>; the tray menu's
+      <strong>查看日志</strong> opens it). Restart the app if the issue persists.
+    </p>
+    <button type="button" onclick={reset}>Try again</button>
+  </div>
+{/snippet}
+</svelte:boundary>
+
 <style>
   .shell { display: flex; height: 100vh; background: var(--window-grad); }
  /* Custom window controls for the frameless window — vertically centered in the header band, top-left over the sidebar. */
@@ -316,4 +344,23 @@
   .sb-toggle.collapsed svg { transform: rotate(180deg); }
   .sb-toggle:active { transform: scale(0.9); }
   @media (prefers-reduced-motion: reduce) { .sb-toggle svg { transition: none; } .sb-toggle:active { transform: none; } }
+
+  /* Component-tree error fallback (svelte:boundary). Shown when render or
+     lifecycle throws and the global handlers can't recover. Kept minimal —
+     the goal is "tell the user something broke + how to find the log",
+     not to be pretty. */
+  .boundary-fallback {
+    position: fixed; inset: 0;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 12px; padding: 32px;
+    background: var(--surface, #fff); color: var(--ink, #111);
+    font-family: var(--font-sans, system-ui, -apple-system, sans-serif);
+    z-index: 9999;
+  }
+  .boundary-fallback h2 { font-size: 18px; font-weight: 600; margin: 0; }
+  .boundary-fallback .msg { color: var(--accent, #c00); font-family: var(--font-mono, ui-monospace, monospace); font-size: 13px; max-width: 600px; word-break: break-word; text-align: center; margin: 0; }
+  .boundary-fallback .hint { color: var(--ink-soft, #666); font-size: 13px; max-width: 600px; text-align: center; line-height: 1.5; margin: 0; }
+  .boundary-fallback .hint code { font-family: var(--font-mono, ui-monospace, monospace); font-size: 12px; padding: 1px 4px; border-radius: 3px; background: color-mix(in srgb, var(--ink) 6%, transparent); }
+  .boundary-fallback button { padding: 8px 18px; border-radius: 6px; border: 1px solid var(--hairline, rgba(0,0,0,.15)); background: var(--accent, #07c160); color: white; font-size: 13px; cursor: pointer; }
+  .boundary-fallback button:hover { filter: brightness(1.1); }
 </style>

@@ -286,6 +286,37 @@ func (x *OctoBuddyService) Health() error { return x.send("health", nil) }
 // BotsList requests the bot roster.
 func (x *OctoBuddyService) BotsList() error { return x.send("bots.list", nil) }
 
+// LogClientError records a frontend-originated error into the persistent
+// desktop log (~/.octobuddy/logs/octobuddy.log via main()'s tee). Previous
+// behavior was silent: an uncaught Svelte render error or unhandled
+// promise rejection vanished from stderr the moment the dev terminal was
+// gone. With this method, the global window.onerror + unhandledrejection
+// + <svelte:boundary> handlers all funnel into here so operators (and
+// the user reporting an issue) have a single grep target — the same file
+// the tray's "查看日志" action opens.
+//
+// Best-effort: bounded message size (the frontend caps too, but defense
+// in depth — a 10 MB stack trace is somebody's idea of a bad day) and
+// never propagates an error back up; client logging that fails would
+// otherwise cascade into the very crash report it was trying to capture.
+func (x *OctoBuddyService) LogClientError(category, message, stack string) {
+	const cap = 8 << 10 // 8 KiB per field; full traces > this are truncated with marker
+	log.Printf("[ui-error] category=%s message=%s\nstack=%s",
+		truncForLog(category, 128),
+		truncForLog(message, cap),
+		truncForLog(stack, cap),
+	)
+}
+
+// truncForLog returns s up to n bytes, appending an "…(truncated)" marker
+// when the cut fires so a reader can tell the trace was clipped.
+func truncForLog(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…(truncated)"
+}
+
 // Send routes a DM message to a bot (botID may be empty for the default bot).
 // attachments are optional Composer-side files (image / file) that the daemon
 // materializes into the session sandbox and folds into the agent prompt; nil

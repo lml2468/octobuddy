@@ -139,6 +139,16 @@ export function BotsList(): $CancellablePromise<void> {
 }
 
 /**
+ * LogClientError records a frontend-originated error into the persistent
+ * desktop log (~/.octobuddy/logs/octobuddy.log via main()'s tee). Hand-added
+ * to preserve the .ts binding format the rest of this directory uses; ID
+ * extracted from a one-shot `wails3 generate bindings` run.
+ */
+export function LogClientError(category: string, message: string, stack: string): $CancellablePromise<void> {
+    return $Call.ByID(1849461069, category, message, stack);
+}
+
+/**
  * CronCreate schedules a task (owner-gated by the daemon).
  */
 export function CronCreate(body: control$0.CronCreateBody): $CancellablePromise<void> {
