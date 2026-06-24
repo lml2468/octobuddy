@@ -8,10 +8,10 @@
 package cron
 
 import (
-	"fmt"
-	"os"
 	"sync"
 	"time"
+
+	"github.com/lml2468/octobuddy/core/clog"
 )
 
 // CronTickInterval is how often the scheduler scans cron.json. 30s → ≤30s firing
@@ -150,16 +150,16 @@ func (m *Manager) SetOwnerUID(uid string) {
 		return out, changed
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "%scron: prune tasks before owner resolve %s→%s: %v (keeping prior owner)\n",
-			m.label, prior, uid, err)
+		clog.For("cron").Warn("prune tasks before owner resolve (keeping prior owner)",
+			"label", m.label, "prior", prior, "uid", uid, "err", err)
 		return
 	}
 	m.ownerMu.Lock()
 	m.ownerUID = uid
 	m.ownerMu.Unlock()
 	if removed > 0 {
-		fmt.Fprintf(os.Stderr, "%scron: dropped %d task(s) on owner resolve %s→%s (foreign CreatedBy)\n",
-			m.label, removed, prior, uid)
+		clog.For("cron").Info("dropped tasks on owner resolve (foreign CreatedBy)",
+			"label", m.label, "removed", removed, "prior", prior, "uid", uid)
 	}
 }
 

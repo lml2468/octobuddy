@@ -3,8 +3,9 @@ package store
 import (
 	"database/sql"
 	"fmt"
-	"os"
 	"time"
+
+	"github.com/lml2468/octobuddy/core/clog"
 
 	_ "modernc.org/sqlite" // pure-Go driver: no cgo, cross-compiles cleanly
 )
@@ -171,7 +172,7 @@ func (s *Store) appendMessage(sessionID string, role Role, content, fromName, so
 	// failure here only affects ordering (the message is already persisted), so
 	// log it rather than failing the whole append.
 	if _, uerr := s.db.Exec(`UPDATE sessions SET updated_at=? WHERE id=?`, now, sessionID); uerr != nil {
-		fmt.Fprintf(os.Stderr, "[store] bump updated_at for %s: %v\n", sessionID, uerr)
+		clog.For("store").Warn("bump updated_at failed", "session", sessionID, "err", uerr)
 	}
 	return nil
 }

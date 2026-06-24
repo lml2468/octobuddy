@@ -5,6 +5,7 @@ import (
 	"net"
 	"os"
 
+	"github.com/lml2468/octobuddy/core/clog"
 	"github.com/lml2468/octobuddy/core/control"
 )
 
@@ -47,7 +48,7 @@ func serveControlBus(srv *control.Server, path string) (cleanup func()) {
 	ln := mustListenUnix(path)
 	go func() {
 		if err := srv.Serve(ln); err != nil {
-			fmt.Fprintf(os.Stderr, "control serve: %v\n", err)
+			clog.For("control").Error("serve", "err", err)
 		}
 	}()
 	fmt.Printf("control bus listening on %s\n", path)
@@ -80,11 +81,11 @@ func (l *peerCredListener) Accept() (net.Conn, error) {
 		switch {
 		case perr != nil:
 			// Platform claims peer-cred support but the read failed — fail closed.
-			fmt.Fprintf(os.Stderr, "control: rejecting connection (peer-cred error: %v)\n", perr)
+			clog.For("control").Warn("rejecting connection (peer-cred error)", "err", perr)
 			_ = conn.Close()
 			continue
 		case known && uid != l.allowUID:
-			fmt.Fprintf(os.Stderr, "control: rejecting connection from uid %d (allowed %d)\n", uid, l.allowUID)
+			clog.For("control").Warn("rejecting connection from disallowed uid", "uid", uid, "allowed", l.allowUID)
 			_ = conn.Close()
 			continue
 		}

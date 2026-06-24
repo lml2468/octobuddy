@@ -2,9 +2,8 @@ package main
 
 import (
 	"context"
-	"fmt"
-	"os"
 
+	"github.com/lml2468/octobuddy/core/clog"
 	"github.com/lml2468/octobuddy/core/cron"
 	"github.com/lml2468/octobuddy/core/gateway"
 	"github.com/lml2468/octobuddy/core/im/octo"
@@ -45,14 +44,14 @@ func fireCronTask(ctx context.Context, connector *octo.Connector, gw *gateway.Ga
 			Trigger:     cronDecision,
 		}
 		if _, err := inbound.SessionKey(); err != nil {
-			fmt.Fprintf(os.Stderr, "cron: task %s console fire has unroutable coords: %v\n", t.ID, err)
+			clog.For("cron").Warn("console fire has unroutable coords", "task", t.ID, "err", err)
 			return
 		}
 		target.turnsWG.Add(1)
 		go func() {
 			defer target.turnsWG.Done()
 			if _, err := gw.Handle(ctx, inbound); err != nil {
-				fmt.Fprintf(os.Stderr, "cron: task %s console fire dispatch failed: %v\n", t.ID, err)
+				clog.For("cron").Error("console fire dispatch failed", "task", t.ID, "err", err)
 			}
 		}()
 		return
@@ -76,7 +75,7 @@ func fireCronTask(ctx context.Context, connector *octo.Connector, gw *gateway.Ga
 	}
 	key, err := inbound.SessionKey()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "cron: task %s has unroutable coords: %v\n", t.ID, err)
+		clog.For("cron").Warn("task has unroutable coords", "task", t.ID, "err", err)
 		return
 	}
 	connector.EnqueueCron(key, t.ChannelID, octoType, inbound)

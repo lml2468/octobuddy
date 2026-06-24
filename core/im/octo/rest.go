@@ -8,9 +8,10 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"time"
+
+	"github.com/lml2468/octobuddy/core/clog"
 )
 
 // RESTClient talks to the Octo bot REST API (api.ts). Auth is Bearer token,
@@ -163,7 +164,7 @@ func (c *RESTClient) GetUserInfo(ctx context.Context, uid string) string {
 	}
 	var raw nameResponse
 	if err := c.getJSON(ctx, "/v1/bot/user/info?uid="+url.QueryEscape(uid), &raw, true); err != nil {
-		fmt.Fprintf(os.Stderr, "[octo] getUserInfo(%q) error: %v\n", uid, err)
+		clog.For("octo").Warn("getUserInfo", "uid", uid, "err", err)
 		return ""
 	}
 	return raw.Name
@@ -179,7 +180,7 @@ func (c *RESTClient) GetGroupInfo(ctx context.Context, groupNo string) string {
 	}
 	var raw nameResponse
 	if err := c.getJSON(ctx, "/v1/bot/groups/"+url.PathEscape(groupNo), &raw, true); err != nil {
-		fmt.Fprintf(os.Stderr, "[octo] getGroupInfo(%q) error: %v\n", groupNo, err)
+		clog.For("octo").Warn("getGroupInfo", "group_no", groupNo, "err", err)
 		return ""
 	}
 	return raw.Name
@@ -196,7 +197,7 @@ func (c *RESTClient) GetThreadInfo(ctx context.Context, groupNo, shortID string)
 	var raw nameResponse
 	path := "/v1/bot/groups/" + url.PathEscape(groupNo) + "/threads/" + url.PathEscape(shortID)
 	if err := c.getJSON(ctx, path, &raw, true); err != nil {
-		fmt.Fprintf(os.Stderr, "[octo] getThreadInfo(%q,%q) error: %v\n", groupNo, shortID, err)
+		clog.For("octo").Warn("getThreadInfo", "group_no", groupNo, "short_id", shortID, "err", err)
 		return ""
 	}
 	return raw.Name

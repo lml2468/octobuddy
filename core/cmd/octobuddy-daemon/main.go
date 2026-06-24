@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/lml2468/octobuddy/core/agent"
+	"github.com/lml2468/octobuddy/core/clog"
 	"github.com/lml2468/octobuddy/core/control"
 	"github.com/lml2468/octobuddy/core/control/wire"
 	"github.com/lml2468/octobuddy/core/gateway"
@@ -37,6 +38,13 @@ import (
 
 func main() {
 	flags := parseDaemonFlags()
+
+	// Install the slog default BEFORE any subsystem starts logging. text
+	// format keeps the human-readable output operators are used to;
+	// --log-json switches to structured JSON for log aggregators. --debug
+	// surfaces the DEBUG-level lines (selfcheck details, lock contention
+	// telemetry, etc.) that are normally too noisy for the day-to-day stream.
+	clog.Setup(flags.debug, flags.logJSON, nil)
 
 	// Config mode: load the single ~/.octobuddy/config.json and run every bot in its
 	// own isolated stack. Mutually exclusive with the single-bot flag front ends.
@@ -62,6 +70,8 @@ type daemonFlags struct {
 	configPath  string
 	exitParent  bool
 	authStdin   bool
+	debug       bool
+	logJSON     bool
 }
 
 func parseDaemonFlags() daemonFlags {
@@ -76,6 +86,8 @@ func parseDaemonFlags() daemonFlags {
 	configPath := flag.String("config", "", "load ~/.octobuddy/config.json (or given path) and run all configured bots")
 	exitParent := flag.Bool("exit-with-parent", false, "exit when the parent process dies (set by the GUI so the daemon never outlives the app)")
 	authStdin := flag.Bool("control-auth-stdin", false, "read the control-bus capability token as the first line of stdin (set by the GUI; out-of-band, never an env/argv). Off = no token: privileged bus commands are denied")
+	debug := flag.Bool("debug", false, "log DEBUG-level lines (selfcheck details, gateway internals)")
+	logJSON := flag.Bool("log-json", false, "emit logs as JSON (structured; for log aggregators)")
 	flag.Parse()
 	return daemonFlags{
 		claudeBin:   *claudeBin,
@@ -89,6 +101,8 @@ func parseDaemonFlags() daemonFlags {
 		configPath:  *configPath,
 		exitParent:  *exitParent,
 		authStdin:   *authStdin,
+		debug:       *debug,
+		logJSON:     *logJSON,
 	}
 }
 
@@ -205,7 +219,7 @@ func startSingleBotConnector(ctx context.Context, connector *octo.Connector, gw 
 	connector.SetGateway(gw)
 	go func() {
 		if err := connector.Run(ctx); err != nil {
-			fmt.Fprintf(os.Stderr, "octo connector: %v\n", err)
+			clog.For("octo").Error("connector", "err", err)
 		}
 	}()
 	fmt.Printf("octo connector started (api=%s)\n", octoAPI)

@@ -1,10 +1,11 @@
 package agent
 
 import (
-	"fmt"
 	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/lml2468/octobuddy/core/clog"
 )
 
 // logSelfcheck emits one line summarizing the realized invocation environment
@@ -41,8 +42,8 @@ func (d *ClaudeDriver) logSelfcheck(env []string, cwd string) {
 		botID = "?"
 	}
 	writable := isDirWritable(cwd)
-	fmt.Fprintf(os.Stderr, "[selfcheck] bot=%s claude=%s auth=%s base_url=%s cwd=%s writable=%t\n",
-		botID, binStr, auth, baseURL, cwd, writable)
+	clog.For("selfcheck").Info("driver invocation environment",
+		"bot", botID, "claude", binStr, "auth", auth, "base_url", baseURL, "cwd", cwd, "writable", writable)
 }
 
 // maskToken returns a redacted form safe to log: "UNSET" if empty, the literal

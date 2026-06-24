@@ -2,8 +2,6 @@ package gateway
 
 import (
 	"context"
-	"fmt"
-	"os"
 	"strings"
 
 	"github.com/lml2468/octobuddy/core/agent"
@@ -38,7 +36,7 @@ func (g *Gateway) runTurn(ctx context.Context, sessionKey string, msg router.Inb
 		attemptResult = g.consumeAgentAttempt(sessionKey, events, idle, resume != "")
 
 		if shouldRetryFreshResume(attemptResult, resume, attempt) {
-			fmt.Fprintf(os.Stderr, "[gateway] stale resume id for %s; clearing and retrying fresh\n", sessionKey)
+			glog().Warn("stale resume id; clearing and retrying fresh", "session", sessionKey)
 			_ = g.store.ClearResumeForAgent(sessionKey, g.driver.Name())
 			resume = ""
 			continue
@@ -143,7 +141,7 @@ func (g *Gateway) consumeTurnDone(sessionKey string, ev agent.AgentEvent, idle *
 	// that will be retried fresh.
 	if shouldCommitUsage(ev, res) {
 		if err := g.store.AddUsage(ev.Usage.InputTokens, ev.Usage.OutputTokens, ev.Usage.CachedInputTokens, ev.Usage.CacheCreationInputTokens, ev.Usage.CostUSD); err != nil {
-			fmt.Fprintf(os.Stderr, "[gateway] add usage %s: %v\n", sessionKey, err)
+			glog().Error("add usage", "session", sessionKey, "err", err)
 		}
 	}
 	// Mark the idle guard done so a concurrent AfterFunc firing in the same tick
@@ -183,7 +181,7 @@ func (g *Gateway) prepareAgentRequest(ctx context.Context, sessionKey string, ms
 
 	resumeID, err := g.store.Resume(sessionKey, g.driver.Name())
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "[gateway] resume %s: %v\n", sessionKey, err)
+		glog().Error("resume", "session", sessionKey, "err", err)
 	}
 	cwd, memDir, err := g.resolveSandbox(sessionKey, msg)
 	if err != nil {
@@ -206,7 +204,7 @@ func (g *Gateway) handleDispatchTimeout(ctx context.Context, idle *idleGuard, se
 	if !idle.expired(ctx) {
 		return false
 	}
-	fmt.Fprintf(os.Stderr, "[gateway] dispatch idle timeout after %s (session=%s)\n", g.dispatchTimeout, sessionKey)
+	glog().Warn("dispatch idle timeout", "session", sessionKey, "timeout", g.dispatchTimeout)
 	*delivered = true
 	g.sink.OnReply(sessionKey, timeoutReply)
 	return true
@@ -217,7 +215,7 @@ func (g *Gateway) handleTerminalAgentError(sessionKey, termErr string, transient
 		return false
 	}
 	if transient {
-		fmt.Fprintf(os.Stderr, "[gateway] transient upstream error (session=%s): %s\n", sessionKey, termErr)
+		glog().Warn("transient upstream error", "session", sessionKey, "err", termErr)
 		reply := busyReply
 		if hint != "" {
 			reply = busyReply + "（" + hint + " 后恢复）"
@@ -226,7 +224,7 @@ func (g *Gateway) handleTerminalAgentError(sessionKey, termErr string, transient
 		g.sink.OnReply(sessionKey, reply)
 		return true
 	}
-	fmt.Fprintf(os.Stderr, "[gateway] terminal agent error (session=%s): %s\n", sessionKey, termErr)
+	glog().Error("terminal agent error", "session", sessionKey, "err", termErr)
 	g.sink.OnReply(sessionKey, errorReply)
 	return true
 }
@@ -234,17 +232,17 @@ func (g *Gateway) handleTerminalAgentError(sessionKey, termErr string, transient
 func (g *Gateway) completeSuccessfulTurn(sessionKey string, msg router.InboundMessage, newResume, text string) {
 	if newResume != "" {
 		if err := g.store.SaveResume(sessionKey, g.driver.Name(), newResume); err != nil {
-			fmt.Fprintf(os.Stderr, "[gateway] save resume %s: %v\n", sessionKey, err)
+			glog().Error("save resume", "session", sessionKey, "err", err)
 		}
 	}
 	if err := g.store.AppendAssistant(sessionKey, text, g.driver.Name()); err != nil {
-		fmt.Fprintf(os.Stderr, "[gateway] append assistant %s: %v\n", sessionKey, err)
+		glog().Error("append assistant", "session", sessionKey, "err", err)
 	}
 	g.notifySessionTouch(sessionKey, msg.ChannelID, msg.ChannelType)
 	g.sink.OnReply(sessionKey, text)
 	if g.groups != nil && msg.ChannelType == router.ChannelGroup && strings.TrimSpace(text) != "" {
 		if err := g.store.SaveBotReplySeq(sessionKey, msg.MessageSeq); err != nil {
-			fmt.Fprintf(os.Stderr, "[gateway] save reply seq %s: %v\n", sessionKey, err)
+			glog().Error("save reply seq", "session", sessionKey, "err", err)
 		}
 	}
 }

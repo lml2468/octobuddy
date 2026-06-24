@@ -1,8 +1,6 @@
 package gateway
 
 import (
-	"fmt"
-	"os"
 	"strings"
 
 	"github.com/lml2468/octobuddy/core/groupctx"
@@ -52,7 +50,7 @@ func (g *Gateway) backfillGroupContext(sessionKey, channelID string) {
 	})
 	if ran && inferred > 0 {
 		if err := g.store.SaveBotReplySeq(sessionKey, inferred); err != nil {
-			fmt.Fprintf(os.Stderr, "[gateway] save inferred reply seq %s: %v\n", sessionKey, err)
+			glog().Error("save inferred reply seq", "session", sessionKey, "err", err)
 		}
 	}
 }
@@ -62,7 +60,7 @@ func (g *Gateway) botReplyCutoffSeq(sessionKey string) int64 {
 	// replied to. Messages at/below it render under [Previously answered].
 	cutoffSeq, err := g.store.BotReplySeq(sessionKey)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "[gateway] bot reply seq %s: %v\n", sessionKey, err)
+		glog().Error("bot reply seq", "session", sessionKey, "err", err)
 	}
 	return cutoffSeq
 }

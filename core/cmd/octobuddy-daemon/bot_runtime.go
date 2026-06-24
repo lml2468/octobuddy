@@ -4,12 +4,12 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"os"
 	"os/signal"
 	"sync"
 	"syscall"
 	"time"
 
+	"github.com/lml2468/octobuddy/core/clog"
 	"github.com/lml2468/octobuddy/core/config"
 	"github.com/lml2468/octobuddy/core/control"
 	"github.com/lml2468/octobuddy/core/cron"
@@ -170,12 +170,12 @@ func runConfiguredBots(ctx context.Context, bots []config.Resolved, reg *botRegi
 			// the others keep running.
 			defer func() {
 				if r := recover(); r != nil {
-					fmt.Fprintf(os.Stderr, "[%s] panic: %v\n", cfg.BotID, r)
+					clog.For("bot").Error("panic", "bot", cfg.BotID, "panic", r)
 					registerFailedBot(reg, cfg, fmt.Sprintf("panic: %v", r))
 				}
 			}()
 			if err := runBot(ctx, cfg, reg, srv); err != nil && ctx.Err() == nil {
-				fmt.Fprintf(os.Stderr, "[%s] exited: %v\n", cfg.BotID, err)
+				clog.For("bot").Warn("exited", "bot", cfg.BotID, "err", err)
 				// A startup failure (store open, mkdir, …) returns before the bot
 				// registers itself. Register a failed-status stub so the GUI/bots.list
 				// shows it as down-with-error rather than missing entirely.

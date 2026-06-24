@@ -4,8 +4,8 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
-	"os"
+
+	"github.com/lml2468/octobuddy/core/clog"
 )
 
 // maxHistoricalPayloadBase64Len caps a base64 payload before decode (api.ts
@@ -71,7 +71,7 @@ func (c *RESTClient) GetChannelMessages(ctx context.Context, channelID string, c
 	}
 	var raw channelMessagesResponse
 	if err := c.postJSON(ctx, "/v1/bot/messages/sync", body, &raw); err != nil {
-		fmt.Fprintf(os.Stderr, "[octo] getChannelMessages error: %v\n", err)
+		clog.For("octo").Warn("getChannelMessages", "err", err)
 		return nil
 	}
 	msgs := capHistoricalMessages(raw.Messages, limit)
@@ -115,19 +115,19 @@ func decodeHistoricalPayload(payload json.RawMessage) historicalPayload {
 		return pl
 	}
 	if err := json.Unmarshal(payload, &pl); err != nil {
-		fmt.Fprintf(os.Stderr, "[octo] getChannelMessages object-payload JSON decode: %v\n", err)
+		clog.For("octo").Warn("getChannelMessages object-payload decode", "err", err)
 	}
 	return pl
 }
 
 func decodeBase64HistoricalPayload(s string, pl *historicalPayload) {
 	if len(s) > maxHistoricalPayloadBase64Len {
-		fmt.Fprintf(os.Stderr, "[octo] getChannelMessages dropping oversized payload (%d base64 chars)\n", len(s))
+		clog.For("octo").Warn("getChannelMessages dropping oversized payload", "base64_chars", len(s))
 		return
 	}
 	if dec, derr := base64.StdEncoding.DecodeString(s); derr == nil {
 		if err := json.Unmarshal(dec, pl); err != nil {
-			fmt.Fprintf(os.Stderr, "[octo] getChannelMessages base64-payload JSON decode: %v\n", err)
+			clog.For("octo").Warn("getChannelMessages base64-payload decode", "err", err)
 		}
 	}
 }

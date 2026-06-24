@@ -24,7 +24,6 @@ package gateway
 
 import (
 	"fmt"
-	"os"
 	"regexp"
 	"strings"
 )
@@ -106,10 +105,10 @@ func (g *Gateway) handleCommand(body, sessionKey string) (string, bool) {
 		// (cc-channel store.deleteSession clears both). Each side effect is logged
 		// but not fatal — a half-cleared reset is better than a refused command.
 		if err := g.store.ClearResume(sessionKey); err != nil {
-			fmt.Fprintf(os.Stderr, "[gateway] /reset clear resume %s: %v\n", sessionKey, err)
+			glog().Error("/reset clear resume", "session", sessionKey, "err", err)
 		}
 		if err := g.store.ClearHistory(sessionKey); err != nil {
-			fmt.Fprintf(os.Stderr, "[gateway] /reset clear history %s: %v\n", sessionKey, err)
+			glog().Error("/reset clear history", "session", sessionKey, "err", err)
 		}
 		return resetReply, true
 	case "config":

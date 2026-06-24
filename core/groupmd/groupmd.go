@@ -27,7 +27,6 @@
 package groupmd
 
 import (
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -36,6 +35,7 @@ import (
 	"sync"
 	"unicode/utf8"
 
+	"github.com/lml2468/octobuddy/core/clog"
 	"github.com/lml2468/octobuddy/core/safepath"
 )
 
@@ -171,7 +171,7 @@ func (l *Loader) rejectUnreadableFile(path string, err error) bool {
 		// GROUP.md" from "configured but rejected" — the prior silent empty-cache
 		// made misconfigured perms or an agent-planted symlink indistinguishable
 		// from a missing file.
-		fmt.Fprintf(os.Stderr, "[groupmd] refusing %s: %v\n", path, err)
+		clog.For("groupmd").Warn("refusing path", "path", path, "err", err)
 	}
 	// Missing, symlinked-leaf-refused, or symlinked-intermediate-refused —
 	// remember absence so a repeated miss is cheap; an unrelated load that later
@@ -201,9 +201,8 @@ func (l *Loader) rejectWritableFile(path string, st os.FileInfo) bool {
 	if st.Mode().Perm()&0o022 == 0 {
 		return false
 	}
-	fmt.Fprintf(os.Stderr,
-		"[groupmd] refusing %s: file is group/world-writable (mode %04o). Make it writable only by the gateway user.\n",
-		path, st.Mode().Perm())
+	clog.For("groupmd").Warn("refusing world-writable file; make it writable only by the gateway user",
+		"path", path, "mode", st.Mode().Perm())
 	l.remember(path, cacheEntry{modTime: st.ModTime().UnixNano(), size: st.Size()})
 	return true
 }

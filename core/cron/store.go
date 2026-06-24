@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/lml2468/octobuddy/core/clog"
 	"github.com/lml2468/octobuddy/core/safepath"
 )
 
@@ -132,10 +133,12 @@ func (s *Store) load() ([]Task, error) {
 func (s *Store) quarantine(reason error) {
 	sidecar := fmt.Sprintf("%s.corrupt.%d", s.path, time.Now().UnixNano())
 	if rerr := safepath.SafeRenameAbs(s.path, sidecar); rerr != nil {
-		fmt.Fprintf(os.Stderr, "cron: %s %v, resetting to empty (sidecar rename failed: %v)\n", s.path, reason, rerr)
+		clog.For("cron").Error("quarantine: sidecar rename failed; resetting to empty",
+			"path", s.path, "reason", reason, "err", rerr)
 		return
 	}
-	fmt.Fprintf(os.Stderr, "cron: %s %v, preserved at %s, resetting to empty\n", s.path, reason, sidecar)
+	clog.For("cron").Warn("quarantined corrupt store; resetting to empty",
+		"path", s.path, "reason", reason, "sidecar", sidecar)
 }
 
 // save atomically writes the task array via SafeWriteAbs: dirfd-walk the

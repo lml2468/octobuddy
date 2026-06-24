@@ -1,9 +1,9 @@
 package cron
 
 import (
-	"fmt"
-	"os"
 	"time"
+
+	"github.com/lml2468/octobuddy/core/clog"
 )
 
 // OnFire sets the callback invoked when a task is due (= the gateway's inbound
@@ -96,7 +96,7 @@ func (m *Manager) Tick() {
 		return survivors, changed
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "%scron: tick failed: %v\n", m.label, err)
+		clog.For("cron").Warn("tick failed", "label", m.label, "err", err)
 		return
 	}
 	m.dispatchCronFires(fires, nowMS)
@@ -150,8 +150,8 @@ func (m *Manager) dispatchCronFires(fires []Fire, nowMS int64) {
 	for _, f := range fires {
 		late := time.Duration(nowMS-f.Task.NextRun) * time.Millisecond
 		if late >= time.Minute {
-			fmt.Fprintf(os.Stderr, "%scron: task %s (%s) fired %d min late (catch-up)\n",
-				m.label, f.Task.ID, f.Task.Schedule, int(late.Minutes()))
+			clog.For("cron").Warn("task fired late (catch-up)",
+				"label", m.label, "task", f.Task.ID, "schedule", f.Task.Schedule, "min_late", int(late.Minutes()))
 		}
 		if m.onFire != nil {
 			// Dispatch on its own goroutine so a long-running turn doesn't
@@ -179,7 +179,7 @@ func (m *Manager) dispatchCronFires(fires []Fire, nowMS int64) {
 func (m *Manager) safeFire(f Fire) {
 	defer func() {
 		if r := recover(); r != nil {
-			fmt.Fprintf(os.Stderr, "%scron: onFire panicked for %s: %v\n", m.label, f.Task.ID, r)
+			clog.For("cron").Error("onFire panicked", "label", m.label, "task", f.Task.ID, "panic", r)
 		}
 	}()
 	m.onFire(f)

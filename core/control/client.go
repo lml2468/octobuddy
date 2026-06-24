@@ -1,11 +1,11 @@
 package control
 
 import (
-	"fmt"
 	"net"
-	"os"
 	"sync"
 	"sync/atomic"
+
+	"github.com/lml2468/octobuddy/core/clog"
 )
 
 type client struct {
@@ -63,7 +63,7 @@ func (c *client) enqueue(line []byte) {
 		// spamming a log line per drop on the hot path (L31).
 		n := c.dropped.Add(1)
 		if n&(n-1) == 0 { // n is 1, 2, 4, 8, …
-			fmt.Fprintf(os.Stderr, "[control] slow client dropped %d event(s)\n", n)
+			clog.For("control").Warn("slow client dropped events", "count", n)
 		}
 	}
 }

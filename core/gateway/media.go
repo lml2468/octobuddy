@@ -119,7 +119,7 @@ func (g *Gateway) materializeOneAttachment(ctx context.Context, cwd string, att 
 	case router.AttachmentImage:
 		rel, err := g.downloadImage(ctx, cwd, att.URL)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "[gateway] inbound image skipped: %v\n", err)
+			glog().Warn("inbound image skipped", "err", err)
 			return attachmentMaterializationResult{}
 		}
 		return attachmentMaterializationResult{imageRel: rel}

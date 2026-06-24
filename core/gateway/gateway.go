@@ -14,7 +14,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
@@ -240,7 +239,7 @@ func ignoreConcluded(err error) error {
 // caller that propagates with `if err != nil { return err }` stops the turn
 // correctly; runTurn translates the sentinel back to nil at its boundary.
 func (g *Gateway) failTurn(sessionKey, stage string, err error) error {
-	fmt.Fprintf(os.Stderr, "[gateway] turn failed at %s (session=%s): %v\n", stage, sessionKey, err)
+	glog().Error("turn failed", "stage", stage, "session", sessionKey, "err", err)
 	g.sink.OnReply(sessionKey, errorReply)
 	return errTurnConcluded
 }

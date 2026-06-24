@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"sync"
 	"time"
 
+	"github.com/lml2468/octobuddy/core/clog"
 	"github.com/lml2468/octobuddy/core/control"
 	"github.com/lml2468/octobuddy/core/cron"
 	"github.com/lml2468/octobuddy/core/gateway"
@@ -111,11 +111,11 @@ func (d controlCommandDispatcher) secretInject(body json.RawMessage) (any, error
 	}
 	if b.Clear {
 		if err := t.secrets.Clear(b.Kind); err != nil {
-			log.Printf("[secret] clear %s/%s: %v", b.BotID, b.Kind, err)
+			clog.For("secret").Warn("clear failed", "bot", b.BotID, "kind", b.Kind, "err", err)
 			return nil, fmt.Errorf("secret.inject clear failed for %s/%s", b.BotID, b.Kind)
 		}
 	} else if err := t.secrets.Set(b.Kind, b.Value); err != nil {
-		log.Printf("[secret] set %s/%s: %v", b.BotID, b.Kind, err)
+		clog.For("secret").Warn("set failed", "bot", b.BotID, "kind", b.Kind, "err", err)
 		return nil, fmt.Errorf("secret.inject set failed for %s/%s", b.BotID, b.Kind)
 	}
 	return control.OKBody{OK: true}, nil

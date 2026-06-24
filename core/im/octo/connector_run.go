@@ -3,8 +3,9 @@ package octo
 import (
 	"context"
 	"fmt"
-	"os"
 	"time"
+
+	"github.com/lml2468/octobuddy/core/clog"
 )
 
 // Run registers the bot and maintains the socket connection with reconnect
@@ -173,9 +174,12 @@ func (c *Connector) uid() string {
 	return c.botUID
 }
 
-// logf reports a recovered/handled error to stderr, tagged with the bot uid.
+// logf reports a recovered/handled error tagged with the bot uid via the
+// shared slog handler. format+args follow Printf conventions for source
+// compatibility with the dozens of in-place call sites; structured
+// upgrades land on a per-caller basis when the line gets touched.
 func (c *Connector) logf(format string, args ...any) {
-	fmt.Fprintf(os.Stderr, "[octo %s] "+format+"\n", append([]any{c.uid()}, args...)...)
+	clog.For("octo").Warn(fmt.Sprintf(format, args...), "bot", c.uid())
 }
 
 func (c *Connector) heartbeatLoop(ctx context.Context) {

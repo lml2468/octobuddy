@@ -3,11 +3,11 @@ package main
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/lml2468/octobuddy/core/agent"
+	"github.com/lml2468/octobuddy/core/clog"
 	"github.com/lml2468/octobuddy/core/config"
 	"github.com/lml2468/octobuddy/core/control"
 	"github.com/lml2468/octobuddy/core/control/wire"
@@ -165,7 +165,7 @@ func triggerPolicyFromConfig(cfg config.Resolved, grantor persona.Grantor) trigg
 	aib := trigger.AIBroadcastPolicy(tg.AIBroadcast)
 	if !aib.Valid() {
 		aib = trigger.AIBroadcastDeny
-		fmt.Fprintf(os.Stderr, "[%s] trigger.aiBroadcast unset/invalid; defaulting to deny (issue #105 fix)\n", cfg.BotID)
+		clog.For("config").Warn("trigger.aiBroadcast unset/invalid; defaulting to deny (issue #105 fix)", "bot", cfg.BotID)
 	}
 	mentionFree := tg.MentionFreeGroups
 	if len(mentionFree) == 0 {
