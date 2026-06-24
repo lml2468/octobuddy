@@ -162,10 +162,20 @@ func (c *Connector) setCtx(ctx context.Context) {
 
 // setUID / uid guard botUID with c.mu: Run rewrites it on (re)registration while
 // the sink callbacks (OnReply/OnEvent → logf) and a concurrent turn read it.
+//
+// Also writes the resolved server uid into c.policy.BotUID under
+// policyMu so the classifier reads the correct uid on every inbound
+// without a per-callsite snapshot mutation. Without this, every dispatch
+// path (inbound / cron / future webhook) has to remember to override
+// BotUID locally, and the override drifts (cron forgot in #116; flagged
+// in the code-review).
 func (c *Connector) setUID(id string) {
 	c.mu.Lock()
 	c.botUID = id
 	c.mu.Unlock()
+	c.policyMu.Lock()
+	c.policy.BotUID = id
+	c.policyMu.Unlock()
 }
 
 func (c *Connector) uid() string {

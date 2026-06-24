@@ -26,11 +26,16 @@
       },
       "_comment_groupConfigDir": "Optional operator-controlled directory of per-conversation instruction files. Must be outside this bot's agent-writable workspace.",
       "groupConfigDir": "/etc/octobuddy/groups/my-bot",
-      "_comment_gating": "Optional per-bot group-gating policy (session-router). mentionFreeGroups = channel ids the bot answers WITHOUT an @mention; knownBotUids/allowedBotUids = bot-loop guard; botBlocklist = uids whose DMs are dropped.",
-      "mentionFreeGroups": [],
+      "_comment_gating": "Optional per-bot group-gating policy (session-router). trigger.mentionFreeGroups = channel ids the bot answers WITHOUT an @mention; knownBotUids/allowedBotUids = bot-loop guard; botBlocklist = uids whose DMs are dropped.",
       "knownBotUids": [],
       "allowedBotUids": [],
       "botBlocklist": [],
+      "_comment_trigger": "Per-bot trigger pipeline policy (issue #105). aiBroadcast = deny|allowlist|allow (default deny — pure @AI without @mention/@all does not trigger). replyToBotEnabled = true|false (default true — quote-replies to the bot continue the thread). mentionFreeGroups = channel ids that answer without an @mention.",
+      "trigger": {
+        "aiBroadcast": "deny",
+        "replyToBotEnabled": true,
+        "mentionFreeGroups": []
+      },
       "_comment_skills": "Skills/workflows are NOT configured here. Each bot owns its own under ~/.octobuddy/<id>/.claude/skills/<name>/ and ~/.octobuddy/<id>/.claude/workflows/<name>.js."
     },
     {

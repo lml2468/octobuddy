@@ -144,7 +144,6 @@ func buildResolvedBot(global File, bot BotEntry, id, botRoot string) Resolved {
 	mergeCtx(&r.Context, bot.Context)
 
 	// Gating lists are per-bot policy. Nil and empty both resolve to "unset".
-	r.MentionFreeGroups = bot.MentionFreeGroups
 	r.KnownBotUids = bot.KnownBotUids
 	r.AllowedBotUids = bot.AllowedBotUids
 	r.BotBlocklist = bot.BotBlocklist

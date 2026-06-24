@@ -16,8 +16,8 @@ import "testing"
 func TestReasonIsAmbiguousAddressing(t *testing.T) {
 	// Ambiguous: classifier flagged this as a reply candidate but message
 	// metadata can't tell us if the sender meant to address the bot.
-	ambiguous := []Reason{ReasonMentionFreeGroup}
-	for _, r := range ambiguous {
+	ambiguous := map[Reason]bool{ReasonMentionFreeGroup: true}
+	for r := range ambiguous {
 		if !r.IsAmbiguousAddressing() {
 			t.Errorf("%q must be ambiguous-addressing (loop guard applies)", r)
 		}
@@ -27,21 +27,38 @@ func TestReasonIsAmbiguousAddressing(t *testing.T) {
 	// for the loop guard) and the post-classifier non-reply reasons
 	// (observation / obo_irrelevant) which the router never sees but
 	// must stay safely on the unambiguous side of any future caller.
-	unambiguous := []Reason{
-		ReasonNone,
-		ReasonDM,
-		ReasonExplicitBot,
-		ReasonPersonaGrantor,
-		ReasonPersonaHumans,
-		ReasonReplyToBot,
-		ReasonAIBroadcast,
-		ReasonCron,
-		ReasonObservation,
-		ReasonOBOIrrelevant,
+	unambiguous := map[Reason]bool{
+		ReasonNone:           true,
+		ReasonDM:             true,
+		ReasonExplicitBot:    true,
+		ReasonPersonaGrantor: true,
+		ReasonPersonaHumans:  true,
+		ReasonReplyToBot:     true,
+		ReasonAIBroadcast:    true,
+		ReasonCron:           true,
+		ReasonObservation:    true,
+		ReasonOBOIrrelevant:  true,
 	}
-	for _, r := range unambiguous {
+	for r := range unambiguous {
 		if r.IsAmbiguousAddressing() {
 			t.Errorf("%q must NOT be ambiguous-addressing", r)
 		}
+	}
+
+	// Coverage closure: every Reason in AllReasons must appear in
+	// exactly one of the two partitions. A new constant added to types.go
+	// but forgotten here (or vice versa) fails loudly instead of
+	// silently defaulting through IsAmbiguousAddressing's `default:
+	// return false` branch. This catches the failure mode the test
+	// previously couldn't: enum drift.
+	for _, r := range AllReasons {
+		inA := ambiguous[r]
+		inU := unambiguous[r]
+		if inA == inU {
+			t.Errorf("Reason %q must be in exactly one partition (ambiguous=%v unambiguous=%v); add it to one and to IsAmbiguousAddressing's switch", r, inA, inU)
+		}
+	}
+	if len(ambiguous)+len(unambiguous) != len(AllReasons) {
+		t.Errorf("partition coverage drift: ambiguous=%d unambiguous=%d AllReasons=%d", len(ambiguous), len(unambiguous), len(AllReasons))
 	}
 }

@@ -79,6 +79,27 @@ const (
 	ReasonOBOIrrelevant Reason = "obo_irrelevant"
 )
 
+// AllReasons is the closed registry of every Reason constant. Used by
+// tests that pin the IsAmbiguousAddressing partition: any new Reason
+// added to the package must be appended here, and the partition test
+// catches it if the new constant lacks an explicit ambiguous/unambiguous
+// classification. Without this registry, a new Reason silently defaults
+// to unambiguous (the switch's default branch) and the bot-loop guard
+// stops applying — exactly the regression #118 set out to prevent.
+var AllReasons = []Reason{
+	ReasonNone,
+	ReasonDM,
+	ReasonExplicitBot,
+	ReasonPersonaGrantor,
+	ReasonPersonaHumans,
+	ReasonReplyToBot,
+	ReasonAIBroadcast,
+	ReasonMentionFreeGroup,
+	ReasonCron,
+	ReasonObservation,
+	ReasonOBOIrrelevant,
+}
+
 // IsAmbiguousAddressing reports whether the trigger reason represents a
 // classification where the bot cannot tell from message metadata whether
 // the sender genuinely wanted a reply. Currently only true for

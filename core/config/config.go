@@ -104,9 +104,8 @@ type TriggerConfig struct {
 	// thread" interaction lost when aiBroadcast=deny. Pointer so unset
 	// (== nil) defaults to true; false explicitly disables.
 	ReplyToBotEnabled *bool `json:"replyToBotEnabled,omitempty"`
-	// MentionFreeGroups is the canonical home for the G12 mention-free
-	// channel list (the legacy top-level field is read as fallback for
-	// one release for migration).
+	// MentionFreeGroups is the G12 mention-free channel list — channel
+	// ids where the bot answers even without an @-mention.
 	MentionFreeGroups []string `json:"mentionFreeGroups,omitempty"`
 }
 
@@ -151,15 +150,14 @@ type BotEntry struct {
 	// OnBehalfOf, when its uid is set, marks this bot a persona clone (openclaw OBO).
 	OnBehalfOf *OnBehalfOf `json:"onBehalfOf,omitempty"`
 
-	// Gating policy (cc-channel-octo session-router.ts: G12 mention-free groups,
-	// G14 bot-loop guard, DM blocklist). Per-bot only in the canonical schema.
-	// MentionFreeGroups here is a one-release deprecation shim — the new home
-	// is trigger.mentionFreeGroups. Load merges the two (top-level used only
-	// when trigger.mentionFreeGroups is empty).
-	MentionFreeGroups []string `json:"mentionFreeGroups,omitempty"`
-	KnownBotUids      []string `json:"knownBotUids,omitempty"`
-	AllowedBotUids    []string `json:"allowedBotUids,omitempty"`
-	BotBlocklist      []string `json:"botBlocklist,omitempty"`
+	// Gating policy (cc-channel-octo session-router.ts: G14 bot-loop guard,
+	// DM blocklist). Per-bot only in the canonical schema. The G12
+	// mention-free list lives under trigger.mentionFreeGroups — the
+	// top-level deprecation shim was removed in the code-review cleanup
+	// pass.
+	KnownBotUids   []string `json:"knownBotUids,omitempty"`
+	AllowedBotUids []string `json:"allowedBotUids,omitempty"`
+	BotBlocklist   []string `json:"botBlocklist,omitempty"`
 
 	// Trigger is the per-bot trigger pipeline policy (issue #105).
 	// Defaults applied at Load (aiBroadcast=deny, replyToBotEnabled=true).
@@ -186,11 +184,13 @@ type Resolved struct {
 	RateLimit RateLimitConfig
 	Context   ContextConfig
 
-	// Gating policy ported from cc-channel-octo session-router.ts.
-	MentionFreeGroups []string // channel ids the bot answers without an @mention (G12)
-	KnownBotUids      []string // uids known to be bots, for the loop guard (G14)
-	AllowedBotUids    []string // bot-looking uids exempt from the loop guard (G14)
-	BotBlocklist      []string // uids whose DMs are silently dropped
+	// Gating policy ported from cc-channel-octo session-router.ts. G12
+	// mention-free groups live under trigger.MentionFreeGroups now (the
+	// top-level field was a one-release shim, removed in the code-review
+	// cleanup pass).
+	KnownBotUids   []string // uids known to be bots, for the loop guard (G14)
+	AllowedBotUids []string // bot-looking uids exempt from the loop guard (G14)
+	BotBlocklist   []string // uids whose DMs are silently dropped
 
 	// SystemPrompt is the operator-trusted persona/behavior prompt, assembled
 	// from SOUL.md + AGENTS.md in the bot dir (not from config).

@@ -41,7 +41,7 @@ func TestGatingFieldsResolution(t *testing.T) {
 	  "bots":[
 	    {"id":"plain","apiUrl":"https://octo.example","octoToken":"bf_a"},
 	    {"id":"custom","apiUrl":"https://octo.example","octoToken":"bf_b",
-	     "mentionFreeGroups":["g-bot"],
+	     "trigger":{"mentionFreeGroups":["g-bot"]},
 	     "knownBotUids":[],
 	     "allowedBotUids":["ab-bot"],
 	     "botBlocklist":["bad2","bad3"]}
@@ -70,8 +70,8 @@ func resolvedByID(bots []Resolved) map[string]Resolved {
 func assertPlainGatingFields(t *testing.T, plain Resolved) {
 	t.Helper()
 
-	if len(plain.MentionFreeGroups) != 0 {
-		t.Fatalf("plain mentionFreeGroups = %v, want []", plain.MentionFreeGroups)
+	if len(plain.Trigger.MentionFreeGroups) != 0 {
+		t.Fatalf("plain trigger.mentionFreeGroups = %v, want []", plain.Trigger.MentionFreeGroups)
 	}
 	if len(plain.KnownBotUids) != 0 {
 		t.Fatalf("plain knownBotUids = %v, want []", plain.KnownBotUids)
@@ -87,8 +87,8 @@ func assertPlainGatingFields(t *testing.T, plain Resolved) {
 func assertCustomGatingFields(t *testing.T, custom Resolved) {
 	t.Helper()
 
-	if len(custom.MentionFreeGroups) != 1 || custom.MentionFreeGroups[0] != "g-bot" {
-		t.Fatalf("custom mentionFreeGroups = %v, want [g-bot]", custom.MentionFreeGroups)
+	if len(custom.Trigger.MentionFreeGroups) != 1 || custom.Trigger.MentionFreeGroups[0] != "g-bot" {
+		t.Fatalf("custom trigger.mentionFreeGroups = %v, want [g-bot]", custom.Trigger.MentionFreeGroups)
 	}
 	if len(custom.KnownBotUids) != 0 {
 		t.Fatalf("custom knownBotUids = %v, want []", custom.KnownBotUids)

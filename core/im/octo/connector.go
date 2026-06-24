@@ -179,8 +179,20 @@ type replyTarget struct {
 // SetPolicy installs/replaces the trigger policy. Must be called before
 // Run for the IM-side classifier to see correct config. Idempotent (safe
 // to call multiple times); future hot-reload paths land here.
+//
+// Preserves a live server-registered uid: if setUID() already ran (Run
+// completed registration), the freshly-installed policy still carries
+// the post-Register uid instead of falling back to whatever the caller
+// passed for BotUID (typically the stale config id). Without this,
+// SetPolicy after setUID — production startup or any future hot-reload
+// — would silently re-introduce the @bot-mention regression #116 set
+// out to fix.
 func (c *Connector) SetPolicy(p trigger.Policy) {
+	uid := c.uid()
 	c.policyMu.Lock()
+	if uid != "" {
+		p.BotUID = uid
+	}
 	c.policy = p
 	c.policyMu.Unlock()
 }

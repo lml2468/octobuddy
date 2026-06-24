@@ -255,13 +255,22 @@ func migrateMessagesAddSource(db *sql.DB) error {
 			return err
 		}
 	}
-	// Self-heal: always run a cheap assistant-source UPDATE. Covers the
-	// case where a previous run committed ALTER but a crash rolled the
-	// backfill back (pre-tx version of this code), so legacy assistant
-	// rows stayed tagged with the DEFAULT 'user'. No-op on a clean DB
-	// where every assistant row already carries 'assistant'.
-	if _, err := db.Exec(`UPDATE messages SET source='assistant' WHERE role='assistant' AND source!='assistant'`); err != nil {
-		return fmt.Errorf("migrate messages.source self-heal assistant: %w", err)
+	// Self-heal: cover the case where a previous run committed ALTER but
+	// a crash rolled the backfill back (pre-tx version of this code), so
+	// legacy assistant rows stayed tagged with the DEFAULT 'user'.
+	// EXISTS-guard the UPDATE first — on a clean DB (the overwhelmingly
+	// common case after the migration ran once) SQLite short-circuits at
+	// the first matching row and the UPDATE doesn't fire, avoiding the
+	// full table scan on every startup. On stale DBs the UPDATE still
+	// runs and fixes the drift.
+	var dirty bool
+	if err := db.QueryRow(`SELECT EXISTS(SELECT 1 FROM messages WHERE role='assistant' AND source!='assistant' LIMIT 1)`).Scan(&dirty); err != nil {
+		return fmt.Errorf("migrate messages.source self-heal probe: %w", err)
+	}
+	if dirty {
+		if _, err := db.Exec(`UPDATE messages SET source='assistant' WHERE role='assistant' AND source!='assistant'`); err != nil {
+			return fmt.Errorf("migrate messages.source self-heal assistant: %w", err)
+		}
 	}
 	return nil
 }

@@ -53,13 +53,13 @@ func TestSavePreservesUnmodeledPerBotFields(t *testing.T) {
 	setup(t)
 	writeConfig(t, config.File{
 		Bots: []config.BotEntry{{
-			APIURL:            "https://top.example",
-			ID:                "a",
-			RateLimit:         &config.RateLimitConfig{MaxPerMinute: 7},
-			Context:           &config.ContextConfig{MaxContextChars: 1234},
-			GroupConfigDir:    "/srv/groups",
-			OnBehalfOf:        &config.OnBehalfOf{UID: "grantor-9"},
-			MentionFreeGroups: []string{"g1", "g2"},
+			APIURL:         "https://top.example",
+			ID:             "a",
+			RateLimit:      &config.RateLimitConfig{MaxPerMinute: 7},
+			Context:        &config.ContextConfig{MaxContextChars: 1234},
+			GroupConfigDir: "/srv/groups",
+			OnBehalfOf:     &config.OnBehalfOf{UID: "grantor-9"},
+			Trigger:        &config.TriggerConfig{MentionFreeGroups: []string{"g1", "g2"}},
 			Agent: &config.AgentConfig{
 				Cron:               ptrTo(true),
 				ToolProgress:       true,
@@ -99,8 +99,8 @@ func TestSavePreservesUnmodeledPerBotFields(t *testing.T) {
 	if b.GroupConfigDir != "/srv/groups" {
 		t.Errorf("groupConfigDir dropped: %q", b.GroupConfigDir)
 	}
-	if len(b.MentionFreeGroups) != 2 {
-		t.Errorf("mentionFreeGroups dropped: %v", b.MentionFreeGroups)
+	if b.Trigger == nil || len(b.Trigger.MentionFreeGroups) != 2 {
+		t.Errorf("trigger.mentionFreeGroups dropped: %+v", b.Trigger)
 	}
 	if b.Agent == nil || b.Agent.Cron == nil || !*b.Agent.Cron || !b.Agent.ToolProgress {
 		t.Errorf("agent cron/toolProgress dropped: %+v", b.Agent)

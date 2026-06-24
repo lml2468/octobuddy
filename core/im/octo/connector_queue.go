@@ -6,34 +6,36 @@ import (
 )
 
 // EnqueueCron enqueues a cron-fired turn onto the per-session worker so it
-// serializes with real inbound on the same key. The
-// target — including any persona on-behalf-of binding — travels with the
-// queued turn so OnReply reads exactly the target the cron fire intended,
-// even if a real inbound enqueued in between and tried to write its own
-// target into the global map.
+// serializes with real inbound on the same key. The target — including
+// any persona on-behalf-of binding — travels with the queued turn so
+// OnReply reads exactly the target the cron fire intended, even if a
+// real inbound enqueued in between and tried to write its own target
+// into the global map.
 //
 // Returns immediately. The actual gw.Handle call happens on the worker
 // goroutine that drainTurns owns; the bot's shutdown chain
 // (connector.WaitTurns + cm.Wait) ensures the in-flight turn finishes
 // before the store closes.
 //
-// Persona-grantor stamp: when persona is configured, the cron reply
-// speaks `on_behalf_of` the configured grantor — same identity as live
-// replies. The trust boundary is cron.SetOwnerUID's foreign-CreatedBy
-// prune: any task that survives that fence is operator-authored on this
-// bot, and the operator-configured persona is allowed to speak for it.
-// The persona is the cron's identity by design.
-//
-// Caller is expected to build inbound with Source=trigger.SourceCron and
-// a Trigger=ReasonCron decision (so router.IsCron() bypasses the
-// rate-limit + mention/blocklist gates). bot_cron.go's fireCronTask does
-// this; tests may set it via NewCronTrigger below.
+// Persona-grantor stamp: the inbound's Trigger.ReplyRouting.OnBehalfOf
+// is the single source of truth — populated by NewCronTrigger via the
+// classifier's cron rule. Reading from inbound (not re-deriving from
+// the live policy) means a future change to cron-grantor semantics
+// (e.g. per-task grantor) lands in one place instead of drifting
+// between the trigger pipeline and EnqueueCron.
 func (c *Connector) EnqueueCron(sessionKey, channelID string, channelType ChannelType, inbound router.InboundMessage) {
-	tgt := replyTarget{channelID: channelID, channelType: channelType}
-	policy, _ := c.loadPolicyAndClassifier()
-	if policy.Grantor.Configured() {
-		tgt.onBehalfOf = policy.Grantor.UID
+	// Auto-canonicalize the cron trigger if the caller didn't set one —
+	// stops the "caller forgot the trigger field" footgun (the inbound
+	// would otherwise silently classify as a regular user message and
+	// hit rate-limit / mention gates). NewCronTrigger delegates to the
+	// production classifier so the wire shape stays byte-equal to a
+	// regular cron inbound.
+	if inbound.Trigger == nil {
+		inbound.Source = trigger.SourceCron
+		inbound.Trigger = c.NewCronTrigger()
 	}
+	tgt := replyTarget{channelID: channelID, channelType: channelType}
+	tgt.onBehalfOf = inbound.Trigger.ReplyRouting.OnBehalfOf
 	c.enqueueTurn(sessionKey, inbound, tgt)
 }
 

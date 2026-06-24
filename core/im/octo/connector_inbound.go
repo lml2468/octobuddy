@@ -72,16 +72,10 @@ func (c *Connector) prepareInboundTurn(m BotMessage, botUID string) (router.Inbo
 	}
 
 	policy, classifier := c.loadPolicyAndClassifier()
-	// Policy.BotUID is seeded from cfg.BotID at startup, but the IM-side
-	// @-mention payload carries the SERVER-registered uid (set post-
-	// Register via setUID). Without this override the classifier would
-	// never match an @bot mention in production (the regression bot.go's
-	// note flagged: "policy.BotUID is the configured bot id, not the
-	// post-register uid"). The caller already resolved c.uid() into
-	// botUID — reuse it instead of re-acquiring c.mu on the hot path.
-	if botUID != "" {
-		policy.BotUID = botUID
-	}
+	// Policy.BotUID is kept current by setUID() (writes the post-Register
+	// server uid under policyMu) — readers see the correct value without
+	// a per-callsite mutation here. The cron path (NewCronTrigger) and
+	// any future dispatch source benefit identically.
 	canonical := c.buildCanonicalInbound(m, baseText, botUID)
 	decision := classifier.Classify(canonical, policy)
 

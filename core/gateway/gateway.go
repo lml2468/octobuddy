@@ -174,6 +174,15 @@ func (g *Gateway) Handle(ctx context.Context, msg router.InboundMessage) (router
 		if key, kerr := msg.SessionKey(); kerr == nil {
 			g.sink.OnReply(key, rateLimitedReply)
 		}
+	case router.DroppedInvariantBreak:
+		// The precondition contract above promises observability of any
+		// caller that mis-routes a non-reply message into Handle. Log it
+		// at WARN so the regression is visible without crashing the
+		// daemon — operators can grep "router invariant break" instead
+		// of debugging "the bot went silent for some messages".
+		key, _ := msg.SessionKey()
+		glog().Warn("router invariant break — caller passed non-reply msg to Handle",
+			"session", key, "channel_type", msg.ChannelType, "has_trigger", msg.Trigger != nil)
 	}
 	return d, err
 }

@@ -158,8 +158,6 @@ func newBotConnector(cfg config.Resolved, sec *secretStore) (*octo.Connector, pe
 //     who want legacy behavior set trigger.aiBroadcast="allow" in config.
 //   - ReplyToBotEnabled defaults to true so users keep their natural
 //     "continue the thread" interaction under Deny.
-//   - MentionFreeGroups falls back to the top-level config field if the new
-//     trigger.mentionFreeGroups is empty (one-release deprecation shim).
 func triggerPolicyFromConfig(cfg config.Resolved, grantor persona.Grantor) trigger.Policy {
 	tg := cfg.Trigger
 	aib := trigger.AIBroadcastPolicy(tg.AIBroadcast)
@@ -167,14 +165,10 @@ func triggerPolicyFromConfig(cfg config.Resolved, grantor persona.Grantor) trigg
 		aib = trigger.AIBroadcastDeny
 		clog.For("config").Warn("trigger.aiBroadcast unset/invalid; defaulting to deny (issue #105 fix)", "bot", cfg.BotID)
 	}
-	mentionFree := tg.MentionFreeGroups
-	if len(mentionFree) == 0 {
-		mentionFree = cfg.MentionFreeGroups
-	}
 	return trigger.Policy{
 		BotUID:               cfg.BotID,
 		Grantor:              trigger.FromPersonaGrantor(grantor),
-		MentionFreeGroups:    toBoolSet(mentionFree),
+		MentionFreeGroups:    toBoolSet(tg.MentionFreeGroups),
 		AIBroadcast:          aib,
 		AIBroadcastAllowlist: toBoolSet(tg.AIBroadcastAllowlist),
 		ReplyToBotEnabled:    tg.ReplyToBotEnabled == nil || *tg.ReplyToBotEnabled,
