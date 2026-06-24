@@ -3,6 +3,7 @@ package secrets
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/lml2468/octobuddy/core/control/wire"
@@ -76,8 +77,13 @@ func TestFileBackendPermissionsRefuseTraversal(t *testing.T) {
 
 // TestFileBackendCreates0600File asserts the on-disk file is mode 0600 —
 // the file backend's whole point is keeping the secret off the
-// world-readable filesystem.
+// world-readable filesystem. POSIX-only: Windows surfaces 0666/0777 from
+// os.Stat regardless of the open mode (it only tracks the read-only bit),
+// so the perm-bit assertion would always fail there.
 func TestFileBackendCreates0600File(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows doesn't honor POSIX file modes; ACLs are the real guard there")
+	}
 	home := t.TempDir()
 	withHome(t, home)
 	const bot = "perm-test"
