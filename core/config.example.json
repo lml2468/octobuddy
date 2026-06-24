@@ -20,6 +20,15 @@
         "dispatchTimeoutSec": 0,
         "_comment_systemPromptMode": "How SOUL.md+AGENTS.md are sent to claude. 'minimal' (default): REPLACE the built-in system prompt; cwd .claude/ is not auto-loaded; tool surface is a headless whitelist. 'claude_code': APPEND to the built-in prompt; cwd .claude/ auto-loads; bypassPermissions. Use claude_code only if your SOUL was written assuming the built-in preamble.",
         "systemPromptMode": "minimal",
+        "_comment_settingSources": "Which claude filesystem setting scopes load (minimal mode). Allowed: 'user', 'project'. Omit/empty = ['user'] (default: per-bot skills under CLAUDE_CONFIG_DIR load; project/local dropped). Adding 'project' loads the sandbox cwd's .claude/ + CLAUDE.md — a prompt-injection vector for untrusted group chats; enable only for trusted single-operator bots. 'local' is not allowed.",
+        "settingSources": ["user"],
+        "_comment_tools": "Tool surface. Omit to use the binary's probed headless-safe set (built-in tools minus interactive ones). tools.default = bot-level whitelist; tools.channels keys by sessionKey (group = channelId; DM = '<spaceId>:<uid>' or bare uid) and overrides the default for that conversation (empty list = muzzle that channel). Unconfigured channels and the desktop Console use the probed default. Tool names: letters/digits/_.*- only (no commas or spaces).",
+        "tools": {
+          "default": ["Read", "Edit", "Write", "Bash", "Grep", "Glob"],
+          "channels": {
+            "some-channel-id": ["Read", "Grep", "Glob"]
+          }
+        },
         "_comment_env": "Env is per-bot. Use {\"value\":\"...\"} for non-secret values and {\"secretRef\":\"env/NAME\"} for values stored in the secret backend.",
         "env": {
           "OCTO_BOT_ID": { "value": "this-bot-octo-id" },

@@ -190,14 +190,23 @@ func (g *Gateway) prepareAgentRequest(ctx context.Context, sessionKey string, ms
 	if media := g.materializeAttachments(ctx, cwd, msg.Attachments); media != "" {
 		prompt += media
 	}
-	return agent.Request{
-		Prompt:       prompt,
-		SessionID:    resumeID,
-		Cwd:          cwd,
-		MemoryDir:    memDir,
-		Model:        g.model,
-		SystemPrompt: g.buildSystemPrompt(msg, g.rosterPrefix(msg)),
-	}, nil
+	req := agent.Request{
+		Prompt:         prompt,
+		SessionID:      resumeID,
+		Cwd:            cwd,
+		MemoryDir:      memDir,
+		Model:          g.model,
+		SystemPrompt:   g.buildSystemPrompt(msg, g.rosterPrefix(msg)),
+		SettingSources: g.settingSources,
+	}
+	// Per-channel/bot tool surface. Unconfigured sessions — the common case,
+	// including the desktop Console (which is NOT special-cased; it resolves
+	// by sessionKey like any DM) — leave AllowedTools nil so the driver uses
+	// its probed headless-safe default.
+	if tools, ok := g.resolveTools(sessionKey); ok {
+		req.AllowedTools = tools
+	}
+	return req, nil
 }
 
 func (g *Gateway) handleDispatchTimeout(ctx context.Context, idle *idleGuard, sessionKey string, delivered *bool) bool {

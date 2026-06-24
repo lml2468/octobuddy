@@ -84,6 +84,66 @@ type AgentConfig struct {
 	//     authored assuming the built-in preamble.
 	// Empty / invalid → minimal (warn on invalid).
 	SystemPromptMode string `json:"systemPromptMode,omitempty"`
+	// Tools scopes the tool surface the agent may call, per bot and
+	// optionally per channel/DM. Nil = the binary's probed headless-safe
+	// set (the driver default). See ToolPolicy.
+	Tools *ToolPolicy `json:"tools,omitempty"`
+	// SettingSources selects which claude filesystem setting scopes load
+	// (minimal mode only). Allowed values: "user", "project". Empty →
+	// ["user"] (the default: keeps CLAUDE_CONFIG_DIR-based per-bot skills,
+	// drops project/local so a planted CLAUDE.md in the sandbox cwd can't
+	// influence the model). Adding "project" re-enables cwd .claude/ +
+	// CLAUDE.md — a prompt-injection vector for untrusted group chats, so
+	// only for trusted single-operator bots. "local" is intentionally not
+	// allowed.
+	SettingSources []string `json:"settingSources,omitempty"`
+}
+
+// ToolPolicy is the per-bot tool surface.
+//   - Default is the bot-level whitelist. nil → unset (driver resolves the
+//     binary's probed headless-safe set); a non-nil (incl. empty) slice is
+//     used verbatim (empty = no tools).
+//   - Channels overrides Default per sessionKey (group = channelId; DM =
+//     "<spaceId>:<uid>" or bare uid — the same key the router derives). A
+//     present entry is used verbatim (incl. empty = muzzle that channel).
+//
+// Unconfigured channels (and the desktop Console) fall through to the global
+// headless-safe set.
+type ToolPolicy struct {
+	Default  []string            `json:"default,omitempty"`
+	Channels map[string][]string `json:"channels,omitempty"`
+}
+
+// Resolve returns the tool whitelist for sessionKey and whether it was
+// explicitly configured. ok=false means the caller should leave
+// Request.AllowedTools nil so the driver resolves the probed headless-safe
+// default. A present (even empty) channel entry or non-nil Default is
+// "explicit" and returned verbatim.
+func (p *ToolPolicy) Resolve(sessionKey string) (tools []string, ok bool) {
+	if p == nil {
+		return nil, false
+	}
+	if t, has := p.Channels[sessionKey]; has {
+		return t, true
+	}
+	if p.Default != nil {
+		return p.Default, true
+	}
+	return nil, false
+}
+
+func (p *ToolPolicy) clone() *ToolPolicy {
+	if p == nil {
+		return nil
+	}
+	cp := &ToolPolicy{Default: cloneStrs(p.Default)}
+	if p.Channels != nil {
+		cp.Channels = make(map[string][]string, len(p.Channels))
+		for k, v := range p.Channels {
+			cp.Channels[k] = cloneStrs(v)
+		}
+	}
+	return cp
 }
 
 // RateLimitConfig mirrors the on-disk rateLimit block.

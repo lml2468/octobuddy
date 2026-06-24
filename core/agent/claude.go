@@ -198,8 +198,13 @@ func (d *ClaudeDriver) appendMinimalModeArgs(args []string, req Request) []strin
 	// =user keeps CLAUDE_CONFIG_DIR-based skill discovery alive while
 	// dropping project (cwd .claude/) and local (cwd .claude.local) so a
 	// planted CLAUDE.md / skills / agents in the sandbox can't influence
-	// the model.
-	args = append(args, "--setting-sources=user")
+	// the model. The gateway may widen this (e.g. user,project) per bot;
+	// empty defaults to user.
+	sources := req.SettingSources
+	if len(sources) == 0 {
+		sources = []string{"user"}
+	}
+	args = append(args, "--setting-sources="+strings.Join(sources, ","))
 	// Always emit --system-prompt in minimal mode (even with an empty
 	// value) so a missing prompt is loud, not a silent fallback to
 	// claude's built-in default that would drop SecurityPrefix.

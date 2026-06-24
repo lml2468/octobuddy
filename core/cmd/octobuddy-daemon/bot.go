@@ -187,6 +187,16 @@ func toBoolSet(vals []string) map[string]bool {
 	return m
 }
 
+// toolPolicyArgs unpacks a (possibly nil) per-bot ToolPolicy into the
+// (default, channels) pair WithToolPolicy expects. nil policy → both nil,
+// leaving the driver's probed headless-safe default in force.
+func toolPolicyArgs(p *config.ToolPolicy) ([]string, map[string][]string) {
+	if p == nil {
+		return nil, nil
+	}
+	return p.Default, p.Channels
+}
+
 // resolvePromptMode maps the on-disk string to ClaudeDriver's typed
 // PromptMode constant. Unset → minimal. Unknown values warn and default
 // to minimal so a typo can't silently change behavior.
@@ -262,6 +272,8 @@ func newBotGateway(
 		WithSystemPrompt(cfg.SystemPrompt).
 		WithPersona(grantor, cfg.OnBehalfOf.PersonaPrompt).
 		WithModel(cfg.Agent.Model).
+		WithToolPolicy(toolPolicyArgs(cfg.Agent.Tools)).
+		WithSettingSources(cfg.Agent.SettingSources).
 		WithCommandInfo(cfg.RateLimit.MaxPerMinute, cfg.Context.MaxContextChars).
 		WithSandbox(cfg.CwdBase, cfg.MemoryBase).
 		WithDispatchTimeout(time.Duration(cfg.Agent.DispatchTimeoutSec) * time.Second).

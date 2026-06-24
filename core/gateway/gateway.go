@@ -69,6 +69,16 @@ type Gateway struct {
 	personaPrompt string
 	// Optional model override passed to the driver (empty = driver default).
 	model string
+	// Tool surface policy (set via WithToolPolicy). toolDefault is the
+	// bot-level whitelist (nil = driver default); toolChannels overrides it
+	// per sessionKey. A present channel entry / non-nil default is used
+	// verbatim. Unconfigured sessions fall through to the driver default
+	// (the binary's probed headless-safe set).
+	toolDefault  []string
+	toolChannels map[string][]string
+	// settingSources is the per-bot claude setting-source scope list passed
+	// on every turn (empty = driver default "user"). Set via WithSettingSources.
+	settingSources []string
 	// Per-session sandbox roots (set via WithSandbox). Each turn runs in
 	// cwdBase/<hash>, with auto-memory under memoryBase/<hash>. Skills +
 	// workflows live under the per-bot CLAUDE_CONFIG_DIR and the claude

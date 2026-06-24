@@ -322,6 +322,18 @@ func TestClaudeArgsAllowedTools(t *testing.T) {
 	}
 }
 
+// TestClaudeArgsSettingSources pins minimal-mode --setting-sources: empty
+// request → "user" default; an explicit list is comma-joined.
+func TestClaudeArgsSettingSources(t *testing.T) {
+	d := newTestDriver()
+	if args := d.buildArgs(Request{Prompt: "hi"}); !contains(args, "--setting-sources=user") {
+		t.Fatalf("empty SettingSources should default to user: %v", args)
+	}
+	if args := d.buildArgs(Request{Prompt: "hi", SettingSources: []string{"user", "project"}}); !contains(args, "--setting-sources=user,project") {
+		t.Fatalf("explicit SettingSources should be comma-joined: %v", args)
+	}
+}
+
 func contains(xs []string, want string) bool {
 	for _, x := range xs {
 		if x == want {

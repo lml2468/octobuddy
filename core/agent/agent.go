@@ -182,6 +182,12 @@ type Request struct {
 	//   non-empty    → exact list
 	// The driver maps to its own flag (e.g. `--tools <names>` for claude).
 	AllowedTools []string
+
+	// SettingSources selects which filesystem setting scopes the driver
+	// loads (claude minimal mode only). Values are driver-specific scope
+	// names (claude: "user", "project"). Empty → driver default ("user"
+	// for claude). The driver maps to its own flag (`--setting-sources`).
+	SettingSources []string
 }
 
 // Capabilities advertises what a driver supports, so the gateway can adapt.

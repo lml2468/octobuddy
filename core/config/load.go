@@ -138,6 +138,11 @@ func buildResolvedBot(global File, bot BotEntry, id, botRoot string) Resolved {
 
 	// shallow-merge runtime policy defaults first, then the per-bot override.
 	mergeAgent(&r.Agent, bot.Agent)
+	// settingSources defaults to user-scope only (drops project/local so a
+	// planted CLAUDE.md in the agent-writable cwd can't influence the model).
+	if len(r.Agent.SettingSources) == 0 {
+		r.Agent.SettingSources = []string{"user"}
+	}
 	mergeRate(&r.RateLimit, global.RateLimit)
 	mergeRate(&r.RateLimit, bot.RateLimit)
 	mergeCtx(&r.Context, global.Context)
@@ -182,7 +187,45 @@ func validateResolvedBot(r Resolved) error {
 	// the dir must NOT be the agent-writable sandbox — otherwise a user-driven
 	// agent could write its own future instructions. Mirrors cc-channel-octo's
 	// assertGroupConfigDirOutsideCwd.
-	return assertGroupConfigDirOutsideCwd(r.BotID, r.GroupConfigDir, r.CwdBase)
+	if err := assertGroupConfigDirOutsideCwd(r.BotID, r.GroupConfigDir, r.CwdBase); err != nil {
+		return err
+	}
+	return validateAgentTooling(r.BotID, r.Agent)
+}
+
+var toolNameRE = regexp.MustCompile(`^[A-Za-z0-9_.*-]+$`)
+
+// validateAgentTooling rejects malformed settingSources and tool names. Tool
+// names are joined comma-separated into a single --tools value, so a comma or
+// space in a name would silently split it; settingSources is restricted to the
+// scopes the driver supports ("local" is intentionally excluded).
+func validateAgentTooling(botID string, a AgentConfig) error {
+	for _, s := range a.SettingSources {
+		if s != "user" && s != "project" {
+			return fmt.Errorf("bot %q: invalid settingSources %q (allowed: user, project)", botID, s)
+		}
+	}
+	if a.Tools == nil {
+		return nil
+	}
+	if err := validateToolNames(botID, "tools.default", a.Tools.Default); err != nil {
+		return err
+	}
+	for ch, names := range a.Tools.Channels {
+		if err := validateToolNames(botID, "tools.channels["+ch+"]", names); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateToolNames(botID, where string, names []string) error {
+	for _, n := range names {
+		if !toolNameRE.MatchString(n) {
+			return fmt.Errorf("bot %q: invalid tool name %q in %s (letters/digits/_.*- only; no commas or spaces)", botID, n, where)
+		}
+	}
+	return nil
 }
 
 func mergeAgent(dst *AgentConfig, src *AgentConfig) {
@@ -192,6 +235,28 @@ func mergeAgent(dst *AgentConfig, src *AgentConfig) {
 	mergeAgentScalars(dst, src)
 	mergeAgentCapabilities(dst, src)
 	mergeAgentEnv(dst, src.Env)
+	mergeAgentTooling(dst, src)
+}
+
+// mergeAgentTooling copies the per-bot tool policy + setting sources. Both are
+// per-bot only (no global agent default), so a non-nil source value replaces,
+// deep-copied so the resolved bot can't be mutated through the shared File.
+func mergeAgentTooling(dst *AgentConfig, src *AgentConfig) {
+	if src.Tools != nil {
+		dst.Tools = src.Tools.clone()
+	}
+	if src.SettingSources != nil {
+		dst.SettingSources = cloneStrs(src.SettingSources)
+	}
+}
+
+// cloneStrs deep-copies a string slice, preserving the nil vs empty-slice
+// distinction (nil = unset → driver default; empty = explicit "no tools").
+func cloneStrs(s []string) []string {
+	if s == nil {
+		return nil
+	}
+	return append([]string{}, s...)
 }
 
 func mergeAgentScalars(dst *AgentConfig, src *AgentConfig) {

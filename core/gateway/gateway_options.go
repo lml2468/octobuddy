@@ -118,6 +118,42 @@ func (g *Gateway) WithModel(m string) *Gateway {
 	return g
 }
 
+// WithToolPolicy sets the per-bot tool surface: def is the bot-level whitelist
+// (nil = leave to the driver's probed headless-safe default), channels
+// overrides it per sessionKey. A present channel entry or non-nil def is used
+// verbatim (empty slice = no tools / muzzle). Unconfigured sessions — including
+// the desktop Console — fall through to the driver default.
+func (g *Gateway) WithToolPolicy(def []string, channels map[string][]string) *Gateway {
+	g.toolDefault = def
+	g.toolChannels = channels
+	return g
+}
+
+// WithSettingSources sets the per-bot claude setting-source scopes passed on
+// every turn (empty = driver default "user").
+func (g *Gateway) WithSettingSources(ss []string) *Gateway {
+	g.settingSources = ss
+	return g
+}
+
+// resolveTools returns the tool whitelist for sessionKey and whether it was
+// explicitly configured. !ok → the caller leaves Request.AllowedTools nil so
+// the driver resolves its probed headless-safe default (the global set), which
+// is also what unconfigured channels and the Console get.
+//
+// Mirrors config.ToolPolicy.Resolve; the logic is duplicated rather than
+// importing config so the gateway stays dependent on primitives only,
+// consistent with WithModel / WithSandbox et al. Keep the two in sync.
+func (g *Gateway) resolveTools(sessionKey string) (tools []string, ok bool) {
+	if t, has := g.toolChannels[sessionKey]; has {
+		return t, true
+	}
+	if g.toolDefault != nil {
+		return g.toolDefault, true
+	}
+	return nil, false
+}
+
 // WithSandbox enables per-session filesystem isolation: each turn runs in a
 // hashed subdir of cwdBase, with auto-memory consolidated under memoryBase. An
 // empty cwdBase disables isolation. Skills / workflows are NOT plumbed here —
