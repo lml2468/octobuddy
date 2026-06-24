@@ -139,16 +139,6 @@ export function BotsList(): $CancellablePromise<void> {
 }
 
 /**
- * LogClientError records a frontend-originated error into the persistent
- * desktop log (~/.octobuddy/logs/octobuddy.log via main()'s tee). Hand-added
- * to preserve the .ts binding format the rest of this directory uses; ID
- * extracted from a one-shot `wails3 generate bindings` run.
- */
-export function LogClientError(category: string, message: string, stack: string): $CancellablePromise<void> {
-    return $Call.ByID(1849461069, category, message, stack);
-}
-
-/**
  * CronCreate schedules a task (owner-gated by the daemon).
  */
 export function CronCreate(body: control$0.CronCreateBody): $CancellablePromise<void> {
@@ -218,6 +208,25 @@ export function LoadConfig(): $CancellablePromise<configstore$0.BotConfig[]> {
     return $Call.ByID(2972308434).then(($result: any) => {
         return $$createType8($result);
     });
+}
+
+/**
+ * LogClientError records a frontend-originated error into the persistent
+ * desktop log (~/.octobuddy/logs/octobuddy.log via main()'s tee). Previous
+ * behavior was silent: an uncaught Svelte render error or unhandled
+ * promise rejection vanished from stderr the moment the dev terminal was
+ * gone. With this method, the global window.onerror + unhandledrejection
+ * + <svelte:boundary> handlers all funnel into here so operators (and
+ * the user reporting an issue) have a single grep target — the same file
+ * the tray's "查看日志" action opens.
+ * 
+ * Best-effort: bounded message size (the frontend caps too, but defense
+ * in depth — a 10 MB stack trace is somebody's idea of a bad day) and
+ * never propagates an error back up; client logging that fails would
+ * otherwise cascade into the very crash report it was trying to capture.
+ */
+export function LogClientError(category: string, message: string, stack: string): $CancellablePromise<void> {
+    return $Call.ByID(1849461069, category, message, stack);
 }
 
 /**

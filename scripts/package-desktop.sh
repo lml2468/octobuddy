@@ -29,38 +29,27 @@ notary_key_path="${OCTOBUDDY_NOTARY_KEY_PATH:-}"
 notary_key_id="${OCTOBUDDY_NOTARY_KEY_ID:-}"
 notary_issuer="${OCTOBUDDY_NOTARY_ISSUER:-}"
 universal="${OCTOBUDDY_UNIVERSAL:-}"
-version="${OCTOBUDDY_VERSION:-}"
-# Fall back to the canonical /VERSION (single source of truth) so a manual
-# `zsh scripts/package-desktop.sh` from a clean checkout stamps Info.plist
-# with the same value the release script would use. Explicit env wins.
-if [[ -z "$version" ]] && [[ -f "$repo_root/VERSION" ]]; then
-  version=$(< "$repo_root/VERSION")
-  version="${version//[[:space:]]/}"
-fi
 entitlements="$desktop/build/darwin/entitlements.plist"
+
+# Shared build helpers (resolve_version, build_octobuddy_daemon,
+# wait_for_jobs). One file per script grew its own copy before #119.
+# shellcheck source=lib/build-common.sh
+source "$repo_root/scripts/lib/build-common.sh"
+version="$(resolve_version "$repo_root")"
 
 export PATH="$(go env GOPATH)/bin:$PATH"
 mkdir -p "$out"
 
 echo "▸ cross-compiling octobuddy-daemon (zero-cgo)…"
-build_octobuddy-daemon() { # $1=GOOS $2=GOARCH $3=out
-  # -trimpath strips the operator's $HOME / module-cache from binary paths,
-  # -buildvcs=false omits the local git-dirty flag — both required for any
-  # third party trying to reproduce a release artifact byte-for-byte.
-  ( cd "$core" && CGO_ENABLED=0 GOOS="$1" GOARCH="$2" go build -trimpath -buildvcs=false -ldflags "-s -w" -o "$3" ./cmd/octobuddy-daemon )
-}
 # Daemon binaries for all four platforms (CI picks these up for win/linux).
 # Run the five cross-compiles in parallel — independent inputs, independent
-# outputs, idle CPU cores otherwise. `wait` collects all PIDs and aborts the
-# script via `set -e` if any background build returns non-zero.
-build_octobuddy-daemon darwin  arm64 "$out/octobuddy-daemon-darwin-arm64"   &
-build_octobuddy-daemon darwin  amd64 "$out/octobuddy-daemon-darwin-amd64"   &
-build_octobuddy-daemon windows amd64 "$out/octobuddy-daemon-windows-amd64.exe" &
-build_octobuddy-daemon linux   amd64 "$out/octobuddy-daemon-linux-amd64"    &
-build_octobuddy-daemon linux   arm64 "$out/octobuddy-daemon-linux-arm64"    &
-fail=0
-for pid in $(jobs -p); do wait "$pid" || fail=1; done
-(( fail == 0 )) || { echo "✗ one or more octobuddy-daemon cross-compiles failed"; exit 1; }
+# outputs, idle CPU cores otherwise. wait_for_jobs aborts if any fail.
+build_octobuddy_daemon "$core" darwin  arm64 "$out/octobuddy-daemon-darwin-arm64"   &
+build_octobuddy_daemon "$core" darwin  amd64 "$out/octobuddy-daemon-darwin-amd64"   &
+build_octobuddy_daemon "$core" windows amd64 "$out/octobuddy-daemon-windows-amd64.exe" &
+build_octobuddy_daemon "$core" linux   amd64 "$out/octobuddy-daemon-linux-amd64"    &
+build_octobuddy_daemon "$core" linux   arm64 "$out/octobuddy-daemon-linux-arm64"    &
+wait_for_jobs "octobuddy-daemon cross-compiles"
 lipo -create -output "$out/octobuddy-daemon" "$out/octobuddy-daemon-darwin-arm64" "$out/octobuddy-daemon-darwin-amd64"
 echo "  ✓ octobuddy-daemon (mac universal + win/linux in $out)"
 

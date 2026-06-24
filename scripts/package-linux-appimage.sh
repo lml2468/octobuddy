@@ -32,16 +32,11 @@ desktop_dir="$repo_root/desktop"
 core_dir="$repo_root/core"
 out_dir="$repo_root/output"
 
-# Canonical version: /VERSION first, env override second. Mirrors the macOS
-# package script's logic so the AppImage filename matches the .zip / .dmg.
-version="${OCTOBUDDY_VERSION:-}"
-if [[ -z "$version" && -f "$repo_root/VERSION" ]]; then
-  version=$(< "$repo_root/VERSION")
-  version="${version//[[:space:]]/}"
-fi
-if [[ -z "$version" ]]; then
-  version="0.0.0-dev"
-fi
+# Shared build helpers (resolve_version, build_octobuddy_daemon,
+# build_frontend, wait_for_jobs). Each previously had its own copy here.
+# shellcheck source=lib/build-common.sh
+source "$repo_root/scripts/lib/build-common.sh"
+version="$(resolve_version "$repo_root")"
 
 arch="${ARCH:-$(uname -m)}"
 # appimagetool's runtime naming uses x86_64 / aarch64 — translate amd64 / arm64
@@ -65,17 +60,16 @@ if [[ ! -x "$tool" ]]; then
   chmod +x "$tool"
 fi
 
-# Daemon (zero-cgo so it's a fully static ELF that runs anywhere). The
-# desktop binary embeds it under Contents/Helpers in the .app; on Linux we
-# place it next to the GUI binary inside the AppImage.
-echo "▸ building octobuddy-daemon…"
-( cd "$core_dir" && CGO_ENABLED=0 GOOS=linux GOARCH="${GOARCH:-$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')}" \
-    go build -trimpath -buildvcs=false -ldflags "-s -w" \
-    -o "$out_dir/octobuddy-daemon-linux" ./cmd/octobuddy-daemon )
-
-# Frontend bundle (the Wails Go binary //go:embed-s frontend/dist).
-echo "▸ building frontend…"
-( cd "$desktop_dir/frontend" && npm ci --silent && npm run build )
+# Daemon (zero-cgo so it's a fully static ELF that runs anywhere) and the
+# Wails frontend bundle are independent — run them in parallel and wait,
+# same idiom as package-desktop.sh's 5-arch daemon fan-out. The Wails Go
+# binary depends on the frontend bundle (it //go:embed-s frontend/dist),
+# so the cgo desktop build still follows.
+goarch="${GOARCH:-$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')}"
+echo "▸ building octobuddy-daemon + frontend in parallel…"
+build_octobuddy_daemon "$core_dir" linux "$goarch" "$out_dir/octobuddy-daemon-linux" &
+build_frontend "$desktop_dir" &
+wait_for_jobs "linux build phase"
 
 # Desktop binary (cgo on — links GTK4 + WebKitGTK natively).
 echo "▸ building octobuddy (Wails desktop)…"
