@@ -37,21 +37,17 @@ func (c *Connector) EnqueueCron(sessionKey, channelID string, channelType Channe
 	c.enqueueTurn(sessionKey, inbound, tgt)
 }
 
-// NewCronTrigger is the canonical cron-fire trigger decision: ReasonCron +
-// SourceCron + persona-aware on_behalf_of routing. Used by bot_cron.go
-// (and any future cron-fire source) so the wire shape stays consistent
-// across the trigger pipeline and the router gate.
+// NewCronTrigger is the canonical cron-fire trigger decision: delegates
+// to the production classifier with Source=SourceCron, so the wire shape
+// stays byte-equal to whatever an inbound classification produces. The
+// previous hand-built TriggerDecision was a second cron-decision
+// constructor that had to stay in sync with the classifier's cron rule
+// (rule precedence #1); #116 collapsed both onto one path. Used by
+// bot_cron.go (and any future cron-fire source).
 func (c *Connector) NewCronTrigger() *trigger.TriggerDecision {
-	policy, _ := c.loadPolicyAndClassifier()
-	d := &trigger.TriggerDecision{
-		Reason:       trigger.ReasonCron,
-		Source:       trigger.SourceCron,
-		MatchedRules: []string{"cron_fire"},
-	}
-	if policy.Grantor.Configured() {
-		d.ReplyRouting.OnBehalfOf = policy.Grantor.UID
-	}
-	return d
+	policy, classifier := c.loadPolicyAndClassifier()
+	d := classifier.Classify(trigger.CanonicalInbound{Source: trigger.SourceCron}, policy)
+	return &d
 }
 
 // turnQueue is the per-session-key serial dispatch state (guarded by Connector.mu).

@@ -65,10 +65,3 @@ func (p Policy) effectiveAIBroadcast() AIBroadcastPolicy {
 	}
 	return AIBroadcastDeny
 }
-
-// Classifier is the single point where "should the bot reply, and why?" is
-// answered. Implementations are pure functions of (CanonicalInbound,
-// Policy) — no I/O, no global state, no clock.
-type Classifier interface {
-	Classify(in CanonicalInbound, p Policy) TriggerDecision
-}

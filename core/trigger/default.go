@@ -59,7 +59,6 @@ func (DefaultClassifier) Classify(in CanonicalInbound, p Policy) TriggerDecision
 		return TriggerDecision{
 			Source:       src,
 			Reason:       ReasonOBOIrrelevant,
-			PersonaOBO:   true,
 			MatchedRules: []string{"obo_v2_relevance_drop"},
 		}
 	}
@@ -84,7 +83,6 @@ func (DefaultClassifier) Classify(in CanonicalInbound, p Policy) TriggerDecision
 			Source:       src,
 			Reason:       ReasonDM,
 			MatchedRules: []string{"dm_auto"},
-			PersonaOBO:   oboTrusted,
 			ReplyRouting: withRouting(ReplyRouting{}),
 		}
 	}
@@ -95,7 +93,6 @@ func (DefaultClassifier) Classify(in CanonicalInbound, p Policy) TriggerDecision
 			Source:       src,
 			Reason:       ReasonExplicitBot,
 			MatchedRules: []string{"explicit_bot_uid"},
-			PersonaOBO:   oboTrusted,
 			ReplyRouting: withRouting(ReplyRouting{}),
 		}
 	}
@@ -107,7 +104,6 @@ func (DefaultClassifier) Classify(in CanonicalInbound, p Policy) TriggerDecision
 				Source:       src,
 				Reason:       ReasonPersonaHumans,
 				MatchedRules: []string{"persona_humans"},
-				PersonaOBO:   true,
 				ReplyRouting: withRouting(ReplyRouting{OnBehalfOf: p.Grantor.UID}),
 			}
 		}
@@ -116,7 +112,6 @@ func (DefaultClassifier) Classify(in CanonicalInbound, p Policy) TriggerDecision
 				Source:       src,
 				Reason:       ReasonPersonaGrantor,
 				MatchedRules: []string{"persona_grantor_uid"},
-				PersonaOBO:   true,
 				ReplyRouting: withRouting(ReplyRouting{OnBehalfOf: p.Grantor.UID}),
 			}
 		}
@@ -136,7 +131,6 @@ func (DefaultClassifier) Classify(in CanonicalInbound, p Policy) TriggerDecision
 			Source:       src,
 			Reason:       ReasonReplyToBot,
 			MatchedRules: []string{"reply_to_bot"},
-			PersonaOBO:   oboTrusted || p.Grantor.Configured(),
 			ReplyRouting: withRouting(routing),
 		}
 	}
@@ -148,7 +142,6 @@ func (DefaultClassifier) Classify(in CanonicalInbound, p Policy) TriggerDecision
 				Source:       src,
 				Reason:       reason,
 				MatchedRules: []string{rule},
-				PersonaOBO:   oboTrusted,
 				ReplyRouting: withRouting(ReplyRouting{}),
 			}
 		}
@@ -160,7 +153,6 @@ func (DefaultClassifier) Classify(in CanonicalInbound, p Policy) TriggerDecision
 			Source:       src,
 			Reason:       ReasonMentionFreeGroup,
 			MatchedRules: []string{"mention_free_group"},
-			PersonaOBO:   oboTrusted,
 			ReplyRouting: withRouting(ReplyRouting{}),
 		}
 	}
@@ -170,7 +162,6 @@ func (DefaultClassifier) Classify(in CanonicalInbound, p Policy) TriggerDecision
 		Source:       src,
 		Reason:       ReasonObservation,
 		MatchedRules: []string{"no_match"},
-		PersonaOBO:   oboTrusted,
 		ReplyRouting: ReplyRouting{},
 	}
 }

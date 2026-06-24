@@ -70,9 +70,6 @@ func TestDefaultClassifierReplyToBotPreservesPersona(t *testing.T) {
 	if d.ReplyRouting.OnBehalfOf != "u_admin" {
 		t.Fatalf("persona clone quote-reply must stamp on_behalf_of=grantor: routing=%+v", d.ReplyRouting)
 	}
-	if !d.PersonaOBO {
-		t.Fatalf("persona clone reply-to-bot must flag PersonaOBO: %+v", d)
-	}
 }
 func TestDefaultClassifierA3ReplyToBot(t *testing.T) {
 	p := Policy{BotUID: "bot1", AIBroadcast: AIBroadcastDeny, ReplyToBotEnabled: true}
@@ -225,9 +222,8 @@ func TestDefaultClassifierA10OBOTrusted(t *testing.T) {
 		BotUID:  "bot1",
 		Grantor: PolicyGrantor{UID: "u_admin"},
 	})
-	if d.Reason != ReasonPersonaHumans || !d.PersonaOBO {
-		t.Fatalf("OBO+broadcast must classify persona_humans with PersonaOBO: reason=%s obo=%v",
-			d.Reason, d.PersonaOBO)
+	if d.Reason != ReasonPersonaHumans {
+		t.Fatalf("OBO+broadcast must classify persona_humans: reason=%s", d.Reason)
 	}
 	if d.ReplyRouting.OBORerouteChannelID != "g_target" {
 		t.Fatalf("OBO reroute target wrong: %+v", d.ReplyRouting)

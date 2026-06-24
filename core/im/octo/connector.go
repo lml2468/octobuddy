@@ -33,9 +33,10 @@ type Connector struct {
 	// c.policyMu).
 	policy   trigger.Policy
 	policyMu sync.RWMutex
-	// classifier is the rule engine. Default = trigger.DefaultClassifier.
-	// Tests can swap with SetClassifier.
-	classifier trigger.Classifier
+	// classifier is the rule engine. Concrete trigger.DefaultClassifier —
+	// the Classifier interface was removed in #116 as speculative
+	// generality (one implementation, zero swaps).
+	classifier trigger.DefaultClassifier
 
 	// runCtx is the context passed to Run; the sink/inbound callbacks (which the
 	// gateway.Sink interface does not thread a context through) tie their work to
@@ -184,22 +185,9 @@ func (c *Connector) SetPolicy(p trigger.Policy) {
 	c.policyMu.Unlock()
 }
 
-// SetClassifier installs/replaces the classifier. Production wires
-// trigger.DefaultClassifier{}; tests can inject a stub. nil restores the
-// default. Idempotent.
-func (c *Connector) SetClassifier(cl trigger.Classifier) {
-	c.policyMu.Lock()
-	if cl == nil {
-		c.classifier = trigger.DefaultClassifier{}
-	} else {
-		c.classifier = cl
-	}
-	c.policyMu.Unlock()
-}
-
 // loadPolicyAndClassifier snapshots both under the policy lock for one
 // inbound classification.
-func (c *Connector) loadPolicyAndClassifier() (trigger.Policy, trigger.Classifier) {
+func (c *Connector) loadPolicyAndClassifier() (trigger.Policy, trigger.DefaultClassifier) {
 	c.policyMu.RLock()
 	defer c.policyMu.RUnlock()
 	return c.policy, c.classifier

@@ -172,9 +172,9 @@ func (c *Connector) targetFromDecision(m BotMessage, decision trigger.TriggerDec
 		tgt.channelID = decision.ReplyRouting.OBORerouteChannelID
 		tgt.channelType = rerouteKind
 	}
-	// Persona widening (PersonaOBO without an OBO reroute) keeps the
-	// inbound channel as the target — only the OnBehalfOf stamp below
-	// matters, which fires unconditionally from ReplyRouting.
+	// Persona widening without an OBO reroute keeps the inbound channel
+	// as the target — only the OnBehalfOf stamp below matters, which
+	// fires unconditionally from ReplyRouting.
 	tgt.onBehalfOf = decision.ReplyRouting.OnBehalfOf
 	return tgt
 }

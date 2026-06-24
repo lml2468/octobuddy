@@ -208,7 +208,6 @@ func (r ReplyRouting) HasOBOReroute() bool { return r.OBORerouteChannelID != "" 
 type TriggerDecision struct {
 	Reason       Reason
 	Source       Source
-	PersonaOBO   bool
 	ReplyRouting ReplyRouting
 	MatchedRules []string
 }
