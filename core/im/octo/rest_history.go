@@ -34,11 +34,18 @@ type channelMessagesResponse struct {
 }
 
 type channelMessageWire struct {
-	FromUID    string          `json:"from_uid"`
-	FromName   string          `json:"from_name"`
-	Content    string          `json:"content"`
-	Timestamp  int64           `json:"timestamp"`
-	MessageID  string          `json:"message_id"`
+	FromUID   string `json:"from_uid"`
+	FromName  string `json:"from_name"`
+	Content   string `json:"content"`
+	Timestamp int64  `json:"timestamp"`
+	// message_id arrives as a JSON string from some octo deploys and a
+	// JSON number (uint64) from others — same drift as SendMessageResult
+	// (rest_send.go). A strict string decode used to fail the whole
+	// /v1/bot/messages/sync response, so cold-start backfill silently
+	// dropped every message. flexString accepts either shape; numeric ids
+	// keep their literal form so a uint64 doesn't round-trip through
+	// float64 and lose precision.
+	MessageID  flexString      `json:"message_id"`
 	MessageSeq int64           `json:"message_seq"`
 	Type       int             `json:"type"`
 	URL        string          `json:"url"`
@@ -96,7 +103,7 @@ func (m channelMessageWire) toHistoricalMessage() HistoricalMessage {
 		FromName:   m.FromName,
 		Content:    firstNonEmpty(m.Content, pl.Content),
 		Timestamp:  m.Timestamp,
-		MessageID:  m.MessageID,
+		MessageID:  string(m.MessageID),
 		MessageSeq: m.MessageSeq,
 		Type:       firstNonZero(m.Type, pl.Type),
 		URL:        firstNonEmpty(m.URL, pl.URL),

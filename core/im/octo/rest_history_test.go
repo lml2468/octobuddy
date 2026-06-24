@@ -80,3 +80,39 @@ func TestGetChannelMessagesErrorReturnsNil(t *testing.T) {
 		t.Fatalf("expected nil on HTTP error, got %+v", msgs)
 	}
 }
+
+// TestGetChannelMessagesFlexMessageID: WuKongIM serves message_id as either a
+// JSON string or a JSON number across deploys. A strict string decode used to
+// fail the whole /v1/bot/messages/sync response and silently drop every
+// historical message ("json: cannot unmarshal number ... message_id of type
+// string" — observed 2026-06-24 against the live server). Both shapes must
+// round-trip to HistoricalMessage.MessageID as a string with the literal
+// digits preserved (uint64 precision intact).
+func TestGetChannelMessagesFlexMessageID(t *testing.T) {
+	cases := []struct {
+		name   string
+		idJSON string // exact JSON literal placed at "message_id"
+		wantID string
+	}{
+		{"string", `"m-abc-1"`, "m-abc-1"},
+		{"number", `1832745982637158400`, "1832745982637158400"},
+		{"null", `null`, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			body := `{"messages":[{"from_uid":"u","content":"hi","message_seq":1,"message_id":` + tc.idJSON + `}]}`
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(body))
+			}))
+			defer srv.Close()
+			c := NewRESTClient(srv.URL, tok("bf"))
+			msgs := c.GetChannelMessages(context.Background(), "g1", ChannelGroup, 10)
+			if len(msgs) != 1 {
+				t.Fatalf("expected 1 message, got %d (response body would be silently dropped on strict decode)", len(msgs))
+			}
+			if msgs[0].MessageID != tc.wantID {
+				t.Fatalf("MessageID = %q, want %q", msgs[0].MessageID, tc.wantID)
+			}
+		})
+	}
+}
