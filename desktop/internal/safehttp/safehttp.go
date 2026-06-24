@@ -74,8 +74,14 @@ func guard(opts Options) func(network, address string, _ syscall.RawConn) error 
 		if err != nil {
 			return fmt.Errorf("%s dial: bad address %q: %w", tag, address, err)
 		}
-		if opts.AllowLoopback && (host == "127.0.0.1" || host == "::1") {
-			return nil
+		// AllowLoopback honors all RFC1122 loopback (127.0.0.0/8 + ::1),
+		// not just literal 127.0.0.1 — devs running a local octo-server
+		// on 127.0.0.2 (multi-instance dev pattern) would otherwise see
+		// an SSRF refusal for a legitimate loopback target.
+		if opts.AllowLoopback {
+			if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+				return nil
+			}
 		}
 		if config.IsPrivateOrLocalAddress(host) {
 			return fmt.Errorf("%s dial: refusing private/local address %s", tag, host)

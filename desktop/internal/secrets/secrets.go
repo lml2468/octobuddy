@@ -53,6 +53,11 @@ type backend interface {
 	Get(botID string, kind Kind) (string, error)
 	Set(botID string, kind Kind, value string) error
 	Delete(botID string, kind Kind) error
+	// Writable reports whether Set/Delete can ever succeed. envBackend
+	// returns false; the cross-backend write-through in Set/Delete uses
+	// this to ignore the read-only error from envBackend instead of
+	// treating it as a real failure.
+	Writable() bool
 }
 
 type keyringBackend struct{}
@@ -84,6 +89,8 @@ func (keyringBackend) Delete(botID string, kind Kind) error {
 	}
 	return err
 }
+
+func (keyringBackend) Writable() bool { return true }
 
 // fileBackend is the headless fallback when an OS credential store is
 // unavailable. It is intentionally simple and local-user scoped (0600 files);
@@ -136,6 +143,8 @@ func (fileBackend) Delete(botID string, kind Kind) error {
 	return nil
 }
 
+func (fileBackend) Writable() bool { return true }
+
 type envBackend struct{}
 
 func secretEnvName(botID string, kind Kind) string {
@@ -169,6 +178,8 @@ func (envBackend) Set(string, Kind, string) error { return errors.New("env backe
 
 func (envBackend) Delete(string, Kind) error { return errors.New("env backend is read-only") }
 
+func (envBackend) Writable() bool { return false }
+
 var backends = []backend{keyringBackend{}, fileBackend{}, envBackend{}}
 
 // Get returns the stored token, or "" if none is set. A "not found" result and a
@@ -192,34 +203,52 @@ func Get(botID string, kind Kind) string {
 	return ""
 }
 
-// Set stores (or, with an empty value, deletes) a token.
+// Set stores (or, with an empty value, deletes) a token. Writes through
+// to EVERY writable backend so a backend whose availability later toggles
+// (keyring access revoked/granted mid-session) can't surface a stale
+// copy via Get's read-precedence walk. envBackend is read-only and its
+// "not supported" error is not counted as a failure.
 func Set(botID string, kind Kind, value string) error {
 	if value == "" {
 		return Delete(botID, kind)
 	}
 	var last error
+	any := false
 	for _, b := range backends {
-		if err := b.Set(botID, kind, value); err == nil {
-			return nil
-		} else {
-			last = err
+		err := b.Set(botID, kind, value)
+		if err == nil {
+			any = true
+			continue
 		}
+		if !b.Writable() {
+			continue
+		}
+		last = err
+	}
+	if any {
+		return nil
 	}
 	return last
 }
 
-// Delete removes a token; a missing entry is not an error.
+// Delete removes a token from every writable backend. Returns nil if
+// any backend succeeded; missing entries are not errors. envBackend's
+// read-only error is not counted as a failure.
 func Delete(botID string, kind Kind) error {
 	var last error
-	ok := false
+	any := false
 	for _, b := range backends {
-		if err := b.Delete(botID, kind); err != nil {
-			last = err
-		} else {
-			ok = true
+		err := b.Delete(botID, kind)
+		if err == nil {
+			any = true
+			continue
 		}
+		if !b.Writable() {
+			continue
+		}
+		last = err
 	}
-	if ok {
+	if any {
 		return nil
 	}
 	return last

@@ -54,12 +54,19 @@ func (DefaultClassifier) Classify(in CanonicalInbound, p Policy) TriggerDecision
 	// payload short-circuits with ReasonOBOIrrelevant BEFORE any session
 	// state is touched (openclaw R10 ordering invariant — keep this gate
 	// ahead of every accepted branch, including DM).
+	//
+	// EXCEPTION: a quote-reply to one of the bot's own messages IS
+	// addressing intent even without an explicit @mention, so don't drop
+	// it as irrelevant. The reply-to-bot rule below handles routing.
 	oboReroute, oboTrusted := evaluateOBOTrust(in, p)
 	if oboTrusted && !personaRelevant(in.Mention, p.Grantor) {
-		return TriggerDecision{
-			Source:       src,
-			Reason:       ReasonOBOIrrelevant,
-			MatchedRules: []string{"obo_v2_relevance_drop"},
+		quoteAddressesBot := p.ReplyToBotEnabled && in.ReplyTo != nil && in.ReplyTo.TargetIsBot
+		if !quoteAddressesBot {
+			return TriggerDecision{
+				Source:       src,
+				Reason:       ReasonOBOIrrelevant,
+				MatchedRules: []string{"obo_v2_relevance_drop"},
+			}
 		}
 	}
 
