@@ -46,19 +46,24 @@ func (d *ClaudeDriver) logSelfcheck(env []string, req Request) {
 	clog.For("selfcheck").Info("driver invocation environment",
 		"bot", botID, "claude", binStr, "auth", auth, "base_url", baseURL,
 		"cwd", req.Cwd, "writable", isDirWritable(req.Cwd),
-		"mode", string(d.mode()), "tools", selfcheckToolsField(d.mode(), req.AllowedTools))
+		"mode", string(d.mode()), "tools", d.selfcheckToolsField(req.AllowedTools))
 }
 
-// selfcheckToolsField reports the tool-surface size as it actually
-// reaches the spawned CLI on this turn. "BYPASS" in claude_code mode
-// flags that no whitelist applies; "NONE" for an explicit empty list;
-// otherwise the count.
-func selfcheckToolsField(mode PromptMode, override []string) string {
-	if mode == PromptModeClaudeCode {
+// selfcheckToolsField reports the tool surface as it actually reaches the
+// spawned CLI on this turn. "BYPASS" in claude_code mode flags that no
+// whitelist applies; "NONE" for an explicit empty list; "probed:N" when the
+// nil request resolved to the binary's headless-safe set; "CLI-DEFAULT" when
+// the probe was unavailable (the CLI's own default set is used); otherwise the
+// explicit override count.
+func (d *ClaudeDriver) selfcheckToolsField(override []string) string {
+	if d.mode() == PromptModeClaudeCode {
 		return "BYPASS"
 	}
 	if override == nil {
-		return strconv.Itoa(len(defaultHeadlessAllowedTools))
+		if safe := d.headlessTools(); len(safe) > 0 {
+			return "probed:" + strconv.Itoa(len(safe))
+		}
+		return "CLI-DEFAULT"
 	}
 	if len(override) == 0 {
 		return "NONE"

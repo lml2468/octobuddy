@@ -11,6 +11,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/lml2468/octobuddy/core/clog"
 )
 
 // PromptMode controls how ClaudeDriver assembles the system prompt and
@@ -26,27 +28,34 @@ const (
 	// the built-in system prompt; cwd .claude/ is not auto-loaded; the
 	// tool surface is the whitelist in Request.AllowedTools (or the
 	// driver default if nil). Interactive tools are always disallowed.
+	// Runs under bypassPermissions (headless has no approver) — the
+	// --tools whitelist, not the permission mode, is what scopes capability.
 	PromptModeMinimal PromptMode = "minimal"
 	// PromptModeClaudeCode preserves the previous behavior: prompt is
-	// APPENDED to the built-in one, cwd .claude/ auto-loads, every tool
+	// APPENDED to the built-in one, cwd .claude/ auto-loads, and the full
+	// built-in tool set is granted (no --tools whitelist). Like minimal it
 	// runs under bypassPermissions. Use only for bots whose SOUL.md was
 	// authored assuming Claude Code's preamble.
 	PromptModeClaudeCode PromptMode = "claude_code"
 )
 
-// defaultHeadlessAllowedTools is the headless-safe surface ClaudeDriver
-// passes to --tools in minimal mode. Bump per claude release when the
-// upstream tool set changes. mcp__* covers MCP tools. Headless-unsafe
-// interactive tools (AskUserQuestion, EnterPlanMode, EnterWorktree,
-// etc.) are deliberately absent — --tools restricts the model's
-// surface, so omission is the disallow mechanism.
-var defaultHeadlessAllowedTools = []string{
-	"Read", "Edit", "Write", "Bash",
-	"Grep", "Glob",
-	"WebSearch", "WebFetch",
-	"NotebookEdit", "TodoWrite",
-	"Agent", "Skill",
-	"mcp__*",
+// interactiveExclusions are built-in tools that need an interactive terminal
+// to function. In a headless `-p` turn the model would call them and stall
+// (there's no UI to render the question / plan / worktree picker), so they
+// must never be offered. The headless-safe default tool surface is whatever
+// the live claude binary reports (via ProbeTools) MINUS this denylist.
+//
+// This is a small, stable DENYLIST — deliberately not a hand-maintained
+// allowlist. The allowlist drifts per claude release (tool renames,
+// additions); sourcing it from the binary and subtracting these avoids the
+// silent-drop hazard a hardcoded allowlist had (e.g. "Agent" vs "Task",
+// "TodoWrite" vanishing).
+var interactiveExclusions = map[string]bool{
+	"AskUserQuestion": true,
+	"EnterPlanMode":   true,
+	"ExitPlanMode":    true,
+	"EnterWorktree":   true,
+	"ExitWorktree":    true,
 }
 
 // ClaudeDriver drives Claude Code headlessly via:
@@ -88,7 +97,33 @@ type ClaudeDriver struct {
 	// PromptMode + allowed-tools count. Single most useful line for
 	// diagnosing "出错了，请稍后重试" from a fresh install.
 	selfcheckOnce sync.Once
+
+	// toolsMu guards toolsCache: the per-binary headless-safe tool list
+	// (probed available set minus interactiveExclusions), resolved lazily
+	// and used as the --tools value when Request.AllowedTools is nil. Keyed
+	// by resolved binary path so a background install landing at a new path
+	// re-probes; an in-place upgrade is re-probed on the next daemon restart
+	// (the desktop restarts core after Upgrade).
+	toolsMu    sync.Mutex
+	toolsCache map[string]toolProbe
 }
+
+// toolProbe caches one binary's probe outcome. ok=false means the probe
+// failed (binary missing/unprobeable); the caller then surfaces the CLI's
+// own default tool set rather than a hand-maintained Go list. at records when
+// the outcome was taken so a FAILED probe can expire and be retried.
+type toolProbe struct {
+	tools []string
+	ok    bool
+	at    time.Time
+}
+
+// toolProbeRetryInterval bounds how long a FAILED probe is cached before the
+// next headlessTools() call re-probes, so a transient failure (binary mid-
+// upgrade, brief resource exhaustion) self-heals instead of pinning the
+// degraded CLI-default fallback for the daemon's lifetime. Successful probes
+// are cached until the binary path changes or the daemon restarts.
+const toolProbeRetryInterval = time.Minute
 
 func NewClaudeDriver(bin string) *ClaudeDriver {
 	if bin == "" {
@@ -150,8 +185,16 @@ func (d *ClaudeDriver) buildArgs(req Request) []string {
 // restrict the tool SURFACE via --tools (not --allowedTools, which is
 // the auto-approve list under prompt-based modes and does not actually
 // scope what the model can see — confirmed against claude 2.1.187).
+//
+// Permission mode is bypassPermissions even in minimal mode: headless
+// `-p` has no TTY to answer approval prompts and we pass no --allowedTools
+// auto-approve list, so under --permission-mode default (or any
+// prompt-based mode) the CLI auto-denies — or hangs on — every
+// write-class tool (Bash/Write/Edit), silently breaking the turn. The
+// tool SURFACE is scoped by --tools, which is orthogonal to the
+// permission mode, so capability restriction is unaffected.
 func (d *ClaudeDriver) appendMinimalModeArgs(args []string, req Request) []string {
-	args = append(args, "--permission-mode", "default")
+	args = append(args, "--permission-mode", "bypassPermissions")
 	// =user keeps CLAUDE_CONFIG_DIR-based skill discovery alive while
 	// dropping project (cwd .claude/) and local (cwd .claude.local) so a
 	// planted CLAUDE.md / skills / agents in the sandbox can't influence
@@ -161,12 +204,22 @@ func (d *ClaudeDriver) appendMinimalModeArgs(args []string, req Request) []strin
 	// value) so a missing prompt is loud, not a silent fallback to
 	// claude's built-in default that would drop SecurityPrefix.
 	args = append(args, "--system-prompt", req.SystemPrompt)
-	// --tools is the surface-restrict flag: the model only sees the
-	// listed names. "" disables every built-in. nil = use the headless
-	// default whitelist.
+	// --tools is the surface-restrict flag: the model only sees the listed
+	// names. "" disables every built-in. nil = caller expressed no opinion,
+	// so we resolve the headless-safe set probed from THIS binary (minus
+	// interactiveExclusions). If the probe is unavailable we fall back to the
+	// CLI's own "default" set rather than a hand-maintained Go list — a
+	// degraded path that DOES re-admit interactive tools, but it only applies
+	// during a transient probe-failure window (a binary that can't be probed
+	// generally can't run a turn either) and self-heals once the probe
+	// succeeds (toolProbeRetryInterval).
 	switch {
 	case req.AllowedTools == nil:
-		args = append(args, "--tools", strings.Join(defaultHeadlessAllowedTools, ","))
+		if safe := d.headlessTools(); len(safe) > 0 {
+			args = append(args, "--tools", strings.Join(safe, ","))
+		} else {
+			args = append(args, "--tools", "default")
+		}
 	case len(req.AllowedTools) == 0:
 		args = append(args, "--tools", "")
 	default:
@@ -183,6 +236,112 @@ func (d *ClaudeDriver) appendClaudeCodeModeArgs(args []string, req Request) []st
 		args = append(args, "--append-system-prompt", req.SystemPrompt)
 	}
 	return args
+}
+
+// headlessTools returns the headless-safe tool surface for the driver's
+// current binary — the probed available set minus interactiveExclusions —
+// caching the result per binary path. A nil/empty return means the probe is
+// unavailable; the caller falls back to the CLI's own "default" tool set.
+// Successful probes are cached until the binary path changes (background
+// install) or the daemon restarts (in-place upgrade); FAILED probes expire
+// after toolProbeRetryInterval so a transient failure self-heals.
+//
+// The probe runs OUTSIDE the lock: two concurrent first-turns on the same bot
+// may both probe (idempotent, ~1s), which is far cheaper than serializing
+// every concurrent turn behind one goroutine holding the lock across a 30s
+// spawn.
+func (d *ClaudeDriver) headlessTools() []string {
+	bin := d.binPath()
+
+	d.toolsMu.Lock()
+	if d.toolsCache == nil {
+		d.toolsCache = map[string]toolProbe{}
+	}
+	if p, ok := d.toolsCache[bin]; ok && (p.ok || time.Since(p.at) < toolProbeRetryInterval) {
+		d.toolsMu.Unlock()
+		return p.tools
+	}
+	d.toolsMu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	available, err := ProbeTools(ctx, bin, d.queryEnv())
+
+	d.toolsMu.Lock()
+	defer d.toolsMu.Unlock()
+	if err != nil {
+		clog.For("claude").Warn("tool probe failed; falling back to CLI default tool set",
+			"bin", bin, "err", err)
+		d.toolsCache[bin] = toolProbe{ok: false, at: time.Now()}
+		return nil
+	}
+	safe := filterTools(available)
+	d.toolsCache[bin] = toolProbe{tools: safe, ok: true, at: time.Now()}
+	return safe
+}
+
+// filterTools drops interactiveExclusions from a probed tool set, yielding
+// the headless-safe surface. Order is preserved.
+func filterTools(tools []string) []string {
+	out := make([]string, 0, len(tools))
+	for _, t := range tools {
+		if !interactiveExclusions[t] {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// ProbeTools spawns the claude binary headlessly and returns the built-in
+// tool names it actually offers, read from the `system/init` stream-json line
+// the CLI emits BEFORE any API call. It makes NO API request: it reads the
+// first init line and kills the process. The returned names are the
+// authoritative tool surface for `bin` (which drifts per claude release), so
+// the driver sources its headless default from this rather than a
+// hand-maintained constant. env is layered onto the process environment the
+// same way Query does, so a per-bot CLAUDE_CONFIG_DIR (and thus its MCP
+// servers) is reflected in the result.
+func ProbeTools(ctx context.Context, bin string, env []string) ([]string, error) {
+	args := []string{
+		"-p", "-", "--output-format", "stream-json", "--verbose",
+		"--permission-mode", "bypassPermissions", "--setting-sources=user",
+		"--system-prompt", "", "--tools", "default",
+	}
+	cmd := exec.CommandContext(ctx, bin, args...)
+	cmd.Env = mergedEnv(env)
+	cmd.Stdin = strings.NewReader("probe")
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("probe stdout pipe: %w", err)
+	}
+	if err := cmd.Start(); err != nil {
+		_ = stdout.Close()
+		return nil, fmt.Errorf("probe start %s: %w", bin, err)
+	}
+	defer func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	}()
+
+	sc := newClaudeScanner(stdout)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" {
+			continue
+		}
+		var init struct {
+			Type    string   `json:"type"`
+			Subtype string   `json:"subtype"`
+			Tools   []string `json:"tools"`
+		}
+		if json.Unmarshal([]byte(line), &init) == nil && init.Type == "system" && init.Subtype == "init" {
+			return init.Tools, nil
+		}
+	}
+	if err := sc.Err(); err != nil {
+		return nil, fmt.Errorf("probe scan: %w", err)
+	}
+	return nil, fmt.Errorf("no system/init line from %s", bin)
 }
 
 func (d *ClaudeDriver) Query(ctx context.Context, req Request) (<-chan AgentEvent, error) {

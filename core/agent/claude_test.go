@@ -3,6 +3,7 @@ package agent
 import (
 	"encoding/json"
 	"testing"
+	"time"
 )
 
 // Fixtures: real lines captured from `claude --output-format stream-json`
@@ -189,9 +190,10 @@ func TestFullTurnSequence(t *testing.T) {
 // the prompt REPLACES (--system-prompt always emitted), project/local
 // setting sources are silenced (--setting-sources=user keeps user-scope
 // for CLAUDE_CONFIG_DIR-based per-bot skill discovery), permission-mode
-// is `default`, and the tool surface is restricted via --tools.
+// is bypassPermissions (headless has no approver), and the tool surface
+// is restricted via --tools.
 func TestClaudeArgsMinimalMode(t *testing.T) {
-	d := NewClaudeDriver("claude")
+	d := newTestDriver()
 	args := d.buildArgs(Request{Prompt: "hi", SystemPrompt: "you are X"})
 	if !contains(args, "--system-prompt") {
 		t.Fatalf("--system-prompt missing: %v", args)
@@ -199,8 +201,8 @@ func TestClaudeArgsMinimalMode(t *testing.T) {
 	if !contains(args, "--setting-sources=user") {
 		t.Fatalf("--setting-sources=user missing (need to keep CLAUDE_CONFIG_DIR-based per-bot skills loading): %v", args)
 	}
-	if !contains(args, "--permission-mode") || !contains(args, "default") {
-		t.Fatalf("--permission-mode default missing: %v", args)
+	if !contains(args, "--permission-mode") || !contains(args, "bypassPermissions") {
+		t.Fatalf("--permission-mode bypassPermissions missing (headless has no approver; --tools scopes capability, not the permission mode): %v", args)
 	}
 	if !contains(args, "--tools") {
 		t.Fatalf("--tools missing (the surface-restrict flag — --allowedTools is auto-approve, not restrict): %v", args)
@@ -214,9 +216,6 @@ func TestClaudeArgsMinimalMode(t *testing.T) {
 	if contains(args, "--append-system-prompt") {
 		t.Fatalf("minimal mode must NOT use --append-system-prompt: %v", args)
 	}
-	if contains(args, "bypassPermissions") {
-		t.Fatalf("minimal mode must NOT use bypassPermissions: %v", args)
-	}
 }
 
 // TestClaudeArgsMinimalModeEmptyPromptStillReplaces is the regression
@@ -224,7 +223,7 @@ func TestClaudeArgsMinimalMode(t *testing.T) {
 // still emit --system-prompt (with an empty value) so a misconfigured
 // caller doesn't silently fall back to claude's built-in default.
 func TestClaudeArgsMinimalModeEmptyPromptStillReplaces(t *testing.T) {
-	d := NewClaudeDriver("claude")
+	d := newTestDriver()
 	args := d.buildArgs(Request{Prompt: "hi", SystemPrompt: ""})
 	idx := -1
 	for i, a := range args {
@@ -265,22 +264,50 @@ func TestClaudeArgsClaudeCodeModeEscapeHatch(t *testing.T) {
 	}
 }
 
-// TestClaudeArgsAllowedTools pins the AllowedTools semantics in minimal
-// mode: nil → driver default whitelist; empty slice → no tools at all
-// (--tools ""); non-empty → exact list.
+// newTestDriver returns a minimal-mode ClaudeDriver with the headless tool
+// probe pre-seeded, so buildArgs() in unit tests is deterministic and never
+// spawns the real claude binary. Tests that care about the nil-tools probe
+// resolution seed their own cache instead.
+func newTestDriver() *ClaudeDriver {
+	d := NewClaudeDriver("claude")
+	d.toolsCache = map[string]toolProbe{"claude": {tools: []string{"Read", "Bash"}, ok: true}}
+	return d
+}
+
+// TestClaudeArgsAllowedTools pins the AllowedTools semantics in minimal mode:
+// nil → the binary's probed headless-safe set; empty slice → no tools at all
+// (--tools ""); non-empty → exact list; nil with an unavailable probe → the
+// CLI's own "default" set (no hand-maintained Go fallback).
 func TestClaudeArgsAllowedTools(t *testing.T) {
 	cases := []struct {
 		name      string
 		allowed   []string
+		seed      func(*ClaudeDriver)
 		wantValue string
 	}{
-		{"nil emits default whitelist", nil, "Read,Edit,Write,Bash,Grep,Glob,WebSearch,WebFetch,NotebookEdit,TodoWrite,Agent,Skill,mcp__*"},
-		{"explicit list verbatim", []string{"Read", "Bash"}, "Read,Bash"},
-		{"empty slice → --tools \"\" (no surface)", []string{}, ""},
+		{
+			name:    "nil resolves probed headless-safe set",
+			allowed: nil,
+			seed: func(d *ClaudeDriver) {
+				d.toolsCache = map[string]toolProbe{"claude": {tools: []string{"Read", "Bash", "Skill"}, ok: true}}
+			},
+			wantValue: "Read,Bash,Skill",
+		},
+		{
+			name:      "nil + probe unavailable falls back to CLI default",
+			allowed:   nil,
+			seed:      func(d *ClaudeDriver) { d.toolsCache = map[string]toolProbe{"claude": {ok: false, at: time.Now()}} },
+			wantValue: "default",
+		},
+		{"explicit list verbatim", []string{"Read", "Bash"}, nil, "Read,Bash"},
+		{"empty slice → --tools \"\" (no surface)", []string{}, nil, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			d := NewClaudeDriver("claude")
+			if tc.seed != nil {
+				tc.seed(d)
+			}
 			args := d.buildArgs(Request{Prompt: "hi", AllowedTools: tc.allowed})
 			got := ""
 			for i, a := range args {
@@ -305,7 +332,7 @@ func contains(xs []string, want string) bool {
 }
 
 func TestClaudeArgsMemoryDirToSettings(t *testing.T) {
-	d := NewClaudeDriver("claude")
+	d := newTestDriver()
 	args := d.buildArgs(Request{Prompt: "hi", MemoryDir: "/m/x y"})
 	// Find --settings and its JSON value.
 	idx := -1
@@ -328,7 +355,7 @@ func TestClaudeArgsMemoryDirToSettings(t *testing.T) {
 }
 
 func TestClaudeArgsNoSettingsWithoutMemoryDir(t *testing.T) {
-	d := NewClaudeDriver("claude")
+	d := newTestDriver()
 	if contains(d.buildArgs(Request{Prompt: "hi"}), "--settings") {
 		t.Fatal("--settings should be absent when MemoryDir is empty")
 	}
@@ -365,5 +392,21 @@ func TestIsDirWritable(t *testing.T) {
 	dir := t.TempDir()
 	if !isDirWritable(dir) {
 		t.Fatal("tempdir reported not writable")
+	}
+}
+
+// TestFilterToolsDropsInteractive confirms the headless-safe surface is the
+// probed set minus the interactive denylist, with order preserved.
+func TestFilterToolsDropsInteractive(t *testing.T) {
+	in := []string{"Read", "AskUserQuestion", "Bash", "EnterPlanMode", "ExitPlanMode", "Task", "EnterWorktree", "ExitWorktree", "Skill"}
+	got := filterTools(in)
+	want := []string{"Read", "Bash", "Task", "Skill"}
+	if len(got) != len(want) {
+		t.Fatalf("filterTools = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("at %d: got %q want %q (full=%v)", i, got[i], want[i], got)
+		}
 	}
 }
