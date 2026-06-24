@@ -12,6 +12,8 @@
     "build": "vite build --mode production",
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "test:modals": "node tests/modals.spec.mjs"
   },
   "dependencies": {
@@ -25,11 +27,13 @@
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^7.0.0",
     "@tsconfig/svelte": "^5.0.8",
+    "jsdom": "^29.1.1",
     "playwright-core": "^1.61.0",
     "svelte": "^5.46.4",
     "svelte-check": "^4.4.8",
     "tslib": "^2.6.2",
     "typescript": "^6.0.3",
-    "vite": "^8.0.5"
+    "vite": "^8.0.5",
+    "vitest": "^4.1.9"
   }
 }
