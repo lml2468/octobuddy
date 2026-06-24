@@ -38,14 +38,19 @@ func (s State) IsZero() bool {
 	return s == State{}
 }
 
-// filePath returns ~/.octobuddy/window.json or "" when HOME is unset.
-// Resolves the daemon-state directory through configstore.Dir() so the
-// root layout has a single source of truth — if it ever moves (e.g.
-// macOS Application Support), windowstate moves with it for free.
+// filePath returns ~/.octobuddy/window.json, or an error when HOME is
+// unset. Resolves the daemon-state directory through configstore.Dir()
+// so the root layout has a single source of truth — if it ever moves
+// (e.g. macOS Application Support), windowstate moves with it for free.
+//
+// configstore.Dir() returns a path even when os.UserHomeDir fails (it
+// swallows the error and Joins with "", yielding the RELATIVE string
+// ".octobuddy"); reject anything non-absolute so we don't silently write
+// state into the daemon's CWD on a HOME-unset launchd / container.
 func filePath() (string, error) {
 	dir := configstore.Dir()
-	if dir == "" {
-		return "", fmt.Errorf("windowstate: resolve home: %w", os.ErrNotExist)
+	if !filepath.IsAbs(dir) {
+		return "", fmt.Errorf("windowstate: cannot resolve absolute home dir (got %q)", dir)
 	}
 	return filepath.Join(dir, "window.json"), nil
 }

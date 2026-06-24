@@ -3,6 +3,7 @@ package octo
 import (
 	"strings"
 
+	"github.com/lml2468/octobuddy/core/clog"
 	"github.com/lml2468/octobuddy/core/router"
 	"github.com/lml2468/octobuddy/core/safety"
 	"github.com/lml2468/octobuddy/core/trigger"
@@ -32,7 +33,15 @@ func (c *Connector) onInbound(m BotMessage) {
 	// this filter they would still classify (correctly, as observation)
 	// but spam the audit stream with from="" / text="[消息]" rows that
 	// have no user-visible meaning.
+	//
+	// Log at debug so a future content type that legitimately lacks
+	// from_uid surfaces in the daemon log instead of being silently lost
+	// — operators investigating "the bot missed a system broadcast" can
+	// grep here as the first triage step (and we can revisit by-Type
+	// filtering when a real example appears).
 	if m.FromUID == "" {
+		clog.For("octo").Debug("inbound dropped: empty from_uid",
+			"type", m.Payload.Type, "channel", m.ChannelID)
 		return
 	}
 	// Suppress streaming partial updates (inbound.ts settingStreamOn / G21).

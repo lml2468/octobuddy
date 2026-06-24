@@ -39,9 +39,17 @@ func (f *flexString) UnmarshalJSON(b []byte) error {
 		*f = flexString(s)
 		return nil
 	}
-	// Bare number: keep the literal so a uint64 messageID doesn't lose precision
-	// the way json.Number → float64 → strconv.FormatFloat would.
-	*f = flexString(string(b))
+	// Bare number: validate as JSON number first, then keep the literal
+	// so a uint64 messageID doesn't lose precision the way json.Number →
+	// float64 → strconv.FormatFloat would. Rejecting object / array /
+	// boolean / garbage stops a server-side regression from silently
+	// propagating {"foo":1} as the literal string MessageID (which would
+	// later be sent verbatim in read-receipt batches, corrupting them).
+	var n json.Number
+	if err := json.Unmarshal(b, &n); err != nil {
+		return fmt.Errorf("flexString: want JSON string or number, got %q: %w", b, err)
+	}
+	*f = flexString(string(n))
 	return nil
 }
 
