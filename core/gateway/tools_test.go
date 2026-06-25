@@ -5,14 +5,23 @@ import (
 	"testing"
 )
 
-// TestResolveTools pins the per-turn tool-surface resolution: a present channel
-// entry (incl. empty = muzzle) wins; otherwise a non-nil bot default; otherwise
-// unset (caller leaves Request.AllowedTools nil → driver's probed default).
+// TestResolveTools pins the per-turn tool-surface resolution through the
+// installed resolver: a present channel entry (incl. empty = muzzle) wins;
+// otherwise a non-nil bot default; otherwise unset (caller leaves
+// Request.AllowedTools nil → driver's probed default).
 func TestResolveTools(t *testing.T) {
-	g := &Gateway{
-		toolDefault:  []string{"Read"},
-		toolChannels: map[string][]string{"c1": {"Bash"}, "muz": {}},
+	def := []string{"Read"}
+	channels := map[string][]string{"c1": {"Bash"}, "muz": {}}
+	resolver := func(sessionKey string) ([]string, bool) {
+		if t, has := channels[sessionKey]; has {
+			return t, true
+		}
+		if def != nil {
+			return def, true
+		}
+		return nil, false
 	}
+	g := (&Gateway{}).WithToolResolver(resolver)
 	if got, ok := g.resolveTools("c1"); !ok || !reflect.DeepEqual(got, []string{"Bash"}) {
 		t.Fatalf("channel override: %v ok=%v", got, ok)
 	}
@@ -24,6 +33,6 @@ func TestResolveTools(t *testing.T) {
 	}
 
 	if _, ok := (&Gateway{}).resolveTools("x"); ok {
-		t.Fatal("no policy configured must be unset (driver default)")
+		t.Fatal("no resolver configured must be unset (driver default)")
 	}
 }

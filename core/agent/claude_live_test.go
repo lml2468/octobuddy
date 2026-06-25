@@ -148,7 +148,7 @@ func TestProbeMCPReportsHealth(t *testing.T) {
 	writeMCP(t, okCfg, `{"mcpServers":{"echo":{"command":"node","args":[`+jsonStr(serverPath)+`]}}}`)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	servers, err := ProbeMCP(ctx, bin, env, okCfg)
+	servers, err := ProbeMCP(ctx, bin, "", env, okCfg)
 	if err != nil {
 		t.Skipf("MCP probe unusable in this env (%v); skipping", err)
 	}
@@ -167,7 +167,7 @@ func TestProbeMCPReportsHealth(t *testing.T) {
 	writeMCP(t, badCfg, `{"mcpServers":{"broken":{"command":"/nonexistent/xyz-octobuddy","args":[]}}}`)
 	ctx2, cancel2 := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel2()
-	bad, err := ProbeMCP(ctx2, bin, env, badCfg)
+	bad, err := ProbeMCP(ctx2, bin, "", env, badCfg)
 	if err != nil {
 		t.Fatalf("probe (bad cfg) errored: %v", err)
 	}

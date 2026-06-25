@@ -58,9 +58,28 @@ type Gateway struct {
 	// the bot's own replies and infer the initial answered/new cutoff.
 	groupBackfill func(channelID string, limit int) []groupctx.BackfillMessage
 	botUID        func() string
-	// Operator-trusted system prompt (SOUL.md + AGENTS.md). Appended after
-	// the non-overridable security prefix.
+	// owner resolves the bot owner's uid (empty before IM registration). Set via
+	// WithOwner. Gates owner-only prompt injection (the bootstrap block in the
+	// owner's DM). nil → no owner known (treated as no IM-owner DM match; Console
+	// is gated separately by Source).
+	owner func() string
+	// Operator-trusted system prompt (SOUL.md + AGENTS.md), a static snapshot set
+	// via WithSystemPrompt. In production (config mode) the daemon installs
+	// resolveSystemPromptFn instead and this stays "" — so this field is the
+	// fallback used only by callers that set a fixed prompt without a resolver
+	// (tests, and any future single-shot/REPL embedder). effectiveSystemPrompt
+	// reads it only when resolveSystemPromptFn is nil.
 	systemPrompt string
+	// resolveSystemPromptFn, when set, re-reads SOUL.md/AGENTS.md PER TURN so a
+	// desktop edit applies on the next message without a daemon restart (mirrors
+	// resolveToolsFn). nil → fall back to the static systemPrompt snapshot. An
+	// empty result is honored (operator cleared both files → SecurityPrefix only).
+	resolveSystemPromptFn func() string
+	// resolveBootstrapFn, when set, re-reads BOOTSTRAP.md PER TURN. Its content is
+	// injected ONLY in an owner-trusted channel (Console or the owner's DM) and
+	// only while the file exists — the bot deletes it once self-defined. nil/empty
+	// → no bootstrap block.
+	resolveBootstrapFn func() string
 	// Persona-clone grantor (OBO). When configured, a persona instruction
 	// is injected so the bot replies in the grantor's voice. Zero value =
 	// a regular bot. personaPrompt is an optional free-form persona block
@@ -69,13 +88,15 @@ type Gateway struct {
 	personaPrompt string
 	// Optional model override passed to the driver (empty = driver default).
 	model string
-	// Tool surface policy (set via WithToolPolicy). toolDefault is the
-	// bot-level whitelist (nil = driver default); toolChannels overrides it
-	// per sessionKey. A present channel entry / non-nil default is used
-	// verbatim. Unconfigured sessions fall through to the driver default
-	// (the binary's probed headless-safe set).
-	toolDefault  []string
-	toolChannels map[string][]string
+	// Tool surface policy (set via WithToolResolver). resolveToolsFn is
+	// evaluated PER TURN with the session key and returns (tools, ok): ok=false
+	// → leave Request.AllowedTools nil so the driver uses its probed
+	// headless-safe default; ok=true → use the returned list verbatim (a
+	// present channel entry / non-nil default, incl. empty = muzzle). Resolved
+	// per turn (not cached at construction) so a desktop edit to a channel's
+	// tools applies on the next turn without a daemon restart. nil = no policy
+	// (every session falls through to the driver default).
+	resolveToolsFn func(sessionKey string) (tools []string, ok bool)
 	// settingSources is the per-bot claude setting-source scope list passed
 	// on every turn (empty = driver default "user"). Set via WithSettingSources.
 	settingSources []string

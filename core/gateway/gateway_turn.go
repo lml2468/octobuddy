@@ -6,6 +6,7 @@ import (
 
 	"github.com/lml2468/octobuddy/core/agent"
 	"github.com/lml2468/octobuddy/core/router"
+	"github.com/lml2468/octobuddy/core/trigger"
 )
 
 // runTurn executes one accepted turn under the session lock.
@@ -174,7 +175,15 @@ func (g *Gateway) consumeAgentError(ev agent.AgentEvent, res *agentAttemptResult
 
 func (g *Gateway) prepareAgentRequest(ctx context.Context, sessionKey string, msg router.InboundMessage) (agent.Request, error) {
 	prompt := g.buildGroupPrompt(sessionKey, msg)
-	if err := g.store.AppendUser(sessionKey, msg.Text, msg.FromName, string(msg.Source)); err != nil {
+	// Persist Console turns as a plain human message: the store/history vocabulary
+	// is user/cron/assistant, and a Console turn IS a human message for history.
+	// Its console-ness is a live-trigger concern (the bootstrap gate reads
+	// msg.Source directly below), not a stored distinction.
+	storedSource := string(msg.Source)
+	if msg.Source == trigger.SourceConsole {
+		storedSource = string(trigger.SourceUser)
+	}
+	if err := g.store.AppendUser(sessionKey, msg.Text, msg.FromName, storedSource); err != nil {
 		return agent.Request{}, g.failTurn(sessionKey, "store.AppendUser", err)
 	}
 	g.notifySessionTouch(sessionKey, msg.ChannelID, msg.ChannelType)

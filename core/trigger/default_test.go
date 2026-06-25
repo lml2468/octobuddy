@@ -405,6 +405,25 @@ func TestPolicyGrantorFromPersona(t *testing.T) {
 
 // --- helpers ---
 
+// TestSourceConsoleDMTriggers pins that a Console turn (a DM carrying
+// SourceConsole) triggers like any DM and preserves its Source through the
+// decision (so downstream owner-trust checks can read it).
+func TestSourceConsoleDMTriggers(t *testing.T) {
+	in := CanonicalInbound{
+		Source:  SourceConsole,
+		Channel: ChannelDM,
+		FromUID: "gui-user",
+		Text:    "hi",
+	}
+	d := DefaultClassifier{}.Classify(in, Policy{BotUID: "bot1"})
+	if !d.ShouldReply() || d.Reason != ReasonDM {
+		t.Fatalf("Console DM must trigger as a DM: reply=%v reason=%s", d.ShouldReply(), d.Reason)
+	}
+	if d.Source != SourceConsole {
+		t.Fatalf("Console source must survive classification: got %s", d.Source)
+	}
+}
+
 func groupMsg(chID, from string, m *MentionPayload) CanonicalInbound {
 	return CanonicalInbound{
 		Source:    SourceUser,

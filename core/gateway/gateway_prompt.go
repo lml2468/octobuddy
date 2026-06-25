@@ -8,6 +8,13 @@ import (
 	"github.com/lml2468/octobuddy/core/safety"
 )
 
+// bootstrapPromptHeader labels the first-run ritual block in the assembled
+// system prompt. The filename is kept in sync with config.BootstrapName by a
+// compile-time assertion in the test package (TestBootstrapHeaderMatchesName);
+// the gateway does not import config (it stays dependent on primitives), so the
+// header is a local literal rather than a derived string.
+const bootstrapPromptHeader = "## BOOTSTRAP.md (first-run ritual — owner only)"
+
 // buildGroupPrompt assembles the prompt for a turn. For a DM (or when group
 // context is disabled) it returns the raw message text. For a group message it
 // injects the [Recent group messages] delta as UNTRUSTED background and
@@ -97,15 +104,46 @@ func renderGroupPrompt(deltaText, currentText string) string {
 // payloads), so each is wrapped as safety.TrustedText after the SecurityPrefix.
 func (g *Gateway) buildSystemPrompt(msg router.InboundMessage, rosterPrefix string) string {
 	parts := []safety.SafeText{safety.TrustedText(safety.SecurityPrefix)}
-	if g.systemPrompt != "" {
-		parts = append(parts, safety.TrustedText(g.systemPrompt))
+	if sp := g.effectiveSystemPrompt(); sp != "" {
+		parts = append(parts, safety.TrustedText(sp))
 	}
 	if rosterPrefix != "" {
 		parts = append(parts, safety.TrustedText(rosterPrefix))
 	}
 	parts = g.appendGroupInstructions(parts, msg)
 	parts = g.appendPersonaInstructions(parts)
+	parts = g.appendBootstrap(parts, msg)
 	return joinSystemPromptParts(parts)
+}
+
+// appendBootstrap injects the first-run ritual (BOOTSTRAP.md) — but ONLY in an
+// owner-trusted channel (router.InboundMessage.OwnerTrusted: a Console turn or
+// the owner's IM DM; never a group or non-owner DM). The ritual instructs the
+// bot to (re)write its own SOUL.md, so letting an untrusted user drive it would
+// be self-injection of the trusted prompt. Operator-authored content, so wrapped
+// as TrustedText. No-op once the bot deletes BOOTSTRAP.md (per-turn reload → "").
+func (g *Gateway) appendBootstrap(parts []safety.SafeText, msg router.InboundMessage) []safety.SafeText {
+	ownerUID := ""
+	if g.owner != nil {
+		ownerUID = g.owner()
+	}
+	if !msg.OwnerTrusted(ownerUID) {
+		return parts
+	}
+	if body := g.effectiveBootstrap(); body != "" {
+		parts = append(parts, safety.TrustedText(bootstrapPromptHeader+"\n\n"+body))
+	}
+	return parts
+}
+
+// effectiveBootstrap returns the per-turn BOOTSTRAP.md body, or "" when no
+// resolver is installed (mirrors effectiveSystemPrompt so callers get the nil
+// handling for free).
+func (g *Gateway) effectiveBootstrap() string {
+	if g.resolveBootstrapFn == nil {
+		return ""
+	}
+	return g.resolveBootstrapFn()
 }
 
 func (g *Gateway) appendGroupInstructions(parts []safety.SafeText, msg router.InboundMessage) []safety.SafeText {

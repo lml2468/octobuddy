@@ -5,6 +5,10 @@
 // @ts-ignore: Unused imports
 import { Create as $Create } from "@wailsio/runtime";
 
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as config$0 from "../../../core/config/models.js";
+
 /**
  * BotConfig is the flat view model the editor binds to. Tokens are populated
  * from the secret backend on Load and routed back to it on Save.
@@ -30,19 +34,26 @@ export class BotConfig {
      */
     "cron": boolean;
 
-    /** SystemPromptMode mirrors agent.systemPromptMode ("minimal" | "claude_code"; "" = minimal). */
+    /**
+     * SystemPromptMode mirrors agent.systemPromptMode ("minimal" | "claude_code";
+     * "" = minimal). Editable on the 基础信息 pane.
+     */
     "systemPromptMode": string;
 
-    /** SettingSources mirrors agent.settingSources (subset of {user, project}; empty = ["user"]). */
+    /**
+     * SettingSources mirrors agent.settingSources (subset of {user, project};
+     * empty = ["user"]). Editable on the 基础信息 pane.
+     */
     "settingSources": string[];
 
     /**
      * Tools mirrors agent.tools — bot-level default whitelist + per-channel
-     * overrides keyed by sessionKey. null/absent = the driver's probed
-     * headless-safe default. The bot-level default is edited on 基础信息; the
-     * per-channel map is edited in the chat window but round-tripped here.
+     * overrides. nil/absent = the driver's probed headless-safe default. The
+     * bot-level default is edited on 基础信息; per-channel overrides are edited
+     * in the chat window (E3) but round-tripped here so a 基础信息 save preserves
+     * them.
      */
-    "tools": ToolPolicy | null;
+    "tools"?: config$0.ToolPolicy | null;
 
     /** Creates a new BotConfig instance. */
     constructor($$source: Partial<BotConfig> = {}) {
@@ -85,9 +96,6 @@ export class BotConfig {
         if (!("settingSources" in $$source)) {
             this["settingSources"] = [];
         }
-        if (!("tools" in $$source)) {
-            this["tools"] = null;
-        }
 
         Object.assign(this, $$source);
     }
@@ -98,6 +106,8 @@ export class BotConfig {
     static createFrom($$source: any = {}): BotConfig {
         const $$createField6_0 = $$createType0;
         const $$createField7_0 = $$createType1;
+        const $$createField12_0 = $$createType2;
+        const $$createField13_0 = $$createType4;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("env" in $$parsedSource) {
             $$parsedSource["env"] = $$createField6_0($$parsedSource["env"]);
@@ -105,19 +115,19 @@ export class BotConfig {
         if ("secretEnv" in $$parsedSource) {
             $$parsedSource["secretEnv"] = $$createField7_0($$parsedSource["secretEnv"]);
         }
+        if ("settingSources" in $$parsedSource) {
+            $$parsedSource["settingSources"] = $$createField12_0($$parsedSource["settingSources"]);
+        }
+        if ("tools" in $$parsedSource) {
+            $$parsedSource["tools"] = $$createField13_0($$parsedSource["tools"]);
+        }
         return new BotConfig($$parsedSource as Partial<BotConfig>);
     }
 }
 
-/**
- * ToolPolicy mirrors core/config.ToolPolicy: a bot-level default tool whitelist
- * plus per-sessionKey overrides. A null/absent value means "driver default".
- */
-export type ToolPolicy = {
-    default?: string[];
-    channels?: { [_ in string]?: string[] };
-};
-
 // Private type creation functions
 const $$createType0 = $Create.Map($Create.Any, $Create.Any);
 const $$createType1 = $Create.Map($Create.Any, $Create.Any);
+const $$createType2 = $Create.Array($Create.Any);
+const $$createType3 = config$0.ToolPolicy.createFrom;
+const $$createType4 = $Create.Nullable($$createType3);

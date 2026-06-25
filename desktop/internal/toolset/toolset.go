@@ -34,16 +34,26 @@ func Refresh(ctx context.Context) (*config.ToolsetCache, error) {
 	refreshMu.Lock()
 	defer refreshMu.Unlock()
 
-	bin := claudecli.BinPath()
+	bin := claudecli.ResolvedBinPath()
 	ver := claudecli.InstalledVersion()
 
 	cached, err := configstore.LoadToolset()
 	if err != nil {
 		return nil, err
 	}
-	// Skip the spawn when we already probed this exact version.
-	if cached != nil && ver != "" && cached.ClaudeVersion == ver && len(cached.Available) > 0 {
-		return cached, nil
+	// Skip the spawn when the cache is already current. With a desktop-managed
+	// binary that's "same recorded version". A PATH-managed binary has no
+	// recorded version (ver==""); re-probing on every call would spawn claude
+	// (~1s) on each settings open, so treat a populated cache as current for
+	// the unversioned case too. A genuine binary swap on PATH is picked up by
+	// the install-state hook / next daemon restart, not this background poll.
+	if cached != nil && len(cached.Available) > 0 {
+		if ver != "" && cached.ClaudeVersion == ver {
+			return cached, nil
+		}
+		if ver == "" && cached.ClaudeVersion == "" {
+			return cached, nil
+		}
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)

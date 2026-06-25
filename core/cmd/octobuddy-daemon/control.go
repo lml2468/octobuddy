@@ -172,7 +172,7 @@ func (d controlCommandDispatcher) runControlTurn(t *botTarget, b control.Session
 	defer t.turnsWG.Done()
 	decision, err := t.gateway.Handle(d.ctx, router.InboundMessage{
 		ChannelType: router.ChannelDM, FromUID: b.UID, FromName: b.UID, Text: text,
-		Source: trigger.SourceUser,
+		Source: trigger.SourceConsole,
 	})
 	if d.deps.broadcast == nil {
 		return

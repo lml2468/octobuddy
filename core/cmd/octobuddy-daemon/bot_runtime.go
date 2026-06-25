@@ -136,7 +136,7 @@ func runConfigMode(path, controlSock string, exitWithParent bool, authStdin bool
 	}
 
 	fmt.Printf("octobuddy-daemon — config mode: %d bot(s)\n", len(bots))
-	runConfiguredBots(ctx, bots, reg, srv)
+	runConfiguredBots(ctx, path, bots, reg, srv)
 }
 
 func startConfigControl(ctx context.Context, reg *botRegistry, started time.Time, controlSock string, authStdin bool) (*control.Server, func()) {
@@ -157,7 +157,7 @@ func startConfigControl(ctx context.Context, reg *botRegistry, started time.Time
 	return srv, stopControl
 }
 
-func runConfiguredBots(ctx context.Context, bots []config.Resolved, reg *botRegistry, srv *control.Server) {
+func runConfiguredBots(ctx context.Context, configPath string, bots []config.Resolved, reg *botRegistry, srv *control.Server) {
 	var wg sync.WaitGroup
 	for _, cfg := range bots {
 		wg.Add(1)
@@ -174,7 +174,7 @@ func runConfiguredBots(ctx context.Context, bots []config.Resolved, reg *botRegi
 					registerFailedBot(reg, cfg, fmt.Sprintf("panic: %v", r))
 				}
 			}()
-			if err := runBot(ctx, cfg, reg, srv); err != nil && ctx.Err() == nil {
+			if err := runBot(ctx, configPath, cfg, reg, srv); err != nil && ctx.Err() == nil {
 				clog.For("bot").Warn("exited", "bot", cfg.BotID, "err", err)
 				// A startup failure (store open, mkdir, …) returns before the bot
 				// registers itself. Register a failed-status stub so the GUI/bots.list

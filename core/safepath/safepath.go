@@ -35,10 +35,28 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 )
 
 var slugRe = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
+// UsableExecutable reports whether fi (typically from SafeLstat) describes a
+// real, runnable binary file: a non-symlink regular file of non-zero size, and
+// (on unix only — Windows doesn't gate on +x) with at least one execute bit set.
+// Shared by every "resolve the managed claude binary, else fall back to PATH"
+// site (the daemon's resolveClaudeBin and the desktop's claudecli.isFile) so the
+// usability predicate can't drift between them. Pair it with SafeLstat (which
+// already refuses a symlinked PARENT component); this checks the leaf's mode.
+func UsableExecutable(fi os.FileInfo) bool {
+	if fi == nil || fi.IsDir() || fi.Mode()&os.ModeSymlink != 0 || fi.Size() == 0 {
+		return false
+	}
+	if runtime.GOOS != "windows" && fi.Mode().Perm()&0o111 == 0 {
+		return false
+	}
+	return true
+}
 
 // ValidSlug reports whether s is a safe single path segment: non-empty, not "."
 // or "..", does not begin with "." (no dotfile collisions inside ~/.octobuddy/),

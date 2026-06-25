@@ -114,11 +114,29 @@
   let scopedTools = $state<Set<string> | null>(
     bot.tools?.default != null ? new Set(bot.tools.default) : null,
   );
+  // Selected names that are NOT in the probed set (e.g. mcp__*, or a tool
+  // renamed/missing after a claude upgrade). The probed grid can't render them,
+  // so surface them as extra removable rows — otherwise they're retained on save
+  // but invisible and un-uncheckable in the picker.
+  const extraTools = $derived(
+    scopedTools
+      ? [...scopedTools].filter((t) => !(toolset?.headlessSafe ?? []).includes(t)).sort()
+      : [],
+  );
   function commitTools() {
-    if (!bot.tools) bot.tools = {};
-    bot.tools.default = scopedTools == null
-      ? undefined
-      : (toolset?.headlessSafe ?? []).filter((t) => scopedTools!.has(t));
+    // scopedTools == null → "use driver default": clear the whole policy from the
+    // view model. The backend (applyDefaultTools) preserves any per-channel
+    // overrides on disk, so dropping bot.tools here only clears the bot-level
+    // default. Otherwise persist the operator's actual selection VERBATIM — do
+    // NOT intersect with the probed headlessSafe set, so a name absent from the
+    // current probe (an mcp__* tool, or one renamed/missing after a claude
+    // upgrade, or a transient narrower probe) survives the round-trip. Sort for
+    // a stable diff.
+    if (scopedTools == null) {
+      bot.tools = undefined;
+    } else {
+      bot.tools = { ...(bot.tools ?? {}), default: [...scopedTools].sort() };
+    }
     ondirty();
   }
   function startScoping() {
@@ -185,6 +203,10 @@
       mcpError = String(e); return;
     }
     // Wait (up to ~65s — the daemon caps the probe at 60s) for the response.
+    // Correlation is (seq advanced past our snapshot) AND (botId matches): the
+    // SettingsModal is a singleton (App.svelte makes it mutually exclusive with
+    // TokenUsage and only one bot is selected), so there is at most one in-flight
+    // CheckMCP per bot — a request-id protocol would be over-engineering here.
     for (let i = 0; i < 130; i++) {
       await new Promise((r) => setTimeout(r, 500));
       const res = store.mcpCheck;
@@ -246,9 +268,12 @@
         {#each toolset.headlessSafe as name (name)}
           <label class="chk"><input type="checkbox" checked={scopedTools.has(name)} onchange={() => toggleTool(name)} /> {name}</label>
         {/each}
+        {#each extraTools as name (name)}
+          <label class="chk extra"><input type="checkbox" checked onchange={() => toggleTool(name)} /> {name} <span class="tag">未探测</span></label>
+        {/each}
       </div>
       <button class="add sm" type="button" onclick={clearScoping}>恢复为全部工具</button>
-      <small>未勾选的工具不会提供给该 Bot。按频道/私聊的细分工具在聊天窗口右上角配置。</small>
+      <small>未勾选的工具不会提供给该 Bot。「未探测」项（如 mcp__*）不在当前探测集中，但仍会保留并生效。按频道/私聊的细分工具在聊天窗口右上角配置。</small>
     {/if}
   </fieldset>
 
@@ -278,12 +303,12 @@
 
   <fieldset>
     <legend>SOUL.md（身份）</legend>
-    <textarea bind:value={bot.soul} rows="4" placeholder="身份、语气、角色"></textarea>
+    <textarea bind:value={bot.soul} rows="4" placeholder="身份、语气、价值观、底线。留空将写入带「Core Truths / Boundaries / Vibe」分节的默认模板。"></textarea>
   </fieldset>
 
   <fieldset>
     <legend>AGENTS.md（行为规范）</legend>
-    <textarea bind:value={bot.agents} rows="4" placeholder="规范、可做与不可做"></textarea>
+    <textarea bind:value={bot.agents} rows="4" placeholder="行为规范与红线。留空将写入带「红线 / 群聊何时发言 / 不可信输入」分节的默认模板。"></textarea>
   </fieldset>
 
   <fieldset>
@@ -341,6 +366,8 @@
   .chk input { width: auto; }
 
   .toolgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px 14px; }
+  .chk.extra { color: var(--ink-soft); }
+  .chk .tag { font-size: 10px; color: var(--ink-faint); border: 1px solid var(--hairline); border-radius: 5px; padding: 0 4px; }
 
   textarea.mono { font-family: var(--mono); font-size: 12px; }
   .mcp-actions { display: flex; align-items: center; gap: 10px; }

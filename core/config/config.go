@@ -293,6 +293,7 @@ type Resolved struct {
 	Trigger TriggerConfig
 
 	// Derived per-bot directories (never from file).
+	BotRoot    string // ~/.octobuddy/<id>             — root for SOUL.md/AGENTS.md (per-turn re-read)
 	DataDir    string // ~/.octobuddy/<id>/data       — SQLite + state
 	CwdBase    string // ~/.octobuddy/<id>/workspace   — per-session cwd sandboxes
 	MemoryBase string // ~/.octobuddy/<id>/memory      — per-session auto-memory (outside CwdBase)

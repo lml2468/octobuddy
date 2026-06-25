@@ -99,6 +99,20 @@ func Dir() string {
 // BinPath is ~/.octobuddy/bin/claude.
 func BinPath() string { return filepath.Join(Dir(), binName()) }
 
+// ResolvedBinPath mirrors the daemon's resolveClaudeBin: the desktop-managed
+// binary at ~/.octobuddy/bin/claude when it is a usable regular file, else
+// "claude" on PATH. Callers that spawn claude (e.g. the toolset probe) MUST use
+// this rather than BinPath() so an operator who manages claude on PATH
+// (OCTOBUDDY_SKIP_CLAUDE_INSTALL) is probed against the same binary the daemon
+// actually runs — otherwise the probe always fails and the GUI tool picker is
+// unusable while turns work fine.
+func ResolvedBinPath() string {
+	if isFile(BinPath()) {
+		return BinPath()
+	}
+	return binName()
+}
+
 // InstalledVersion returns the recorded version of the installed binary,
 // or "" if claude isn't installed here. SafeRead refuses a symlinked
 // version file so an agent-planted symlink can't surface arbitrary
@@ -426,24 +440,16 @@ func readArchiveEntry(r io.Reader, name string) ([]byte, error) {
 	return buf, nil
 }
 
-// isFile reports whether path holds a real executable file. Lstat (not
-// Stat) so a symlinked install dir doesn't silently redirect; size > 0
-// so a 0-byte crashed-write temp doesn't masquerade as the binary;
-// executable bit (unix only — Windows doesn't gate on +x) so a
-// half-written file isn't reported as installed.
+// isFile reports whether path holds a real executable file. Routes the stat
+// through safepath.SafeLstat (not a raw os.Lstat) so the whole parent chain —
+// not just the leaf — is checked for symlinks, then applies the shared
+// safepath.UsableExecutable predicate so the desktop's installed-status check and
+// the daemon's resolveClaudeBin can't drift on what counts as a usable binary
+// (non-symlink regular file, size>0, +x on unix).
 func isFile(path string) bool {
-	fi, err := os.Lstat(path)
+	fi, err := safepath.SafeLstat(filepath.Dir(path), filepath.Base(path))
 	if err != nil {
 		return false
 	}
-	if fi.IsDir() || fi.Mode()&os.ModeSymlink != 0 {
-		return false
-	}
-	if fi.Size() == 0 {
-		return false
-	}
-	if runtime.GOOS != "windows" && fi.Mode().Perm()&0o111 == 0 {
-		return false
-	}
-	return true
+	return safepath.UsableExecutable(fi)
 }

@@ -37,7 +37,7 @@ const (
 // runBot assembles and runs one bot's complete, isolated stack. When srv is set,
 // agent events are also broadcast to the control bus tagged with the bot id, and
 // the bot is registered for command routing + bots.list. Blocks until ctx done.
-func runBot(ctx context.Context, cfg config.Resolved, reg *botRegistry, srv *control.Server) error {
+func runBot(ctx context.Context, configPath string, cfg config.Resolved, reg *botRegistry, srv *control.Server) error {
 	if err := prepareBotDirs(cfg); err != nil {
 		return err
 	}
@@ -74,11 +74,12 @@ func runBot(ctx context.Context, cfg config.Resolved, reg *botRegistry, srv *con
 	// desktop has written one. Resolved per Query so a freshly-saved file
 	// applies on the next turn without a restart. Suppressed when the bot
 	// inherits the operator's ~/.claude (then MCP is whatever ~/.claude has).
-	if mcpPath := botMCPConfigPath(cfg); mcpPath != "" {
-		drv.MCPConfigFn = func() string { return existingFilePath(mcpPath) }
+	if botMCPConfigPath(cfg) != "" {
+		root := cfg.ClaudeConfigDir
+		drv.MCPConfigFn = func() string { return existingFilePath(root, ".mcp.json") }
 	}
 
-	rtBot, connector, cm, err := assembleBotRuntime(ctx, cfg, srv, st, rt, sec, drv)
+	rtBot, connector, cm, err := assembleBotRuntime(ctx, configPath, cfg, srv, st, rt, sec, drv)
 	if err != nil {
 		return err
 	}
@@ -105,6 +106,7 @@ func runBot(ctx context.Context, cfg config.Resolved, reg *botRegistry, srv *con
 
 func assembleBotRuntime(
 	ctx context.Context,
+	configPath string,
 	cfg config.Resolved,
 	srv *control.Server,
 	st *store.Store,
@@ -116,7 +118,7 @@ func assembleBotRuntime(
 		return nil, nil, nil, fmt.Errorf("bot %s: config mode requires apiUrl", cfg.BotID)
 	}
 	connector, grantor := newBotConnector(cfg, sec)
-	gw := newBotGateway(cfg, srv, st, rt, drv, connector, grantor)
+	gw := newBotGateway(configPath, cfg, srv, st, rt, drv, connector, grantor)
 	connector.SetGateway(gw)
 
 	// Eager-init the per-bot control-handler target so its embedded turnsWG is
@@ -205,6 +207,15 @@ func toBoolSet(vals []string) map[string]bool {
 // inherits the operator's ~/.claude (then MCP is whatever ~/.claude carries,
 // not a per-bot file). Single source of the path so the driver's per-turn
 // loader and the health-check probe never drift.
+//
+// Threat model: a loaded .mcp.json causes claude to spawn each declared server
+// as a child process (MCP server launch IS local command execution). This is
+// NOT a privilege escalation — writing .mcp.json requires Write/Bash, which the
+// agent only has when those tools are in its surface, i.e. it already has code
+// execution as the same user. The relevant guard is that .mcp.json is loaded
+// through existingFilePath → safepath.SafeLstat, which refuses a symlinked file
+// OR a symlinked parent component, so the agent cannot redirect the load to an
+// attacker-controlled path outside its own writable tree.
 func botMCPConfigPath(cfg config.Resolved) string {
 	if cfg.ClaudeConfigDir == "" || cfg.Agent.InheritUserConfig {
 		return ""
@@ -224,13 +235,20 @@ func makeMCPChecker(cfg config.Resolved, sec *secretStore, drv agent.Driver) fun
 	}
 	mcpPath := botMCPConfigPath(cfg)
 	return func(ctx context.Context) (wire.MCPCheckResponse, error) {
-		if mcpPath == "" || existingFilePath(mcpPath) == "" {
+		if mcpPath == "" || existingFilePath(cfg.ClaudeConfigDir, ".mcp.json") == "" {
 			return wire.MCPCheckResponse{Configured: false}, nil
 		}
 		ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 		defer cancel()
 		env := cfg.DriverEnv(sec.GatewayToken(), sec.OctoToken(), sec.Secret)
-		statuses, err := agent.ProbeMCP(ctx, cd.ResolveBin(), env, mcpPath)
+		// Probe under the bot's sandbox base so a server with a cwd-relative
+		// command/path resolves the same way a real session turn would — but only
+		// when that dir already exists. CwdBase (~/.octobuddy/<id>/workspace) is
+		// created lazily on the first turn, not at startup, so on a fresh bot it's
+		// absent; passing a nonexistent dir as the spawn cwd fails chdir and the
+		// probe would falsely report the MCP servers unreachable. Fall back to ""
+		// (the daemon's cwd) when it isn't there yet.
+		statuses, err := agent.ProbeMCP(ctx, cd.ResolveBin(), existingDir(cfg.BotRoot, "workspace"), env, mcpPath)
 		if err != nil {
 			return wire.MCPCheckResponse{}, err
 		}
@@ -242,31 +260,44 @@ func makeMCPChecker(cfg config.Resolved, sec *secretStore, drv agent.Driver) fun
 	}
 }
 
-// existingFilePath returns path if it is a regular, non-symlink, non-empty
-// file, else "". Used to gate --mcp-config on the bot's .mcp.json existing.
-// Refuses symlinks: the rest of the codebase treats symlinks under
-// ~/.octobuddy as hostile (an agent with Bash+bypass could plant
-// `.mcp.json → /etc/something`), so a symlinked config is ignored rather
-// than followed.
-func existingFilePath(path string) string {
-	fi, err := os.Lstat(path)
+// existingFilePath returns the joined root/rel path if rel is a regular,
+// non-symlink, non-empty file reachable from root with no symlinked component,
+// else "". Used to gate --mcp-config on the bot's .mcp.json existing.
+//
+// Routes the existence + symlink check through safepath.SafeLstat rather than a
+// raw os.Lstat so a symlinked PARENT (e.g. an agent that plants the .claude dir
+// itself as a symlink) is refused too — not just a symlinked leaf. CLAUDE.md:
+// callers must not hand-roll Lstat/EvalSymlinks for paths under a root; those
+// concerns live in safepath.
+func existingFilePath(root, rel string) string {
+	fi, err := safepath.SafeLstat(root, rel)
 	if err != nil {
 		return ""
 	}
 	if fi.Mode()&os.ModeSymlink != 0 || fi.IsDir() || fi.Size() == 0 {
 		return ""
 	}
-	return path
+	return filepath.Join(root, rel)
 }
 
-// toolPolicyArgs unpacks a (possibly nil) per-bot ToolPolicy into the
-// (default, channels) pair WithToolPolicy expects. nil policy → both nil,
-// leaving the driver's probed headless-safe default in force.
-func toolPolicyArgs(p *config.ToolPolicy) ([]string, map[string][]string) {
-	if p == nil {
-		return nil, nil
+// existingDir returns the joined root/rel path if rel is an existing directory
+// reachable from root with no symlinked component, else "". Used to gate the MCP
+// probe's spawn cwd on the per-session sandbox base existing (it's created
+// lazily on the first turn, not at startup).
+//
+// Routes through safepath.SafeLstat rather than a raw os.Stat: rel lives under
+// ~/.octobuddy/<id>, the agent-writable tree (cwd is a starting dir, not a
+// chroot), so an agent that plants `workspace` as a symlink must not redirect
+// the probe's chdir to an attacker dir. CLAUDE.md: symlink concerns live in
+// safepath.
+func existingDir(root, rel string) string {
+	if root == "" || rel == "" {
+		return ""
 	}
-	return p.Default, p.Channels
+	if fi, err := safepath.SafeLstat(root, rel); err == nil && fi.IsDir() && fi.Mode()&os.ModeSymlink == 0 {
+		return filepath.Join(root, rel)
+	}
+	return ""
 }
 
 // resolvePromptMode maps the on-disk string to ClaudeDriver's typed
@@ -291,11 +322,12 @@ func resolvePromptMode(raw, botID string) agent.PromptMode {
 // freshly-completed background install lands on the next turn without
 // requiring a restart.
 //
-// Uses Lstat + symlink check: anything under ~/.octobuddy/bin/ that
-// resolves through a symlink is rejected (the rest of the codebase
-// treats symlinks under ~/.octobuddy as hostile via safepath; this is
-// the consistent stance). 0-byte and non-executable files are also
-// rejected so a crashed install temp doesn't masquerade as the binary.
+// Uses safepath.SafeLstat (not a raw os.Lstat) so the whole chain under
+// ~/.octobuddy/bin/ — not just the leaf — is checked for symlinks: an agent
+// that plants ~/.octobuddy/bin as a symlink to an attacker dir is refused, the
+// consistent codebase stance (CLAUDE.md: symlink concerns live in safepath).
+// 0-byte and non-executable files are also rejected so a crashed install temp
+// doesn't masquerade as the binary.
 func resolveClaudeBin() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -305,26 +337,16 @@ func resolveClaudeBin() string {
 	if runtime.GOOS == "windows" {
 		name = "claude.exe"
 	}
-	path := filepath.Join(home, ".octobuddy", "bin", name)
-	fi, err := os.Lstat(path)
-	if err != nil {
+	root := filepath.Join(home, ".octobuddy", "bin")
+	fi, err := safepath.SafeLstat(root, name)
+	if err != nil || !safepath.UsableExecutable(fi) {
 		return "claude"
 	}
-	if fi.Mode()&os.ModeSymlink != 0 {
-		return "claude"
-	}
-	if fi.IsDir() || fi.Size() == 0 {
-		return "claude"
-	}
-	// Executable bit unset would still let claude run on Windows (no
-	// posix x bit), so this check is unix-only.
-	if runtime.GOOS != "windows" && fi.Mode().Perm()&0o111 == 0 {
-		return "claude"
-	}
-	return path
+	return filepath.Join(root, name)
 }
 
 func newBotGateway(
+	configPath string,
 	cfg config.Resolved,
 	srv *control.Server,
 	st *store.Store,
@@ -341,10 +363,12 @@ func newBotGateway(
 		WithGroupContext(groupctx.New(cfg.Context.MaxContextChars)).
 		WithGroupMD(groupmd.New(cfg.GroupConfigDir)).
 		WithGroupBackfill(connector.BotUID, connector.BackfillFetch).
-		WithSystemPrompt(cfg.SystemPrompt).
+		WithOwner(connector.OwnerUID).
+		WithSystemPromptResolver(botRootFileResolver(cfg, config.SystemPromptFor)).
+		WithBootstrapResolver(botRootFileResolver(cfg, config.BootstrapFor)).
 		WithPersona(grantor, cfg.OnBehalfOf.PersonaPrompt).
 		WithModel(cfg.Agent.Model).
-		WithToolPolicy(toolPolicyArgs(cfg.Agent.Tools)).
+		WithToolResolver(botToolResolver(configPath, cfg)).
 		WithSettingSources(cfg.Agent.SettingSources).
 		WithCommandInfo(cfg.RateLimit.MaxPerMinute, cfg.Context.MaxContextChars).
 		WithSandbox(cfg.CwdBase, cfg.MemoryBase).
@@ -355,6 +379,44 @@ func newBotGateway(
 		connector.SetNameResolvedHook(nameResolvedBroadcaster(srv, cfg.BotID, st, connector))
 	}
 	return gw
+}
+
+// botToolResolver returns the gateway's per-turn tool-surface resolver. It
+// re-reads config.json (via config.ToolPolicyFor) on EVERY turn so a desktop
+// edit to a conversation's tools (configstore.SetChannelTools writes config.json
+// directly) takes effect on the next message WITHOUT a daemon restart —
+// matching the per-Query MCP-config and binary resolvers. Resolution itself is
+// the single config.ToolPolicy.Resolve — no duplicated logic in the gateway.
+//
+// ToolPolicyFor's ok flag separates "read failed" from "policy legitimately
+// absent": on a read failure (ok=false) we fall back to the at-startup snapshot
+// so a transient mid-write read never widens the surface; on a successful read
+// with no policy (ok=true, p=nil) we honor it — p.Resolve(nil) returns !ok and
+// the gateway uses the driver default, so CLEARING a policy at runtime actually
+// takes effect (it previously reverted to the stale snapshot until restart).
+func botToolResolver(configPath string, cfg config.Resolved) func(string) ([]string, bool) {
+	fallback := cfg.Agent.Tools
+	botID := cfg.BotID
+	return func(sessionKey string) ([]string, bool) {
+		p, ok := config.ToolPolicyFor(configPath, botID)
+		if !ok {
+			p = fallback // read failed → keep the last-known (startup) policy
+		}
+		return p.Resolve(sessionKey)
+	}
+}
+
+// botRootFileResolver returns a per-turn resolver that re-reads an
+// operator-trusted file under the bot root via readFn on EVERY turn, so a
+// desktop (or the bot's own) edit applies on the next message without a daemon
+// restart — the same per-Query philosophy as the tool / MCP-config / binary
+// resolvers. Used for both SOUL/AGENTS (config.SystemPromptFor) and BOOTSTRAP.md
+// (config.BootstrapFor); neither needs a config.json read (the files live in
+// botRoot), so there is no fallback to thread — an empty result is honored by
+// the gateway (cleared files → that block drops out).
+func botRootFileResolver(cfg config.Resolved, readFn func(botRoot string) string) func() string {
+	root := cfg.BotRoot
+	return func() string { return readFn(root) }
 }
 
 // SafeMkdirAllAbs walks the parent chain via dirfd, refusing any symlinked

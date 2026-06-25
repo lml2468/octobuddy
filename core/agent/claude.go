@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -132,6 +133,12 @@ type toolProbe struct {
 // are cached until the binary path changes or the daemon restarts.
 const toolProbeRetryInterval = time.Minute
 
+// probeToolsFn is the seam headlessTools() uses to probe the binary's tool
+// surface; production points it at ProbeTools (a real claude spawn). Tests
+// override it to drive headlessTools' caching decisions (empty-filter, failure)
+// without a binary.
+var probeToolsFn = ProbeTools
+
 func NewClaudeDriver(bin string) *ClaudeDriver {
 	if bin == "" {
 		bin = "claude"
@@ -164,8 +171,15 @@ func (d *ClaudeDriver) buildArgs(req Request) []string {
 	if req.Model != "" {
 		args = append(args, "--model", req.Model)
 	}
+	// Resolve the MCP config path up front: the tool surface depends on
+	// whether MCP is active this turn (the minimal-mode default whitelist must
+	// admit mcp__* so configured servers are actually callable).
+	mcpPath := ""
+	if d.MCPConfigFn != nil {
+		mcpPath = d.MCPConfigFn()
+	}
 	if d.mode() == PromptModeMinimal {
-		args = d.appendMinimalModeArgs(args, req)
+		args = d.appendMinimalModeArgs(args, req, mcpPath != "")
 	} else {
 		args = d.appendClaudeCodeModeArgs(args, req)
 	}
@@ -186,10 +200,8 @@ func (d *ClaudeDriver) buildArgs(req Request) []string {
 	// auto-scan CLAUDE_CONFIG_DIR for it, so the explicit --mcp-config is
 	// required. --strict-mcp-config ignores any other MCP source. Resolved
 	// per Query so a freshly-written file applies next turn.
-	if d.MCPConfigFn != nil {
-		if p := d.MCPConfigFn(); p != "" {
-			args = append(args, "--mcp-config", p, "--strict-mcp-config")
-		}
+	if mcpPath != "" {
+		args = append(args, "--mcp-config", mcpPath, "--strict-mcp-config")
 	}
 	args = append(args, d.ExtraArgs...)
 	return args
@@ -210,7 +222,7 @@ func (d *ClaudeDriver) buildArgs(req Request) []string {
 // write-class tool (Bash/Write/Edit), silently breaking the turn. The
 // tool SURFACE is scoped by --tools, which is orthogonal to the
 // permission mode, so capability restriction is unaffected.
-func (d *ClaudeDriver) appendMinimalModeArgs(args []string, req Request) []string {
+func (d *ClaudeDriver) appendMinimalModeArgs(args []string, req Request, mcpActive bool) []string {
 	args = append(args, "--permission-mode", "bypassPermissions")
 	// =user keeps CLAUDE_CONFIG_DIR-based skill discovery alive while
 	// dropping project (cwd .claude/) and local (cwd .claude.local) so a
@@ -237,25 +249,73 @@ func (d *ClaudeDriver) appendMinimalModeArgs(args []string, req Request) []strin
 	// succeeds (toolProbeRetryInterval).
 	switch {
 	case req.AllowedTools == nil:
-		if safe := d.headlessTools(); len(safe) > 0 {
-			args = append(args, "--tools", strings.Join(safe, ","))
+		safe := d.headlessTools()
+		if len(safe) > 0 {
+			args = append(args, "--tools", strings.Join(withMCPWildcard(safe, mcpActive), ","))
 		} else {
+			// Probe unavailable (transient failure / empty filter): fall back to
+			// the CLI's own "default" set. Do NOT substitute "mcp__*" here — that
+			// would muzzle every built-in tool to MCP-only for the probe-retry
+			// window. The CLI default already includes MCP tools when --mcp-config
+			// is loaded, so the degraded path stays usable.
 			args = append(args, "--tools", "default")
 		}
 	case len(req.AllowedTools) == 0:
 		args = append(args, "--tools", "")
 	default:
-		args = append(args, "--tools", strings.Join(req.AllowedTools, ","))
+		// An operator/desktop-supplied whitelist must still be subtracted
+		// against interactiveExclusions — a headless `-p` turn has no TTY to
+		// answer an interactive tool's prompt, so a whitelisted AskUserQuestion
+		// / EnterPlanMode would stall the turn until the idle timeout. The
+		// denylist is enforced here too, not only on the probed default.
+		//
+		// mcp__* is deliberately NOT auto-added to an explicit whitelist: the
+		// whitelist is the operator's exact surface for this channel, and a
+		// per-bot .mcp.json is a single file shared across ALL channels, so
+		// auto-admitting mcp__* would silently re-grant every MCP server tool in
+		// a channel the operator scoped to (say) read-only. An operator who wants
+		// MCP in a channel lists "mcp__*" (or "mcp__<server>__*") themselves.
+		args = append(args, "--tools", strings.Join(filterTools(req.AllowedTools), ","))
 	}
 	return args
 }
 
-// appendClaudeCodeModeArgs preserves the previous behavior — append on
-// top of the built-in prompt, blanket tool access.
+// withMCPWildcard appends "mcp__*" to the PROBED DEFAULT tool surface when MCP
+// is active for the turn, so a bot with a .mcp.json but no explicit tool policy
+// can actually call its configured servers (ProbeTools runs without
+// --mcp-config, so the probed set never carries mcp__* names). It is applied
+// ONLY to the nil-policy default — never to an explicit operator whitelist,
+// where mcp__* admission is the operator's decision (see appendMinimalModeArgs /
+// appendClaudeCodeModeArgs). No-op when mcp is inactive or the list already has
+// an mcp__* glob. Returns a fresh slice; does not mutate the input.
+func withMCPWildcard(tools []string, mcpActive bool) []string {
+	if !mcpActive || slices.Contains(tools, "mcp__*") {
+		return tools
+	}
+	return append(slices.Clone(tools), "mcp__*")
+}
+
+// appendClaudeCodeModeArgs preserves the previous behavior — append on top of
+// the built-in prompt. Unlike minimal mode it does NOT replace the system
+// prompt or restrict setting sources (the built-in preamble + its default
+// scopes are the point of this mode). It DOES honor an explicit tool whitelist:
+// the per-bot/per-channel policy must apply regardless of prompt mode, or a
+// muzzle the operator set would silently grant the full surface. An unset
+// policy (req.AllowedTools == nil) keeps blanket tool access (no --tools, so MCP
+// tools are already included).
 func (d *ClaudeDriver) appendClaudeCodeModeArgs(args []string, req Request) []string {
 	args = append(args, "--permission-mode", "bypassPermissions")
 	if req.SystemPrompt != "" {
 		args = append(args, "--append-system-prompt", req.SystemPrompt)
+	}
+	// nil = no opinion → leave the full built-in surface in force (no --tools;
+	// MCP tools are part of it). A non-nil policy is applied, filtered against the
+	// interactive denylist for the same headless-stall reason as minimal mode.
+	// mcp__* is NOT auto-added: an explicit whitelist is the operator's exact
+	// surface (a per-bot .mcp.json is shared across channels), so the operator
+	// lists "mcp__*" themselves to allow MCP in a given channel.
+	if req.AllowedTools != nil {
+		args = append(args, "--tools", strings.Join(filterTools(req.AllowedTools), ","))
 	}
 	return args
 }
@@ -287,7 +347,7 @@ func (d *ClaudeDriver) headlessTools() []string {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	available, err := ProbeTools(ctx, bin, d.queryEnv())
+	available, err := probeToolsFn(ctx, bin, d.queryEnv())
 
 	d.toolsMu.Lock()
 	defer d.toolsMu.Unlock()
@@ -298,6 +358,16 @@ func (d *ClaudeDriver) headlessTools() []string {
 		return nil
 	}
 	safe := filterTools(available)
+	// A successful probe that filters to an empty set (a release that reported
+	// no tools, or whose entire surface is in interactiveExclusions) would,
+	// if cached as ok, pin the bot to the degraded CLI-default fallback for the
+	// daemon's lifetime — the cache-hit branch returns p.tools unconditionally
+	// for ok entries. Cache it as a (retryable) failure instead so it expires
+	// after toolProbeRetryInterval and self-heals once the binary recovers.
+	if len(safe) == 0 {
+		d.toolsCache[bin] = toolProbe{ok: false, at: time.Now()}
+		return nil
+	}
 	d.toolsCache[bin] = toolProbe{tools: safe, ok: true, at: time.Now()}
 	return safe
 }
@@ -345,8 +415,16 @@ type initInfo struct {
 // spend), kills the process, and returns the parsed tool surface + MCP server
 // statuses. The shared core of ProbeTools / ProbeMCP. env is layered onto the
 // process environment the same way Query does (so a per-bot CLAUDE_CONFIG_DIR
-// is reflected).
-func probeInit(ctx context.Context, bin string, env, extraArgs []string) (initInfo, error) {
+// is reflected). cwd, when non-empty, sets the spawn's working directory so an
+// MCP server with a cwd-relative command/path resolves the same way a real turn
+// (which runs in the session sandbox) would; "" inherits the daemon's cwd.
+//
+// NOTE: probeInit always passes --setting-sources=user. For a claude_code-mode
+// bot (which runs with the built-in setting scopes and may auto-load
+// project-scope MCP), the probed health can therefore differ from a live turn;
+// the probe reflects the user-scope .mcp.json load path, which is the one
+// minimal-mode bots actually use.
+func probeInit(ctx context.Context, bin, cwd string, env, extraArgs []string) (initInfo, error) {
 	args := append([]string{
 		"-p", "-", "--output-format", "stream-json", "--verbose",
 		"--permission-mode", "bypassPermissions", "--setting-sources=user",
@@ -354,7 +432,15 @@ func probeInit(ctx context.Context, bin string, env, extraArgs []string) (initIn
 	}, extraArgs...)
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Env = mergedEnv(env)
+	if cwd != "" {
+		cmd.Dir = cwd
+	}
 	cmd.Stdin = strings.NewReader("probe")
+	// Run claude as its own process-group leader so the deferred teardown can
+	// kill the WHOLE tree — claude reads the init line and we kill it early,
+	// long before it would gracefully stop the MCP servers it spawned, so those
+	// servers would otherwise orphan to init and run forever.
+	setProcessGroup(cmd)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return initInfo{}, fmt.Errorf("probe stdout pipe: %w", err)
@@ -364,7 +450,7 @@ func probeInit(ctx context.Context, bin string, env, extraArgs []string) (initIn
 		return initInfo{}, fmt.Errorf("probe start %s: %w", bin, err)
 	}
 	defer func() {
-		_ = cmd.Process.Kill()
+		killProcessGroup(cmd)
 		_ = cmd.Wait()
 	}()
 
@@ -425,7 +511,7 @@ func mcpToolsForServer(server string, tools []string) []string {
 // same way Query does, so a per-bot CLAUDE_CONFIG_DIR (and thus its MCP
 // servers) is reflected in the result.
 func ProbeTools(ctx context.Context, bin string, env []string) ([]string, error) {
-	info, err := probeInit(ctx, bin, env, []string{"--tools", "default"})
+	info, err := probeInit(ctx, bin, "", env, []string{"--tools", "default"})
 	if err != nil {
 		return nil, err
 	}
@@ -435,12 +521,16 @@ func ProbeTools(ctx context.Context, bin string, env []string) ([]string, error)
 // ProbeMCP spawns the claude binary with the given .mcp.json loaded and
 // returns each configured MCP server's health (connected/failed) plus the
 // tools it contributed — the backend for the desktop's MCP "test connection"
-// feature. It exercises claude's real MCP-load path (--mcp-config +
+// feature. It exercises claude's real user-scope MCP-load path (--mcp-config +
 // --strict-mcp-config, tool surface scoped to mcp__*), so the reported status
-// matches what a real turn would see. No API spend. A server reporting a
-// non-"connected" status (with empty Tools) is the failure signal.
-func ProbeMCP(ctx context.Context, bin string, env []string, mcpConfigPath string) ([]MCPServerStatus, error) {
-	info, err := probeInit(ctx, bin, env, []string{
+// matches what a real minimal-mode turn would see. No API spend. A server
+// reporting a non-"connected" status (with empty Tools) is the failure signal.
+//
+// cwd should be the session sandbox dir a real turn would run in, so a server
+// whose command/args resolve cwd-relative paths is probed under the same
+// working directory; "" inherits the daemon's cwd.
+func ProbeMCP(ctx context.Context, bin, cwd string, env []string, mcpConfigPath string) ([]MCPServerStatus, error) {
+	info, err := probeInit(ctx, bin, cwd, env, []string{
 		"--tools", "mcp__*", "--mcp-config", mcpConfigPath, "--strict-mcp-config",
 	})
 	if err != nil {
@@ -565,6 +655,16 @@ func (d *ClaudeDriver) buildCommand(ctx context.Context, req Request) *exec.Cmd 
 	cmd.Stdin = strings.NewReader(req.Prompt)
 	cmd.Env = mergedEnv(d.queryEnv())
 	d.selfcheckOnce.Do(func() { d.logSelfcheck(cmd.Env, req) })
+	// Run claude as its own process-group leader and, on context cancellation
+	// (idle timeout / daemon shutdown), kill the WHOLE group — not just claude.
+	// Claude spawns its configured MCP servers as child processes; the default
+	// CommandContext cancel SIGKILLs only the direct child, orphaning those
+	// servers to init where they linger forever. cmd.Cancel overrides that.
+	setProcessGroup(cmd)
+	cmd.Cancel = func() error {
+		killProcessGroup(cmd)
+		return nil
+	}
 	cmd.WaitDelay = 10 * time.Second
 	return cmd
 }

@@ -18,6 +18,11 @@ type Connector struct {
 	gateway *gateway.Gateway
 
 	botUID string
+	// ownerUID is the bot owner's server-authoritative uid, set after each
+	// (re)registration (applyRegistration → notifyOwner). Guarded by c.mu.
+	// Gates owner-only behavior (cron create/delete; bootstrap injection in the
+	// owner's DM). Empty before the first registration.
+	ownerUID string
 
 	// names resolves uid→display-name and groupNo→channel-name (cached).
 	// Powers sidebar conversation titles and chat-bubble sender labels.
@@ -129,11 +134,23 @@ func (c *Connector) setStatus(connected bool, lastErr string) {
 
 func (c *Connector) notifyOwner(ownerUID string) {
 	c.mu.Lock()
+	if ownerUID != "" {
+		c.ownerUID = ownerUID // cache for OwnerUID() (gates owner-only behavior)
+	}
 	fn := c.onOwner
 	c.mu.Unlock()
 	if fn != nil && ownerUID != "" {
 		fn(ownerUID)
 	}
+}
+
+// OwnerUID returns the bot owner's registered uid (empty before registration).
+// Mirrors BotUID; passed to the gateway (WithOwner) to gate owner-only behavior
+// such as bootstrap-prompt injection in the owner's DM.
+func (c *Connector) OwnerUID() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.ownerUID
 }
 
 type replyTarget struct {

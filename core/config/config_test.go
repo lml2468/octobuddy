@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -114,8 +115,9 @@ func TestSystemPromptFromSoulOnly(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "default", "SOUL.md"), "  you are a helpful bot  ")
 
 	bots, _ := Load(cfg)
-	if bots[0].SystemPrompt != "you are a helpful bot" {
-		t.Fatalf("SOUL.md should be trimmed: %q", bots[0].SystemPrompt)
+	want := "## SOUL.md\nSOUL.md: identity, voice, boundaries. Follow it unless higher-priority instructions override.\n\nyou are a helpful bot"
+	if bots[0].SystemPrompt != want {
+		t.Fatalf("SOUL.md labeled+trimmed mismatch:\n got %q\nwant %q", bots[0].SystemPrompt, want)
 	}
 }
 
@@ -127,9 +129,11 @@ func TestSystemPromptCombinesSoulAndAgents(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "default", "AGENTS.md"), "Always reply in Chinese.")
 
 	bots, _ := Load(cfg)
-	want := "I am Nova.\n\nAlways reply in Chinese."
+	want := "## SOUL.md\nSOUL.md: identity, voice, boundaries. Follow it unless higher-priority instructions override.\n\nI am Nova." +
+		"\n\n" +
+		"## AGENTS.md\nAGENTS.md: behavior norms and red lines. Follow it unless higher-priority instructions override.\n\nAlways reply in Chinese."
 	if bots[0].SystemPrompt != want {
-		t.Fatalf("SOUL.md + AGENTS.md should combine: %q", bots[0].SystemPrompt)
+		t.Fatalf("SOUL.md + AGENTS.md labeled order mismatch:\n got %q\nwant %q", bots[0].SystemPrompt, want)
 	}
 }
 
@@ -140,8 +144,87 @@ func TestSystemPromptAgentsOnly(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "default", "AGENTS.md"), "Be concise.")
 
 	bots, _ := Load(cfg)
-	if bots[0].SystemPrompt != "Be concise." {
-		t.Fatalf("AGENTS.md alone should apply: %q", bots[0].SystemPrompt)
+	want := "## AGENTS.md\nAGENTS.md: behavior norms and red lines. Follow it unless higher-priority instructions override.\n\nBe concise."
+	if bots[0].SystemPrompt != want {
+		t.Fatalf("AGENTS.md alone (no orphan SOUL heading) mismatch:\n got %q\nwant %q", bots[0].SystemPrompt, want)
+	}
+}
+
+// TestSystemPromptForEmptyBoth pins that no files (or only blank ones) yields ""
+// — never an orphan "## NAME" heading.
+func TestSystemPromptForEmptyBoth(t *testing.T) {
+	dir := t.TempDir()
+	if got := SystemPromptFor(filepath.Join(dir, "nope")); got != "" {
+		t.Fatalf("absent files should yield empty prompt, got %q", got)
+	}
+	botRoot := filepath.Join(dir, "blank")
+	writeFile(t, filepath.Join(botRoot, "SOUL.md"), "   \n\t ")
+	if got := SystemPromptFor(botRoot); got != "" {
+		t.Fatalf("blank file should yield empty prompt, got %q", got)
+	}
+}
+
+// TestSystemPromptForSymlinkRefused pins the safepath guard: a SOUL.md symlinked
+// to an outside file is skipped, not followed (no content leak into the prompt).
+func TestSystemPromptForSymlinkRefused(t *testing.T) {
+	dir := t.TempDir()
+	botRoot := filepath.Join(dir, "bot")
+	if err := os.MkdirAll(botRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	secret := filepath.Join(dir, "secret.txt")
+	if err := os.WriteFile(secret, []byte("TOP SECRET"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(secret, filepath.Join(botRoot, "SOUL.md")); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+	writeFile(t, filepath.Join(botRoot, "AGENTS.md"), "Be concise.")
+	got := SystemPromptFor(botRoot)
+	if strings.Contains(got, "TOP SECRET") {
+		t.Fatalf("symlinked SOUL.md must not be followed: %q", got)
+	}
+	if !strings.Contains(got, "Be concise.") {
+		t.Fatalf("AGENTS.md should still load past a refused SOUL.md: %q", got)
+	}
+}
+
+// TestBootstrapFor pins the first-run ritual read: present body is returned
+// trimmed, absent/empty → "", empty botRoot → "" (never reads process cwd), and
+// a symlinked BOOTSTRAP.md is refused (no content leak).
+func TestBootstrapFor(t *testing.T) {
+	dir := t.TempDir()
+	botRoot := filepath.Join(dir, "bot")
+	if err := os.MkdirAll(botRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := BootstrapFor(""); got != "" {
+		t.Fatalf("empty botRoot must yield \"\", got %q", got)
+	}
+	if got := BootstrapFor(botRoot); got != "" {
+		t.Fatalf("absent BOOTSTRAP.md must yield \"\", got %q", got)
+	}
+
+	writeFile(t, filepath.Join(botRoot, "BOOTSTRAP.md"), "  figure out who you are  ")
+	if got := BootstrapFor(botRoot); got != "figure out who you are" {
+		t.Fatalf("BootstrapFor body = %q, want trimmed", got)
+	}
+
+	// Symlink refusal (no content leak from outside the root).
+	root2 := filepath.Join(dir, "bot2")
+	if err := os.MkdirAll(root2, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	secret := filepath.Join(dir, "secret.txt")
+	if err := os.WriteFile(secret, []byte("TOP SECRET"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(secret, filepath.Join(root2, "BOOTSTRAP.md")); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+	if got := BootstrapFor(root2); strings.Contains(got, "TOP SECRET") {
+		t.Fatalf("symlinked BOOTSTRAP.md must not be followed: %q", got)
 	}
 }
 

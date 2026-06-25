@@ -71,6 +71,16 @@ func (g *Gateway) WithGroupBackfill(botUID func() string, fetch func(channelID s
 	return g
 }
 
+// WithOwner sets the resolver for the bot owner's uid (lazy — known only after
+// IM registration). Gates owner-only prompt injection (the bootstrap block in
+// the owner's DM). A nil resolver or empty result means no IM-owner DM is
+// recognized; the Console path is gated separately by Source. IM-agnostic
+// callback — the gateway never imports a connector.
+func (g *Gateway) WithOwner(owner func() string) *Gateway {
+	g.owner = owner
+	return g
+}
+
 // WithSessionTouchNotifier registers a callback invoked after every successful
 // AppendUser / AppendAssistant — the two store writes that mutate a session
 // row's projectable state (preview, updatedAt, first-existence). The GUI side
@@ -94,9 +104,43 @@ func (g *Gateway) notifySessionTouch(sessionKey, channelID string, channelType r
 	}
 }
 
-// WithSystemPrompt sets the operator-trusted system prompt (SOUL.md + AGENTS.md).
+// WithSystemPrompt sets a STATIC operator-trusted system prompt (SOUL.md +
+// AGENTS.md). Production (config mode) uses WithSystemPromptResolver instead for
+// per-turn live reload; this fixed-snapshot setter is for callers that have no
+// per-turn source — tests, and any single-shot/REPL embedder. effectiveSystemPrompt
+// reads it only when no resolver is installed.
 func (g *Gateway) WithSystemPrompt(p string) *Gateway {
 	g.systemPrompt = p
+	return g
+}
+
+// WithSystemPromptResolver installs a per-turn resolver for the operator-trusted
+// system prompt (SOUL.md + AGENTS.md). fn is evaluated once per turn so a desktop
+// edit to those files applies on the next message WITHOUT a daemon restart —
+// mirroring WithToolResolver and the MCP-config / binary resolvers. The daemon
+// backs fn with config.SystemPromptFor(botRoot). A nil fn falls back to the
+// static WithSystemPrompt snapshot; an empty result is honored (operator cleared
+// both files → only the SecurityPrefix remains).
+func (g *Gateway) WithSystemPromptResolver(fn func() string) *Gateway {
+	g.resolveSystemPromptFn = fn
+	return g
+}
+
+// effectiveSystemPrompt returns the per-turn system prompt: the resolver's
+// result when installed (empty honored), else the static snapshot.
+func (g *Gateway) effectiveSystemPrompt() string {
+	if g.resolveSystemPromptFn == nil {
+		return g.systemPrompt
+	}
+	return g.resolveSystemPromptFn()
+}
+
+// WithBootstrapResolver installs a per-turn resolver for the first-run ritual
+// (BOOTSTRAP.md). The daemon backs it with config.BootstrapFor(botRoot). Its
+// content is injected only in an owner-trusted channel (Console or the owner's
+// DM); see buildSystemPrompt. nil disables bootstrap injection.
+func (g *Gateway) WithBootstrapResolver(fn func() string) *Gateway {
+	g.resolveBootstrapFn = fn
 	return g
 }
 
@@ -118,15 +162,30 @@ func (g *Gateway) WithModel(m string) *Gateway {
 	return g
 }
 
-// WithToolPolicy sets the per-bot tool surface: def is the bot-level whitelist
-// (nil = leave to the driver's probed headless-safe default), channels
-// overrides it per sessionKey. A present channel entry or non-nil def is used
-// verbatim (empty slice = no tools / muzzle). Unconfigured sessions — including
-// the desktop Console — fall through to the driver default.
-func (g *Gateway) WithToolPolicy(def []string, channels map[string][]string) *Gateway {
-	g.toolDefault = def
-	g.toolChannels = channels
+// WithToolResolver installs the per-turn tool-surface resolver. fn is called
+// once per turn with the session key and returns (tools, ok): ok=false leaves
+// Request.AllowedTools nil (the driver's probed headless-safe default — also
+// what unconfigured channels and the desktop Console get); ok=true uses the
+// returned list verbatim (empty slice = muzzle). A nil fn disables the policy.
+//
+// The daemon backs fn with a per-turn config.json re-read (config.ToolPolicyFor
+// → config.ToolPolicy.Resolve), so a desktop edit to a conversation's tools
+// applies on the next turn WITHOUT a daemon restart — mirroring the MCP-config
+// and binary resolvers. Resolution lives in config.ToolPolicy.Resolve (one
+// implementation), not duplicated here.
+func (g *Gateway) WithToolResolver(fn func(sessionKey string) (tools []string, ok bool)) *Gateway {
+	g.resolveToolsFn = fn
 	return g
+}
+
+// resolveTools delegates to the installed per-turn resolver. !ok (or no
+// resolver) → the caller leaves Request.AllowedTools nil so the driver resolves
+// its probed headless-safe default.
+func (g *Gateway) resolveTools(sessionKey string) (tools []string, ok bool) {
+	if g.resolveToolsFn == nil {
+		return nil, false
+	}
+	return g.resolveToolsFn(sessionKey)
 }
 
 // WithSettingSources sets the per-bot claude setting-source scopes passed on
@@ -134,24 +193,6 @@ func (g *Gateway) WithToolPolicy(def []string, channels map[string][]string) *Ga
 func (g *Gateway) WithSettingSources(ss []string) *Gateway {
 	g.settingSources = ss
 	return g
-}
-
-// resolveTools returns the tool whitelist for sessionKey and whether it was
-// explicitly configured. !ok → the caller leaves Request.AllowedTools nil so
-// the driver resolves its probed headless-safe default (the global set), which
-// is also what unconfigured channels and the Console get.
-//
-// Mirrors config.ToolPolicy.Resolve; the logic is duplicated rather than
-// importing config so the gateway stays dependent on primitives only,
-// consistent with WithModel / WithSandbox et al. Keep the two in sync.
-func (g *Gateway) resolveTools(sessionKey string) (tools []string, ok bool) {
-	if t, has := g.toolChannels[sessionKey]; has {
-		return t, true
-	}
-	if g.toolDefault != nil {
-		return g.toolDefault, true
-	}
-	return nil, false
 }
 
 // WithSandbox enables per-session filesystem isolation: each turn runs in a

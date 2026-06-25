@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 	"time"
@@ -261,6 +262,145 @@ func TestClaudeArgsClaudeCodeModeEscapeHatch(t *testing.T) {
 	}
 	if contains(args, "--tools") {
 		t.Fatalf("claude_code mode must NOT use --tools (bypassPermissions grants everything): %v", args)
+	}
+}
+
+// toolsArg returns the value following --tools in args, or ("", false) if
+// absent.
+func toolsArg(args []string) (string, bool) {
+	for i, a := range args {
+		if a == "--tools" && i+1 < len(args) {
+			return args[i+1], true
+		}
+	}
+	return "", false
+}
+
+// TestClaudeCodeModeHonorsExplicitTools pins fix #3: claude_code mode ignores
+// AllowedTools when unset (blanket access) but APPLIES an explicit policy — a
+// muzzle the operator set must not silently grant the full surface just because
+// the bot uses the claude_code preamble. Interactive tools are filtered out for
+// the same headless-stall reason as minimal mode.
+func TestClaudeCodeModeHonorsExplicitTools(t *testing.T) {
+	d := NewClaudeDriver("claude")
+	d.Mode = PromptModeClaudeCode
+
+	// nil → no --tools (blanket access).
+	if _, ok := toolsArg(d.buildArgs(Request{Prompt: "hi"})); ok {
+		t.Fatal("claude_code with nil AllowedTools must not emit --tools")
+	}
+	// explicit muzzle (empty) → --tools "".
+	if got, ok := toolsArg(d.buildArgs(Request{Prompt: "hi", AllowedTools: []string{}})); !ok || got != "" {
+		t.Fatalf("claude_code muzzle: --tools=%q ok=%v, want \"\"", got, ok)
+	}
+	// explicit list with an interactive tool → filtered.
+	got, ok := toolsArg(d.buildArgs(Request{Prompt: "hi", AllowedTools: []string{"Read", "AskUserQuestion", "Bash"}}))
+	if !ok || got != "Read,Bash" {
+		t.Fatalf("claude_code explicit list filtered: --tools=%q ok=%v, want Read,Bash", got, ok)
+	}
+}
+
+// TestMinimalModeFiltersExplicitInteractiveTools pins fix #4: an operator-
+// supplied whitelist is subtracted against interactiveExclusions in minimal
+// mode too, so a whitelisted interactive tool can't stall a headless turn.
+func TestMinimalModeFiltersExplicitInteractiveTools(t *testing.T) {
+	d := NewClaudeDriver("claude")
+	got, ok := toolsArg(d.buildArgs(Request{Prompt: "hi", AllowedTools: []string{"Read", "EnterPlanMode", "Bash"}}))
+	if !ok || got != "Read,Bash" {
+		t.Fatalf("--tools=%q ok=%v, want Read,Bash", got, ok)
+	}
+}
+
+// TestMinimalModeDefaultAdmitsMCPWhenActive pins fix #1: when a .mcp.json is
+// loaded this turn, the nil-AllowedTools default surface gains mcp__* so the
+// configured servers are actually callable (the probe, taken without
+// --mcp-config, carries no mcp__* names).
+func TestMinimalModeDefaultAdmitsMCPWhenActive(t *testing.T) {
+	d := NewClaudeDriver("claude")
+	d.toolsCache = map[string]toolProbe{"claude": {tools: []string{"Read", "Bash"}, ok: true}}
+	d.MCPConfigFn = func() string { return "/tmp/x/.mcp.json" }
+
+	got, ok := toolsArg(d.buildArgs(Request{Prompt: "hi"}))
+	if !ok || got != "Read,Bash,mcp__*" {
+		t.Fatalf("--tools=%q ok=%v, want Read,Bash,mcp__*", got, ok)
+	}
+	// Without MCP active, no mcp__* is added.
+	d.MCPConfigFn = func() string { return "" }
+	if got, _ := toolsArg(d.buildArgs(Request{Prompt: "hi"})); got != "Read,Bash" {
+		t.Fatalf("no-MCP default --tools=%q, want Read,Bash", got)
+	}
+}
+
+// TestMCPActiveEmptyProbeFallsBackToDefault pins the regression fix: when the
+// probe is unavailable (empty/failed) AND MCP is active, the nil-AllowedTools
+// path must emit `--tools default` — NOT `--tools mcp__*`, which would muzzle
+// every built-in tool to MCP-only for the probe-retry window.
+func TestMCPActiveEmptyProbeFallsBackToDefault(t *testing.T) {
+	d := NewClaudeDriver("claude")
+	d.toolsCache = map[string]toolProbe{"claude": {ok: false, at: time.Now()}} // probe failed
+	d.MCPConfigFn = func() string { return "/tmp/x/.mcp.json" }
+	if got, _ := toolsArg(d.buildArgs(Request{Prompt: "hi"})); got != "default" {
+		t.Fatalf("MCP-active failed-probe --tools=%q, want default (not mcp__* muzzle)", got)
+	}
+}
+
+// TestExplicitWhitelistDoesNotAutoAdmitMCP pins that an explicit tool whitelist
+// is the operator's EXACT surface: mcp__* is NOT auto-added even when a .mcp.json
+// is loaded (in either mode), so a per-channel whitelist genuinely controls MCP
+// access. The operator lists mcp__* themselves to allow it.
+func TestExplicitWhitelistDoesNotAutoAdmitMCP(t *testing.T) {
+	for _, mode := range []PromptMode{PromptModeMinimal, PromptModeClaudeCode} {
+		d := NewClaudeDriver("claude")
+		d.Mode = mode
+		d.MCPConfigFn = func() string { return "/tmp/x/.mcp.json" }
+
+		// Whitelist that omits mcp__* must NOT gain it — the channel stays scoped.
+		got, ok := toolsArg(d.buildArgs(Request{Prompt: "hi", AllowedTools: []string{"Read", "Bash"}}))
+		if !ok || got != "Read,Bash" {
+			t.Fatalf("mode %s whitelist + MCP must NOT auto-admit mcp__*: --tools=%q, want Read,Bash", mode, got)
+		}
+		// An operator who lists mcp__* explicitly keeps it (passed through verbatim).
+		got, _ = toolsArg(d.buildArgs(Request{Prompt: "hi", AllowedTools: []string{"Read", "mcp__*"}}))
+		if got != "Read,mcp__*" {
+			t.Fatalf("mode %s explicit mcp__* must survive: --tools=%q, want Read,mcp__*", mode, got)
+		}
+		// A muzzle stays a muzzle.
+		if got, _ := toolsArg(d.buildArgs(Request{Prompt: "hi", AllowedTools: []string{}})); got != "" {
+			t.Fatalf("mode %s muzzle + MCP: --tools=%q, want \"\"", mode, got)
+		}
+	}
+}
+
+// TestHeadlessToolsEmptyProbeIsRetryable pins the fix: a SUCCESSFUL probe whose
+// filtered set is empty (every reported tool is interactive) must be cached as a
+// retryable failure (ok:false), not a permanent ok — else the bot is pinned to
+// the degraded CLI-default for the daemon's life. It drives the real probe path
+// via the probeToolsFn seam so the len(safe)==0 caching branch actually runs.
+func TestHeadlessToolsEmptyProbeIsRetryable(t *testing.T) {
+	orig := probeToolsFn
+	defer func() { probeToolsFn = orig }()
+	calls := 0
+	// Probe succeeds but returns ONLY interactive tools, so filterTools → [].
+	probeToolsFn = func(ctx context.Context, bin string, env []string) ([]string, error) {
+		calls++
+		return []string{"AskUserQuestion", "EnterPlanMode"}, nil
+	}
+
+	d := NewClaudeDriver("claude")
+	if got := d.headlessTools(); got != nil {
+		t.Fatalf("empty filtered probe must return nil (CLI-default fallback), got %v", got)
+	}
+	if calls != 1 {
+		t.Fatalf("expected exactly one probe, got %d", calls)
+	}
+	// The empty result must be cached as a retryable FAILURE (ok:false), not a
+	// permanent ok — otherwise a regression that cached ok:true with empty tools
+	// would pin the degraded fallback forever.
+	d.toolsMu.Lock()
+	p, present := d.toolsCache["claude"]
+	d.toolsMu.Unlock()
+	if !present || p.ok {
+		t.Fatalf("empty probe must cache ok:false, got present=%v ok=%v", present, p.ok)
 	}
 }
 

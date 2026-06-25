@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/lml2468/octobuddy/core/config"
@@ -112,6 +114,77 @@ func TestSavePreservesUnmodeledPerBotFields(t *testing.T) {
 
 func ptrTo[T any](v T) *T { return &v }
 
+// TestSavePreservesChannelToolOverrides is the regression for the BasicInfo
+// Save clobbering per-channel tool overrides: BasicInfo owns only tools.default,
+// so a save carrying a stale snapshot (or none) must NOT drop a channel override
+// the chat window wrote live via SetChannelTools after the modal loaded.
+func TestSavePreservesChannelToolOverrides(t *testing.T) {
+	setup(t)
+	writeConfig(t, config.File{Bots: []config.BotEntry{{
+		ID: "b1", APIURL: "https://x.example",
+		Agent: &config.AgentConfig{Tools: &config.ToolPolicy{
+			Default:  []string{"Read"},
+			Channels: map[string][]string{"chanA": {"Bash"}},
+		}},
+	}}})
+
+	// The editor loaded a snapshot, then changed the bot-level default only.
+	loaded, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a chat-window edit landing AFTER the modal loaded: add a new
+	// channel override straight to disk.
+	if err := SetChannelTools("b1", "chanB", []string{"Grep"}); err != nil {
+		t.Fatalf("live channel set: %v", err)
+	}
+	// Operator edits the bot default and saves from the (now stale) modal.
+	loaded[0].Tools = &config.ToolPolicy{Default: []string{"Read", "Edit"}}
+	if err := Save(loaded, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	f := readBack(t)
+	b := f.Bots[0]
+	if b.Agent == nil || b.Agent.Tools == nil {
+		t.Fatalf("tools dropped: %+v", b.Agent)
+	}
+	// Bot default reflects the editor's change.
+	if !reflect.DeepEqual(b.Agent.Tools.Default, []string{"Read", "Edit"}) {
+		t.Errorf("default = %v, want [Read Edit]", b.Agent.Tools.Default)
+	}
+	// Both the pre-existing and the live-added channel overrides survive.
+	if got := b.Agent.Tools.Channels["chanA"]; !reflect.DeepEqual(got, []string{"Bash"}) {
+		t.Errorf("chanA override clobbered: %v", got)
+	}
+	if got := b.Agent.Tools.Channels["chanB"]; !reflect.DeepEqual(got, []string{"Grep"}) {
+		t.Errorf("live-added chanB override clobbered: %v", got)
+	}
+}
+
+// TestSaveClearingDefaultToolsCollapsesEmptyAgent pins that clearing the
+// bot-level whitelist on an otherwise-empty agent leaves no "tools":{"default":null}
+// cruft (and no channels means the whole tools block is dropped).
+func TestSaveClearingDefaultToolsCollapsesEmptyAgent(t *testing.T) {
+	setup(t)
+	writeConfig(t, config.File{Bots: []config.BotEntry{{
+		ID: "b1", APIURL: "https://x.example",
+		Agent: &config.AgentConfig{Tools: &config.ToolPolicy{Default: []string{"Read"}}},
+	}}})
+	loaded, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded[0].Tools = &config.ToolPolicy{} // default undefined → "use driver default"
+	if err := Save(loaded, nil); err != nil {
+		t.Fatal(err)
+	}
+	b := readBack(t).Bots[0]
+	if b.Agent != nil {
+		t.Errorf("empty agent should collapse to nil, got %+v", b.Agent)
+	}
+}
+
 func TestSaveWritesPerBotFields(t *testing.T) {
 	setup(t)
 	writeConfig(t, config.File{
@@ -180,6 +253,49 @@ func TestSavePrunesOnlyExplicitRemovals(t *testing.T) {
 // First-time Add-bot scaffolds SOUL.md + AGENTS.md with starter templates when
 // the operator left the fields blank, so the bot dir is never naked after a
 // successful Add-bot. Detected by botDir not existing before the Save.
+// TestBootstrapScaffoldOnceAndStaysDeleted pins the first-run ritual lifecycle:
+// a brand-new bot gets BOOTSTRAP.md; once the bot deletes it (self-bootstrap
+// complete), a later operator Save must NOT resurrect it; and an already-existing
+// bot never gets one on an edit-save.
+func TestBootstrapScaffoldOnceAndStaysDeleted(t *testing.T) {
+	setup(t)
+	bootPath := filepath.Join(botDir("fresh"), "BOOTSTRAP.md")
+
+	if err := Save([]BotConfig{{ID: "fresh", APIURL: "https://x.example"}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := os.ReadFile(bootPath); err != nil {
+		t.Fatalf("BOOTSTRAP.md should be scaffolded for a new bot: %v", err)
+	} else if string(b) != defaultBootstrapTemplate {
+		t.Errorf("BOOTSTRAP.md content not the template:\n%s", b)
+	}
+
+	// The bot completes bootstrap and deletes the file.
+	if err := os.Remove(bootPath); err != nil {
+		t.Fatal(err)
+	}
+	// A later operator edit-save of the now-EXISTING bot must NOT recreate it.
+	if err := Save([]BotConfig{{ID: "fresh", APIURL: "https://x.example", Soul: "I am Atlas."}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(bootPath); !os.IsNotExist(err) {
+		t.Fatalf("BOOTSTRAP.md must stay deleted on re-save, got err=%v", err)
+	}
+}
+
+// TestBootstrapNotScaffoldedForExistingBot pins that a bot already present in
+// config.json does not get a BOOTSTRAP.md when saved — only a brand-new id does.
+func TestBootstrapNotScaffoldedForExistingBot(t *testing.T) {
+	setup(t)
+	writeConfig(t, config.File{Bots: []config.BotEntry{{ID: "existing", APIURL: "https://x.example"}}})
+	if err := Save([]BotConfig{{ID: "existing", APIURL: "https://x.example"}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(botDir("existing"), "BOOTSTRAP.md")); !os.IsNotExist(err) {
+		t.Fatalf("existing bot must NOT be scaffolded a BOOTSTRAP.md, got err=%v", err)
+	}
+}
+
 func TestSaveScaffoldsTemplatesOnFirstCreate(t *testing.T) {
 	setup(t)
 	if err := Save([]BotConfig{{ID: "fresh", APIURL: "https://x.example"}}, nil); err != nil {
@@ -198,6 +314,22 @@ func TestSaveScaffoldsTemplatesOnFirstCreate(t *testing.T) {
 	}
 	if string(agents) != defaultAgentsTemplate {
 		t.Errorf("AGENTS.md content not the template:\n%s", agents)
+	}
+}
+
+// TestDefaultTemplatesCarryLoadBearingSections guards against a careless edit
+// gutting the opinionated default templates back to bare placeholders: each must
+// keep its key sections so a freshly-scaffolded bot ships real guidance.
+func TestDefaultTemplatesCarryLoadBearingSections(t *testing.T) {
+	for _, want := range []string{"Core Truths", "Boundaries", "Vibe"} {
+		if !strings.Contains(defaultSoulTemplate, want) {
+			t.Errorf("defaultSoulTemplate missing %q section", want)
+		}
+	}
+	for _, want := range []string{"Untrusted Input", "Red Lines", "External vs Internal", "Know When to Speak"} {
+		if !strings.Contains(defaultAgentsTemplate, want) {
+			t.Errorf("defaultAgentsTemplate missing %q section", want)
+		}
 	}
 }
 

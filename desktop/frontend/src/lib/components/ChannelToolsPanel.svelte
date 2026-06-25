@@ -32,15 +32,28 @@
   }
   $effect(() => { if (!loaded) void load(); });
 
-  async function commit() {
-    error = "";
-    try {
-      if (!store.preview) {
+  // Serialize commits: every toggle/mode change writes the WHOLE current set
+  // via SetChannelTools, so two fire-and-forget writes completing out of order
+  // could persist a stale snapshot (lost update). Chain them so each write
+  // starts only after the previous resolves, and each sends the latest state.
+  //
+  // Only the LATEST commit owns the error banner: a `seq` stamped at enqueue
+  // time gates the outcome write, so an earlier failed write is not silently
+  // cleared by a later success (and vice-versa) — the banner reflects the most
+  // recently issued write, not whichever happened to finish last.
+  let commitChain: Promise<void> = Promise.resolve();
+  let commitSeq = 0;
+  function commit() {
+    const mine = ++commitSeq;
+    commitChain = commitChain.then(async () => {
+      if (store.preview) return;
+      try {
         await OctoBuddyService.SetChannelTools(botId, sessionKey, configured, configured ? [...scoped] : []);
+        if (mine === commitSeq) error = "";
+      } catch (e) {
+        if (mine === commitSeq) error = String(e);
       }
-    } catch (e) {
-      error = String(e);
-    }
+    });
   }
 
   function useCustom() {
@@ -51,18 +64,18 @@
     if (offered.length === 0) return;
     configured = true;
     scoped = new Set(offered);
-    void commit();
+    commit();
   }
   function followDefault() {
     configured = false;
-    void commit();
+    commit();
   }
   function toggle(name: string) {
     const next = new Set(scoped);
     if (next.has(name)) next.delete(name);
     else next.add(name);
     scoped = next;
-    void commit();
+    commit();
   }
 </script>
 

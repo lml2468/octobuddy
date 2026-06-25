@@ -81,6 +81,13 @@ type Source string
 const (
 	SourceUser Source = "user"
 	SourceCron Source = "cron"
+	// SourceConsole is a turn from the desktop Console over the authenticated
+	// control bus. It arrives as a DM (so it triggers like any DM) but is
+	// operator-trusted by construction — the desktop authenticates before any
+	// session.send — so the gateway may treat it as the owner's channel even
+	// before the bot has an IM-registered owner uid (e.g. first-run bootstrap on
+	// a bot that hasn't connected to IM yet).
+	SourceConsole Source = "console"
 )
 
 // ChannelKind is the IM-agnostic channel taxonomy; only DM/Group matters

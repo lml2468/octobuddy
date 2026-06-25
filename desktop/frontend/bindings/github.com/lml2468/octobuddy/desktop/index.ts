@@ -7,5 +7,7 @@ export {
 };
 
 export {
-    OctoCliStatus
+    ChannelToolsInfo,
+    OctoCliStatus,
+    ToolsetInfo
 } from "./models.js";

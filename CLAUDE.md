@@ -131,13 +131,25 @@ Key invariants to preserve:
   sees). The headless-safe default tool set is **probed from the live binary**
   (`ProbeTools` reads the `system/init` line's `tools` array) minus a small
   `interactiveExclusions` denylist — never a hand-maintained Go allowlist (it
-  drifts per claude release: `Agent`→`Task`, `TodoWrite` dropped). Per-bot /
-  per-channel whitelists + setting-source scopes flow through `agent.Request`
-  (`AllowedTools`, `SettingSources`); MCP servers load from the per-bot
+  drifts per claude release: `Agent`→`Task`, `TodoWrite` dropped). When a bot
+  has a `.mcp.json` this turn, the nil-policy default surface also admits
+  `mcp__*` (the probe runs without `--mcp-config`, so it carries no MCP names —
+  without this the servers connect but stay uncallable). Per-bot / per-channel
+  whitelists + setting-source scopes flow through `agent.Request` (`AllowedTools`,
+  `SettingSources`); the tool policy applies in **both** prompt modes (a muzzle
+  must hold regardless of mode) and any explicit list is re-filtered against
+  `interactiveExclusions`. The per-turn tool resolver re-reads `config.json`
+  (`config.ToolPolicyFor` → the single `config.ToolPolicy.Resolve`), so a desktop
+  edit to `tools.channels` applies on the next turn without a daemon restart —
+  the same per-Query philosophy as the MCP-config / binary resolvers; the gateway
+  takes a resolver closure (`WithToolResolver`) rather than caching a snapshot.
+  MCP servers load from the per-bot
   `<CLAUDE_CONFIG_DIR>/.mcp.json` via `--mcp-config <path> --strict-mcp-config`
   when present (`.mcp.json` is project-scope, so `--setting-sources=user` won't
-  auto-load it). `ProbeMCP` reads the same init line's `mcp_servers[].status`
-  for the desktop's MCP health check. Output is **plain stream-json** (one event
+  auto-load it; the path is resolved through `safepath.SafeLstat`, refusing a
+  symlinked file or parent). `ProbeMCP` reads the same init line's
+  `mcp_servers[].status` for the desktop's MCP health check. Output is **plain
+  stream-json** (one event
   per complete content block) — the driver does NOT request
   `--include-partial-messages`, so there is no token-level delta path or dedup.
   `--append-system-prompt` (claude_code mode) is re-sent every turn including
@@ -179,17 +191,44 @@ and runs **every bot in `bots[]` in its own fully isolated stack** — separate
 store, gateway, driver, group-context, Octo connector, each under `~/.octobuddy/<id>/`.
 
 - System prompt is **file-based, not a config field**: `<id>/SOUL.md` (identity)
-  concatenated with `<id>/AGENTS.md` (behavior norms), passed as the
-  operator-trusted append. Either may be omitted.
-- Each `bots[]` entry is `id` + `octoToken` and may override top-level
-  `apiUrl`/`agent`/`rateLimit`/`context` defaults. Capability switches live under
-  `agent` (`cron`, `toolProgress`, `inheritUserConfig`, `dispatchTimeoutSec`); the group-gating lists
-  (`mentionFreeGroups`, `knownBotUids`, `allowedBotUids`, `botBlocklist`) plus
-  `groupConfigDir` and `onBehalfOf` are top-level defaults a bot may override — a
-  per-bot value REPLACES the default. (Skills/workflows are **not** config fields;
-  each bot owns its own under `~/.octobuddy/<id>/.claude/{skills,workflows}/` — see
-  the skills/workflows bullet above.)
-  `core/config.example.json` is the canonical field list.
+  and `<id>/AGENTS.md` (behavior norms), assembled by `config.SystemPromptFor`
+  into labeled `## SOUL.md` / `## AGENTS.md` sections (each with a one-line
+  descriptor), passed as the operator-trusted append. Either may be omitted. The
+  `##` labels are deliberately Markdown headings, NOT `[bracket]` markers, so they
+  stay outside `safety.sectionMarkerRE`'s privileged namespace (untrusted text
+  reproducing `## SOUL.md` forges nothing). Re-read **per turn** by the gateway's
+  `WithSystemPromptResolver` (backed by `SystemPromptFor(BotRoot)`), so a desktop
+  edit applies on the next message without a daemon restart — same per-Query
+  pattern as the tool/MCP/binary resolvers; an empty result is honored
+  (SecurityPrefix only). The rich default templates live in
+  `desktop/internal/configstore` (`defaultSoulTemplate`/`defaultAgentsTemplate`).
+- **First-run bootstrap (self-bootstrapping)**: a brand-new bot is scaffolded
+  once with `<id>/BOOTSTRAP.md` (`defaultBootstrapTemplate`, NOT re-created on
+  later saves). While it exists, `config.BootstrapFor` + the gateway's
+  `WithBootstrapResolver` inject it per turn — but `appendBootstrap` gates the
+  injection to an **owner-trusted channel only** (`gateway.ownerTrusted`: a
+  `trigger.SourceConsole` turn — the desktop Console, trusted via control-bus
+  auth — or the bot owner's IM DM, where `msg.FromUID == g.owner()`). Never in a
+  group or non-owner DM, because the ritual has the bot rewrite its own SOUL.md
+  (letting an untrusted user drive it = self-injection of the trusted prompt).
+  The bot interviews the owner, writes SOUL.md, deletes BOOTSTRAP.md; per-turn
+  reload then stops injecting it. Owner uid reaches the gateway via
+  `WithOwner(connector.OwnerUID)` (lazy — known only after IM registration; the
+  Console path needs no owner uid). No MEMORY.md/IDENTITY.md/USER.md: claude's
+  per-session autoMemory (`--settings autoMemoryDirectory`, keyed per sessionKey)
+  already gives isolated per-conversation continuity, and bot-level durable
+  self-knowledge lives in SOUL/AGENTS.
+- Each `bots[]` entry is `id` + `octoToken`. `apiUrl` and the whole `agent` block
+  (model, gateway URL/token, env, and the capability switches `cron`,
+  `toolProgress`, `inheritUserConfig`, `dispatchTimeoutSec`, `systemPromptMode`,
+  `settingSources`, `tools`) are **per-bot only** — there is no top-level `agent`
+  default (the `File` struct exposes only `rateLimit`/`context`/`toolset`/`bots`).
+  Only `rateLimit` and `context` have top-level defaults a per-bot value
+  overrides. The group-gating lists (`mentionFreeGroups`, `knownBotUids`,
+  `allowedBotUids`, `botBlocklist`) plus `groupConfigDir` and `onBehalfOf` are
+  also per-bot. (Skills/workflows are **not** config fields; each bot owns its own
+  under `~/.octobuddy/<id>/.claude/{skills,workflows}/` — see the skills/workflows
+  bullet above.) `core/config.example.json` is the canonical field list.
 - `core/config/` does slug + SSRF validation on URLs — keep that on any new
   config field that holds a URL. `groupConfigDir` files are injected UNSANITIZED
   as `[Group instructions]`, so config load rejects a dir at/under a bot's

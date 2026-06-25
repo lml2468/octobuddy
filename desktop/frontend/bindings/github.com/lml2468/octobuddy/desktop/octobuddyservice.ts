@@ -139,6 +139,25 @@ export function BotsList(): $CancellablePromise<void> {
 }
 
 /**
+ * ChannelTools returns the per-channel tool override for (botID, sessionKey).
+ */
+export function ChannelTools(botID: string, sessionKey: string): $CancellablePromise<$models.ChannelToolsInfo> {
+    return $Call.ByID(4287213674, botID, sessionKey).then(($result: any) => {
+        return $$createType5($result);
+    });
+}
+
+/**
+ * CheckMCP asks the daemon to probe the bot's saved .mcp.json and report each
+ * server's health (the "test connection" button + post-save check). Async: the
+ * response arrives on EventStream as an mcp.check envelope. Requires the bot to
+ * be running in the daemon (the probe uses its resolved bin + env).
+ */
+export function CheckMCP(botID: string): $CancellablePromise<void> {
+    return $Call.ByID(3405780004, botID);
+}
+
+/**
  * CronCreate schedules a task (owner-gated by the daemon).
  */
 export function CronCreate(body: control$0.CronCreateBody): $CancellablePromise<void> {
@@ -183,7 +202,7 @@ export function CronUpdate(body: control$0.CronUpdateBody): $CancellablePromise<
  */
 export function GroupsList(botID: string): $CancellablePromise<octocli$0.Group[]> {
     return $Call.ByID(3721641824, botID).then(($result: any) => {
-        return $$createType6($result);
+        return $$createType7($result);
     });
 }
 
@@ -206,18 +225,29 @@ export function History(botID: string, sessionKey: string, limit: number): $Canc
  */
 export function LoadConfig(): $CancellablePromise<configstore$0.BotConfig[]> {
     return $Call.ByID(2972308434).then(($result: any) => {
-        return $$createType8($result);
+        return $$createType9($result);
     });
+}
+
+/**
+ * LoadMCPConfig returns the bot's raw .mcp.json text ("" when none). Written
+ * through to disk immediately by SaveMCPConfig (not via the dirty/SaveConfig
+ * flow) — the daemon loads it per turn.
+ */
+export function LoadMCPConfig(botID: string): $CancellablePromise<string> {
+    return $Call.ByID(1362130182, botID);
 }
 
 /**
  * LoadToolset returns the cached claude tool surface (probed on
  * install/upgrade) so the settings tool picker can offer the selectable set.
- * Probed is false when claude has not been probed yet.
+ * Probed is false when claude has not been probed yet. Best-effort: it also
+ * triggers a background refresh so a stale or missing cache self-heals without
+ * blocking the UI (the next LoadToolset call sees the fresh result).
  */
 export function LoadToolset(): $CancellablePromise<$models.ToolsetInfo> {
     return $Call.ByID(1914731222).then(($result: any) => {
-        return $$createType14($result);
+        return $$createType10($result);
     });
 }
 
@@ -239,7 +269,7 @@ export function LogClientError(category: string, message: string, stack: string)
  */
 export function MemoryFile(botID: string, channelType: number, sessionKey: string, relPath: string): $CancellablePromise<workspace$0.FileContent> {
     return $Call.ByID(1690105045, botID, channelType, sessionKey, relPath).then(($result: any) => {
-        return $$createType9($result);
+        return $$createType11($result);
     });
 }
 
@@ -249,7 +279,7 @@ export function MemoryFile(botID: string, channelType: number, sessionKey: strin
  */
 export function MemoryTree(botID: string, channelType: number, sessionKey: string): $CancellablePromise<workspace$0.Node | null> {
     return $Call.ByID(1798474967, botID, channelType, sessionKey).then(($result: any) => {
-        return $$createType11($result);
+        return $$createType13($result);
     });
 }
 
@@ -262,7 +292,7 @@ export function MemoryTree(botID: string, channelType: number, sessionKey: strin
  */
 export function OctoAddBot(apiURL: string, apiKey: string, name: string): $CancellablePromise<octoapi$0.BotResult> {
     return $Call.ByID(3460653163, apiURL, apiKey, name).then(($result: any) => {
-        return $$createType12($result);
+        return $$createType14($result);
     });
 }
 
@@ -289,7 +319,7 @@ export function OctoCliRelogin(botID: string): $CancellablePromise<void> {
  */
 export function OctoCliStatus(botID: string): $CancellablePromise<$models.OctoCliStatus> {
     return $Call.ByID(2151220461, botID).then(($result: any) => {
-        return $$createType13($result);
+        return $$createType15($result);
     });
 }
 
@@ -320,43 +350,13 @@ export function SaveConfig(bots: configstore$0.BotConfig[], removedIDs: string[]
 }
 
 /**
- * LoadMCPConfig returns the bot's raw .mcp.json text ("" when none).
- */
-export function LoadMCPConfig(botID: string): $CancellablePromise<string> {
-    return $Call.ByID(1362130182, botID);
-}
-
-/**
  * SaveMCPConfig validates and writes the bot's .mcp.json (empty content deletes
- * it). Returns a human-readable validation error for the UI to show inline.
+ * it). The daemon picks it up on the next turn; a running bot must be restarted
+ * for the change to apply to an in-flight session, but new turns load it
+ * fresh. Returns a human-readable validation error for the UI to show inline.
  */
 export function SaveMCPConfig(botID: string, content: string): $CancellablePromise<void> {
     return $Call.ByID(2902027761, botID, content);
-}
-
-/**
- * CheckMCP asks the daemon to probe the bot's saved .mcp.json and report each
- * server's health. Async: the response arrives on the event stream as an
- * mcp.check envelope.
- */
-export function CheckMCP(botID: string): $CancellablePromise<void> {
-    return $Call.ByID(3405780004, botID);
-}
-
-/**
- * ChannelTools returns the per-channel tool override for (botID, sessionKey).
- */
-export function ChannelTools(botID: string, sessionKey: string): $CancellablePromise<$models.ChannelToolsInfo> {
-    return $Call.ByID(4287213674, botID, sessionKey).then(($result: any) => {
-        return $$createType15($result);
-    });
-}
-
-/**
- * SetChannelTools writes the per-channel override (configured=false removes it).
- */
-export function SetChannelTools(botID: string, sessionKey: string, configured: boolean, tools: string[]): $CancellablePromise<void> {
-    return $Call.ByID(3639733770, botID, sessionKey, configured, tools);
 }
 
 /**
@@ -378,6 +378,15 @@ export function SessionsList(botID: string): $CancellablePromise<void> {
 }
 
 /**
+ * SetChannelTools writes the per-channel override (configured=false removes it;
+ * configured=true with the given list — empty = muzzle — stores it). The daemon
+ * picks it up on the next turn for that conversation.
+ */
+export function SetChannelTools(botID: string, sessionKey: string, configured: boolean, tools: string[]): $CancellablePromise<void> {
+    return $Call.ByID(3639733770, botID, sessionKey, configured, tools);
+}
+
+/**
  * UsageStats requests a bot's token usage over a range (since = Unix seconds at a
  * local-midnight bound; 0 = all time). The response arrives via EventStream as a
  * usage.stats envelope echoing `since`.
@@ -392,7 +401,7 @@ export function UsageStats(botID: string, since: number): $CancellablePromise<vo
  */
 export function WorkspaceFile(botID: string, channelType: number, sessionKey: string, relPath: string): $CancellablePromise<workspace$0.FileContent> {
     return $Call.ByID(3898295363, botID, channelType, sessionKey, relPath).then(($result: any) => {
-        return $$createType9($result);
+        return $$createType11($result);
     });
 }
 
@@ -402,7 +411,7 @@ export function WorkspaceFile(botID: string, channelType: number, sessionKey: st
  */
 export function WorkspaceTree(botID: string, channelType: number, sessionKey: string): $CancellablePromise<workspace$0.Node | null> {
     return $Call.ByID(2868650453, botID, channelType, sessionKey).then(($result: any) => {
-        return $$createType11($result);
+        return $$createType13($result);
     });
 }
 
@@ -412,14 +421,14 @@ const $$createType1 = skills$0.SkillInfo.createFrom;
 const $$createType2 = $Create.Array($$createType1);
 const $$createType3 = workflows$0.Info.createFrom;
 const $$createType4 = $Create.Array($$createType3);
-const $$createType5 = octocli$0.Group.createFrom;
-const $$createType6 = $Create.Array($$createType5);
-const $$createType7 = configstore$0.BotConfig.createFrom;
-const $$createType8 = $Create.Array($$createType7);
-const $$createType9 = workspace$0.FileContent.createFrom;
-const $$createType10 = workspace$0.Node.createFrom;
-const $$createType11 = $Create.Nullable($$createType10);
-const $$createType12 = octoapi$0.BotResult.createFrom;
-const $$createType13 = $models.OctoCliStatus.createFrom;
-const $$createType14 = $models.ToolsetInfo.createFrom;
-const $$createType15 = $models.ChannelToolsInfo.createFrom;
+const $$createType5 = $models.ChannelToolsInfo.createFrom;
+const $$createType6 = octocli$0.Group.createFrom;
+const $$createType7 = $Create.Array($$createType6);
+const $$createType8 = configstore$0.BotConfig.createFrom;
+const $$createType9 = $Create.Array($$createType8);
+const $$createType10 = $models.ToolsetInfo.createFrom;
+const $$createType11 = workspace$0.FileContent.createFrom;
+const $$createType12 = workspace$0.Node.createFrom;
+const $$createType13 = $Create.Nullable($$createType12);
+const $$createType14 = octoapi$0.BotResult.createFrom;
+const $$createType15 = $models.OctoCliStatus.createFrom;

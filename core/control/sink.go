@@ -74,7 +74,12 @@ func (s *EventSink) OnReply(sessionKey string, text string) {
 // keeping the legacy on-wire shape minimal for non-cron messages.
 func (s *EventSink) OnUserMessage(sessionKey string, msg router.InboundMessage) {
 	srcStr := string(msg.Source)
-	if msg.Source == "" || msg.Source == trigger.SourceUser {
+	// Elide the human-typed sources so omitempty keeps the wire minimal and the
+	// GUI's CONSOLE_UID optimistic-push dedupe (intended for Composer-typed
+	// messages) still matches: a Console turn is a human Composer message, just
+	// over the control bus, so it elides like a plain "user" inbound. Only a
+	// non-human origin (cron) carries an explicit source for the renderer.
+	if msg.Source == "" || msg.Source == trigger.SourceUser || msg.Source == trigger.SourceConsole {
 		srcStr = ""
 	}
 	s.srv.Broadcast("session.user_message", SessionUserMessageBody{

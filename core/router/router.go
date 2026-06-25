@@ -126,6 +126,21 @@ func (m InboundMessage) SessionKey() (string, error) {
 // Source strings inline so the predicate stays auditable.
 func (m InboundMessage) IsCron() bool { return m.Source == trigger.SourceCron }
 
+// OwnerTrusted reports whether this message comes from an operator-trusted
+// channel — the desktop Console (SourceConsole, authenticated over the control
+// bus) or the bot owner's own IM DM (a non-group DM whose server-stamped
+// FromUID matches ownerUID). Group turns and non-owner DMs are never
+// owner-trusted. ownerUID is "" before IM registration, which correctly leaves
+// only the Console path trusted. Single source of the owner-trust predicate so
+// callers (e.g. bootstrap-prompt injection) don't re-derive it; lives here with
+// the other Source-based gates (IsCron, SessionKey) rather than in the gateway.
+func (m InboundMessage) OwnerTrusted(ownerUID string) bool {
+	if m.Source == trigger.SourceConsole {
+		return true
+	}
+	return m.ChannelType != ChannelGroup && ownerUID != "" && m.FromUID == ownerUID
+}
+
 // ShouldReply reports whether the trigger decision is a reply-warranting one.
 // Nil Trigger on a DM = trigger; on a Group = observation-only.
 func (m InboundMessage) ShouldReply() bool {
