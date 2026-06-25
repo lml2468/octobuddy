@@ -297,4 +297,3 @@ func TestCronDMTargetsOwner(t *testing.T) {
 		t.Fatalf("DM fires to the owner; FromUID must be %q, body peer %q must be ignored, got %q", owner, "stranger", stored[0].FromUID)
 	}
 }
-
