@@ -245,6 +245,22 @@ Beyond plain text it renders non-text payloads to markers, materializes inbound
 media/files into the session cwd, resolves outbound @mentions, runs the OBO
 persona relay + thread routing, and emits a 5 s typing heartbeat.
 
+Two reconnect invariants (`core/im/octo/connector_run.go`, `socket.go`) — easy
+to silently break:
+- **Reconnect MUST reuse the cached registration, never re-register.** The
+  octo-server `register` handler unconditionally calls `UpdateIMToken`, which
+  kicks the bot's existing `(uid, deviceFlag)` session for `DeviceLevel=Master`
+  — so reconnect-then-register kicks the very session it just rebuilt (the
+  recurring "server sent disconnect"). `Run` reuses `reg`; ONLY a CONNACK
+  auth-fail (`errConnackAuthFail`, reason 2) sets `registered=false`. A persisted
+  `<dataDir>/device_id` (`loadOrCreateDeviceID`) is defensive only — the kick
+  ignores deviceID at Master level.
+- **WS liveness rides on a rolling read deadline, NOT the ping.** The wkproto
+  PING is send-only — the server PONG is never checked for liveness — so a
+  half-open connection (no FIN/RST) would block `ReadMessage` forever. `run()`
+  resets `SetReadDeadline(now + socketConn.readTimeout)` before every read; any
+  inbound frame refreshes it, a dead link trips it (~150s) → reconnect.
+
 ## Desktop app (`desktop/`)
 
 A thin control-bus client (Wails v3 alpha + Svelte 5/TS); the daemon holds all

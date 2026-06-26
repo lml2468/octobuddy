@@ -2,6 +2,7 @@ package octo
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -43,21 +44,43 @@ func (c *Connector) Run(ctx context.Context) error {
 		}
 
 		c.setStatus(true, "")
-		err := c.connectOnce(ctx, reg)
+		stable, err := c.connectOnce(ctx, reg)
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		// Log the cause so a recurring drop is diagnosable from the daemon log
+		// — the status callback only surfaces it transiently in the UI. The
+		// decoded reason distinguishes a duplicate-login kick (DISCONNECT
+		// reason 11) from an auth failure (connack reason 2) from a plain
+		// transport drop (EOF / reset / idle).
+		if err != nil {
+			c.logf("connection lost, reconnecting: %v", err)
+		}
 		c.setStatus(false, errString(err))
+
+		// A drop after a healthy (stable) session is a fresh incident, not part
+		// of a connect-fail storm, so reconnect promptly rather than inherit an
+		// escalated (up to reconnectMax) backoff. Without this, now that
+		// reconnect no longer re-registers, a long-lived bot that blips once
+		// would stay pinned near the 60s ceiling.
+		if stable {
+			backoff = c.reconnectBase
+		}
 
 		sleep(ctx, backoff)
 		backoff = min(backoff*2, c.reconnectMax)
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if fresh, rerr := c.refreshRegistration(ctx); rerr == nil {
-			reg = fresh
-		} else {
-			registered = false // force the retry path above
+		// Reuse the cached registration on reconnect. Re-registering every time
+		// is what caused the recurring "server sent disconnect": the server's
+		// register handler unconditionally calls UpdateIMToken, which kicks the
+		// bot's existing (uid, deviceFlag) session for DeviceLevel=Master — so a
+		// reconnect-then-register would kick the very session we just rebuilt.
+		// Only an auth failure (the server's token no longer matches ours)
+		// genuinely needs a fresh register; everything else just reconnects.
+		if errors.Is(err, errConnackAuthFail) {
+			registered = false // force the registerInitial path at the loop top
 		}
 	}
 }
@@ -93,15 +116,6 @@ func (c *Connector) startRunWorkers(ctx context.Context) {
 	go c.receiptWorker(ctx)
 }
 
-func (c *Connector) refreshRegistration(ctx context.Context) (RegisterResponse, error) {
-	reg, err := c.rest.Register(ctx, true)
-	if err != nil {
-		return RegisterResponse{}, err
-	}
-	c.applyRegistration(reg)
-	return reg, nil
-}
-
 func (c *Connector) applyRegistration(reg RegisterResponse) {
 	c.setUID(reg.RobotID)
 	c.notifyOwner(reg.OwnerUID)
@@ -124,12 +138,18 @@ func sleep(ctx context.Context, d time.Duration) {
 	}
 }
 
-func (c *Connector) connectOnce(ctx context.Context, reg RegisterResponse) error {
+// connectOnce dials, handshakes, and runs the read loop until the connection
+// ends. It returns stable=true when the session lived at least
+// connectionStableAfter past a successful CONNACK — measured from when the
+// handshake completed, NOT the attempt start, so a slow connect/handshake that
+// ultimately FAILS can't masquerade as uptime. A never-established attempt
+// returns stable=false.
+func (c *Connector) connectOnce(ctx context.Context, reg RegisterResponse) (stable bool, err error) {
 	// onError logs socket-level events (poison-drop, kicks) that are not fatal to
 	// the read loop — previously a no-op, which silently swallowed them. The
 	// server DISCONNECT case ends the read loop via run returning, which Run's
 	// reconnect path handles; this hook is for the informational drops.
-	sock := newSocketConn(reg.WSURL, reg.RobotID, reg.IMToken, c.onInbound, func(err error) {
+	sock := newSocketConn(reg.WSURL, reg.RobotID, reg.IMToken, c.deviceID, c.onInbound, func(err error) {
 		c.logf("socket: %v", err)
 	})
 	c.mu.Lock()
@@ -140,9 +160,11 @@ func (c *Connector) connectOnce(ctx context.Context, reg RegisterResponse) error
 	defer sock.close()
 
 	if err := sock.connect(ctx); err != nil {
-		return err
+		return false, err
 	}
-	return sock.run(ctx)
+	establishedAt := time.Now()
+	err = sock.run(ctx)
+	return time.Since(establishedAt) >= connectionStableAfter, err
 }
 
 // ctx returns the Run context, falling back to Background if a callback somehow

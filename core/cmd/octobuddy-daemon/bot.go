@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/lml2468/octobuddy/core/agent"
@@ -155,6 +156,11 @@ func newBotConnector(cfg config.Resolved, sec *secretStore) (*octo.Connector, pe
 	// so an empty token here is allowed (the connector waits for it).
 	connector := octo.NewConnector(octo.NewRESTClient(cfg.APIURL, sec.OctoToken))
 	connector.SetToolProgress(cfg.Agent.ToolProgress)
+	// Stable per-bot WuKongIM device id: a random id every reconnect makes the
+	// server kick our own prior (possibly half-open) session as a duplicate
+	// login, which surfaces as "server sent disconnect". Persisting it makes a
+	// reconnect look like the same device resuming.
+	connector.SetDeviceID(loadOrCreateDeviceID(cfg))
 
 	// Persona clone (openclaw OBO): when onBehalfOf is configured, the
 	// classifier widens the trigger gate + the connector routes replies
@@ -417,6 +423,27 @@ func botToolResolver(configPath string, cfg config.Resolved) func(string) ([]str
 func botRootFileResolver(cfg config.Resolved, readFn func(botRoot string) string) func() string {
 	root := cfg.BotRoot
 	return func() string { return readFn(root) }
+}
+
+// loadOrCreateDeviceID returns a stable WuKongIM device id for the bot,
+// persisted at <dataDir>/device_id so it survives daemon restarts. On a read
+// miss (first run, or an empty/corrupt file) it mints a fresh uuid+"W" and
+// writes it back. The id is not a secret (it identifies a device slot, not the
+// bot), so a write failure is non-fatal — we just return the freshly-minted id
+// and fall back to a fresh one next boot. The file lives under DataDir, which
+// prepareBotDirs created before this runs.
+func loadOrCreateDeviceID(cfg config.Resolved) string {
+	path := filepath.Join(cfg.DataDir, "device_id")
+	if b, err := safepath.SafeReadAbs(path, 256); err == nil {
+		if id := strings.TrimSpace(string(b)); id != "" {
+			return id
+		}
+	}
+	id := octo.NewDeviceID()
+	if err := safepath.SafeWriteAbs(path, []byte(id), 0o600); err != nil {
+		clog.For("octo").Warn("persist device_id failed; using ephemeral id", "bot", cfg.BotID, "err", err)
+	}
+	return id
 }
 
 // SafeMkdirAllAbs walks the parent chain via dirfd, refusing any symlinked

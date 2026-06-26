@@ -77,6 +77,12 @@ type Connector struct {
 	reconnectBase time.Duration
 	reconnectMax  time.Duration
 
+	// deviceID is the stable WuKongIM device id passed to every socketConn. Set
+	// once at startup via SetDeviceID (empty falls back to a per-connection
+	// random id); immutable after Run starts, so no lock needed. See the
+	// socketConn.deviceID doc for the kick caveat.
+	deviceID string
+
 	// receiptCh buffers read-receipt requests for a single worker
 	// (receiptWorker). Buffered so a slow REST back-end can't backpressure
 	// the inbound read loop; a full buffer drops the receipt rather than
@@ -102,6 +108,13 @@ type toolProgressState struct {
 // awaitTokenPoll is how often Run rechecks for an injected token before
 // it has one; short enough to connect promptly without busy-spinning.
 const awaitTokenPoll = 2 * time.Second
+
+// connectionStableAfter is how long a WS connection must have stayed up before
+// a drop is treated as a fresh incident (reset the reconnect backoff) rather
+// than part of a connect-fail storm. Comfortably above the connect+handshake
+// time so a flapping endpoint still backs off, but well under any normal
+// session length.
+const connectionStableAfter = 30 * time.Second
 
 // defaultTypingInterval is the typing-heartbeat period; the IM expires
 // the indicator after this if it doesn't see another ping.
@@ -206,4 +219,11 @@ func (c *Connector) SetToolProgress(on bool) {
 	c.mu.Lock()
 	c.toolProgress = on
 	c.mu.Unlock()
+}
+
+// SetDeviceID installs the stable WuKongIM device id sent in every CONNECT.
+// Call once before Run; the id is read only on the (single) connect path.
+// Empty leaves the per-connection random fallback in place.
+func (c *Connector) SetDeviceID(id string) {
+	c.deviceID = id
 }

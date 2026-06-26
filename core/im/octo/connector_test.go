@@ -6,10 +6,12 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/lml2468/octobuddy/core/persona"
 	"github.com/lml2468/octobuddy/core/router"
 	"github.com/lml2468/octobuddy/core/trigger"
@@ -41,6 +43,63 @@ func TestConnectorAwaitsTokenBeforeRegister(t *testing.T) {
 	}
 	if n := atomic.LoadInt32(&hits); n != 0 {
 		t.Fatalf("connector must not hit the API without a token, got %d requests", n)
+	}
+}
+
+// TestReconnectDoesNotReRegister proves the duplicate-login-kick fix: after the
+// first successful register, a plain transport drop must reconnect by REUSING
+// the cached registration, NOT by calling /v1/bot/register again (which the
+// server turns into an UpdateIMToken that kicks the freshly-rebuilt session).
+func TestReconnectDoesNotReRegister(t *testing.T) {
+	var registerHits, wsHits int32
+	connack := buildConnack(t)
+	upgrader := websocket.Upgrader{}
+
+	mux := http.NewServeMux()
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	mux.HandleFunc("/v1/bot/register", func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&registerHits, 1)
+		// ws_url must share host:port with apiURL (validateWSURL) and be ws://
+		// since the test apiURL is http://.
+		wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws"
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"robot_id": "bot-uid", "im_token": "tok", "ws_url": wsURL,
+			"api_url": srv.URL, "owner_uid": "owner-uid",
+		})
+	})
+	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
+		c, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		atomic.AddInt32(&wsHits, 1)
+		if _, _, err := c.ReadMessage(); err != nil { // CONNECT
+			return
+		}
+		if err := c.WriteMessage(websocket.BinaryMessage, connack); err != nil {
+			return
+		}
+		// Drop the connection right after the handshake to force a reconnect.
+	})
+
+	c := NewConnector(NewRESTClient(srv.URL, func() string { return "tok" }))
+	c.reconnectBase = 5 * time.Millisecond // keep the test fast
+	c.reconnectMax = 5 * time.Millisecond
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	_ = c.Run(ctx) // returns once ctx expires
+
+	// Many WS reconnects (drop-after-handshake loops at reconnectBase cadence)…
+	if n := atomic.LoadInt32(&wsHits); n < 2 {
+		t.Fatalf("expected multiple WS reconnects, got %d", n)
+	}
+	// …but exactly ONE register (the initial one); reconnects reuse the cache.
+	if n := atomic.LoadInt32(&registerHits); n != 1 {
+		t.Fatalf("reconnect must not re-register: got %d register hits, want 1", n)
 	}
 }
 
