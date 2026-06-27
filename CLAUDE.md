@@ -45,7 +45,23 @@ zsh scripts/run-dev.sh --preview           # UI preview: mock data, no daemon (O
 # Package a distributable OctoBuddy.app (+ .zip); embeds octobuddy-daemon, signs inside-out.
 # ad-hoc by default; pass the identity to Developer-sign, a profile to notarize.
 OCTOBUDDY_SIGN_IDENTITY="Apple Development: …" zsh scripts/package-desktop.sh
+
+# Cut a release — the ONLY supported way. Reads ./VERSION, tags vX.Y.Z, packages +
+# signs + notarizes the macOS app, cross-compiles all daemon binaries, and creates
+# the GitHub Release with every asset attached. Run on macOS (needs the Keychain
+# signing cert + notarytool profile). Bump ./VERSION, commit, then:
+zsh scripts/release.sh
 ```
+
+**Releasing**: always go through `scripts/release.sh` — never hand-roll
+`gh release create`. The script attaches the 7 release assets the project ships
+(macOS universal `.app` zip + five `octobuddy-daemon-*` binaries + `checksums.txt`);
+a manual `gh release create` produces a release with only GitHub's auto source-code
+tarballs and no usable artifacts. The flow is: bump `/VERSION` (single source of
+truth) → commit (via PR; `main` rejects direct pushes) → `zsh scripts/release.sh`.
+The script is idempotent on an existing tag that points at HEAD, but it calls
+`gh release create`, so a release for that tag must NOT already exist — if one was
+created by mistake, `gh release delete <tag>` (keeps the tag) before re-running.
 
 The desktop GUI's own visual-iteration loop is **preview mode**: launch the built
 binary with `OCTOBUDDY_PREVIEW=1` (optional `OCTOBUDDY_PREVIEW_THEME=dark|light`,
