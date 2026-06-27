@@ -2,6 +2,7 @@
   import type { Message } from "../store.svelte";
   import { store } from "../store.svelte";
   import { renderMarkdown, onMarkdownCopyClick } from "../markdown";
+  import { formatMsgTime } from "../time";
   import Avatar from "./Avatar.svelte";
   import StepCard from "./StepCard.svelte";
 
@@ -9,6 +10,22 @@
 
   const isUser = $derived(message.role === "user");
   const isTool = $derived(message.role === "tool");
+  // A pending assistant message is the in-flight turn: its step card spins
+  // (live) and, until text arrives, it shows typing dots instead of an answer
+  // bubble. The SAME DOM node becomes the final reply when text fills in —
+  // that in-place mutation is what removes the live→final redraw/flash.
+  const isPending = $derived(message.role === "assistant" && !!message.pending);
+  // Typing dots show ONLY before the first step arrives. Once a step exists the
+  // step card (with its spinning last row) is the live affordance, so the dots
+  // would be a redundant second indicator stacked beneath it — mirror the
+  // original mutually-exclusive "steps ELSE dots" behavior.
+  const showTyping = $derived(isPending && !message.steps?.length);
+  // Render the answer bubble for a user message (it may carry only attachment
+  // chips with empty text) or any non-empty assistant text. An assistant
+  // message with empty text — a pending placeholder, or a finalized tool-only /
+  // empty reply that still has a step card — renders NO bubble, so no blank
+  // bubble appears beneath the card.
+  const showBubble = $derived(isUser || !!message.text);
   const html = $derived(!isUser && !isTool ? renderMarkdown(message.text) : "");
   function fmtBytes(n: number): string {
     if (n < 1024) return `${n} B`;
@@ -33,6 +50,10 @@
  // messages have neither and stay unlabeled — the operator knows they
  // typed it.
   const showSenderLabel = $derived(isUser && (message.senderName || message.senderUid));
+  // Per-message time label (WeChat/iMessage style — see formatMsgTime). Empty
+  // for ts:0 rows (preview seeds) so the `{#if}` hides it rather than stamping
+  // a 1970 time.
+  const timeLabel = $derived(formatMsgTime(message.ts));
 
   let copied = $state(false);
   let copyTimer: ReturnType<typeof setTimeout> | undefined;
@@ -64,11 +85,20 @@
         <div class="sender" title={message.senderUid || ""}>{senderLabel}</div>
       {/if}
       {#if !isUser && message.steps?.length}
- <!-- The process card that stayed attached after the turn: the tool calls /
-             thinking this reply came from, all ✓. Sits above the answer bubble,
-             sharing the column's width cap. Restored from history on reload. -->
-        <StepCard steps={message.steps} />
+ <!-- The process card. LIVE while the turn is in flight (last step spins),
+             then all ✓ once the reply lands — the same StepCard instance
+             throughout, since this is one persistent message node (no remount =
+             no flash). Restored from history on reload. -->
+        <StepCard steps={message.steps} live={isPending} />
       {/if}
+      {#if showTyping}
+ <!-- In-flight turn, no step card yet: typing dots in place of the bubble.
+             Once a step arrives the card (with its spinning row) is the live
+             indicator and these dots are suppressed. When text lands the same
+             node renders the answer bubble — no remount of avatar / step card. -->
+        <div class="typing" aria-label="对方正在输入"><span></span><span></span><span></span></div>
+      {/if}
+      {#if showBubble}
       <div
         class="bubble"
         class:user={isUser}
@@ -146,17 +176,53 @@
         <div class="md" onclick={onMarkdownCopyClick} role="presentation">{@html html}</div>
       {/if}
       </div>
+      {/if}
+      {#if timeLabel && showBubble}
+        <!-- Send-time label under the bubble. Aligns to the bubble's leading
+             edge (right for user rows via .row.user, left otherwise). Muted
+             mono so it reads as metadata, not content. Shown only when a bubble
+             renders (skipped for the pending placeholder and for a finalized
+             card-only reply, which have no bubble to stamp). -->
+        <div class="time">{timeLabel}</div>
+      {/if}
     </div>
   </div>
 {/if}
 
 <style>
-  .row { display: flex; gap: 10px; align-items: flex-start; max-width: 100%; animation: rise 0.28s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+  .row { display: flex; gap: 10px; align-items: flex-start; max-width: 100%; }
   .row.user { flex-direction: row-reverse; }
+ /* The entry animation lives on .bubble, NOT .row. The live step card shown
+    during the turn (Transcript's awaiting block) carries over to sit above the
+    answer bubble when session.reply lands; animating the whole row would make
+    that already-visible card blink out and redraw on the swap (the "flash" on
+    final response). Scoping the rise to the bubble lets the card stay put while
+    only the new answer bubble animates in. */
+  .bubble { animation: rise 0.28s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
   @keyframes rise { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: none; } }
-  @media (prefers-reduced-motion: reduce) { .row { animation: none; } }
+  @media (prefers-reduced-motion: reduce) { .bubble { animation: none; } }
 
   .av { flex: 0 0 auto; margin-top: 1px; }
+
+ /* Typing dots shown while a pending turn has no answer text yet. Sits in the
+    bubble's slot inside .bubble-col; when text arrives the same message node
+    renders the answer bubble instead — no remount of the avatar/step card. */
+  .typing { display: inline-flex; gap: 5px; padding: 13px 14px; background: var(--in-bubble); border-radius: var(--bubble-radius); border-top-left-radius: 3px; box-shadow: 0 1px 1.5px rgba(20,22,28,0.08); }
+  .typing span { width: 6px; height: 6px; border-radius: 50%; background: var(--ink-faint); animation: bounce 1.2s infinite ease-in-out; }
+  .typing span:nth-child(2) { animation-delay: 0.15s; }
+  .typing span:nth-child(3) { animation-delay: 0.3s; }
+  @keyframes bounce { 0%, 60%, 100% { transform: translateY(0); opacity: 0.4; } 30% { transform: translateY(-4px); opacity: 1; } }
+
+ /* Send-time label under the bubble. Mono + muted so it reads as metadata.
+    Column alignment (flex-start / flex-end) puts it under the bubble's leading
+    edge for in/out rows respectively. */
+  .time {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--ink-faint);
+    padding: 0 4px;
+    white-space: nowrap;
+  }
 
  /* bubble-col stacks the sender-name label (when shown) above the bubble.
     On user (row-reverse) rows the label aligns to the right edge so it

@@ -34,7 +34,11 @@
     return `${Math.floor(d / 86400)} 天前`;
   }
   const preview = (s: any) =>
-    s.awaiting ? "正在回复…" : (s.messages.at(-1)?.text ?? s.preview ?? "暂无消息");
+ // `||` not `??`: the last message can be the in-flight pending placeholder
+ // (empty text, in the turnDone→reply gap) or a finalized tool-only reply
+ // (empty text, step card only). `??` would return that "" and blank the row
+ // subtitle; `||` falls through to the prior preview / 暂无消息 instead.
+    s.awaiting ? "正在回复…" : (s.messages.at(-1)?.text || s.preview || "暂无消息");
 
  // In-app light/dark toggle (persisted). The store also honours ?theme=.
  // The button shows the icon for the OPPOSITE state — sun while in dark

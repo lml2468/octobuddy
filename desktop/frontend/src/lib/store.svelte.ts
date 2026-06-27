@@ -70,6 +70,14 @@ export interface Message {
   // persisted history on reload. Undefined for user messages and step-less
   // replies (no card rendered).
   steps?: ProcStep[];
+  // pending marks an in-flight assistant turn: a placeholder message that lives
+  // in messages[] from turnStart through session.reply, carrying the live step
+  // card (last step spinning) and — until text arrives — a typing indicator
+  // instead of an answer bubble. On reply we MUTATE this same node (fill .text,
+  // mark steps done, clear pending) rather than pushing a new message, so the
+  // avatar + step card never unmount across the live→final transition (no
+  // redraw/flash). Live-only: never persisted; reloads rebuild from history.
+  pending?: boolean;
 }
 
 // ProcStep is one process item shown in the status strip: a tool call or a
@@ -92,23 +100,55 @@ export interface ProcStep {
   status: "running" | "done";
 }
 
-// ProcState is the live, in-flight process for a session's current turn — the
-// tools/thinking the agent is doing right now. The final answer is NOT tracked
-// here: the gateway sends it whole in session.reply (the same assembled text it
-// persists), so we never reconstruct it from text deltas. Cleared on reply.
-export interface ProcState {
-  steps: ProcStep[];   // process items this turn (tools, thinking markers)
-  active: boolean;     // a turn is in flight
-}
-
-const emptyProc = (): ProcState => ({ steps: [], active: false });
-
-// finishLastStep flips the last still-running step to "done" — called when the
-// next step begins (a new tool/thinking, a toolResult, or the final reply) so
-// at most one step shows the spinner at a time and completed steps get a ✓.
-const finishLastStep = (p: ProcState): void => {
-  const last = p.steps[p.steps.length - 1];
+// finishLast flips the last still-running step to "done" — called when the next
+// step begins (a new tool/thinking, a toolResult, or the final reply) so at
+// most one step shows the spinner at a time and completed steps get a ✓.
+const finishLast = (steps: ProcStep[]): void => {
+  const last = steps[steps.length - 1];
   if (last && last.status === "running") last.status = "done";
+};
+
+// pendingMsg returns the session's in-flight assistant placeholder, if any —
+// the single message that carries the live step card across the whole turn. The
+// placeholder is ALWAYS the last message while pending (ensurePending pushes it,
+// session.reply finalizes it in place, and per-session turn serialization means
+// nothing is appended after it mid-turn), so a tail check is O(1) — no full scan
+// per streamed event on a growing transcript.
+const pendingMsg = (s: Session): Message | undefined => {
+  const last = s.messages[s.messages.length - 1];
+  return last?.pending ? last : undefined;
+};
+
+// ensurePending returns the in-flight assistant placeholder, creating one at the
+// end of the transcript if absent. This is the node that survives from turnStart
+// through session.reply: tool/thinking events mutate its .steps, reply fills its
+// .text in place — so the avatar + step card never unmount across the live→final
+// transition (the source of the redraw/flash when the live block was separate
+// from the answer bubble).
+const ensurePending = (s: Session): Message => {
+  let m = pendingMsg(s);
+  if (!m) {
+    m = { id: newId(), role: "assistant", text: "", ts: Date.now() / 1000, steps: [], pending: true };
+    s.messages.push(m);
+ // Mark the session awaiting on creation so a placeholder born from a stray
+ // tool/text/thinking event (one with no preceding turnStart — e.g. a
+ // mid-stream reconnect) is still reachable by the awaiting-gated cleanup
+ // paths (reconnect drop + stuck-turn sweep). Without this, such an orphan
+ // would spin forever. turnStart sets these too; re-setting is harmless.
+    s.awaiting = true;
+    if (!s.awaitingSince) s.awaitingSince = Date.now();
+  }
+  return m;
+};
+
+// dropPending removes the in-flight assistant placeholder — used when a turn is
+// abandoned without a reply (reset, reconnect, stuck-turn sweep) so a spinning
+// card doesn't linger forever. The placeholder is always the tail (see
+// pendingMsg), so pop it: O(1), and a no-op turn (the common case) avoids
+// copying + reactively invalidating the whole transcript array.
+const dropPending = (s: Session): void => {
+  const last = s.messages[s.messages.length - 1];
+  if (last?.pending) s.messages.pop();
 };
 
 export interface Session {
@@ -133,7 +173,6 @@ export interface Session {
  // a daemon crash / control-socket drop mid-turn left the typing indicator
  // hanging forever and the only escape was sending another message.
   awaitingSince: number;
-  proc: ProcState;    // live process info for the status box (not in the transcript)
   inputTokens: number;
   outputTokens: number;
   cachedInputTokens: number;
@@ -338,24 +377,20 @@ class Store {
     }
     const s: Session = {
       botId: "main", key: "console", channelType: 1, title: "Console", awaiting: true, awaitingSince: Date.now(),
-      proc: {
-        active: true,
- // Process for the in-flight turn: thinking + tool calls only. The
- // answer-in-progress is NOT here — the chat shows a working indicator
- // until the whole reply arrives in session.reply.
-        steps: [
-          { id: newId(), kind: "tool", text: "List directory contents", detail: "Bash(ls -la)", status: "done" },
-          { id: newId(), kind: "thinking", text: "thinking…", status: "done" },
-          { id: newId(), kind: "tool", text: "Read(proto/README.md)", status: "running" },
-        ],
-      },
       inputTokens: 1450, outputTokens: 92, cachedInputTokens: 1200, costUsd: 0.0123, lastActivity: Date.now(), messages: [
-        { id: newId(), role: "user", text: "List the files in the project root and summarize what this repo does.", ts: 0 },
-        { id: newId(), role: "assistant", text: "It's a **Go + Svelte** monorepo:\n\n- `core/` — the `octobuddy-daemon` gateway daemon\n- `desktop/` — this Wails app\n- `proto/` — the control-bus contract\n\n```go\nfunc main() {\n    app.Run()\n}\n```\n\nWant me to open the README?", ts: 0, steps: [
+        { id: newId(), role: "user", text: "List the files in the project root and summarize what this repo does.", ts: Date.now() / 1000 - 320 },
+        { id: newId(), role: "assistant", text: "It's a **Go + Svelte** monorepo:\n\n- `core/` — the `octobuddy-daemon` gateway daemon\n- `desktop/` — this Wails app\n- `proto/` — the control-bus contract\n\n```go\nfunc main() {\n    app.Run()\n}\n```\n\nWant me to open the README?", ts: Date.now() / 1000 - 300, steps: [
           { id: newId(), kind: "tool", text: "List directory contents", detail: "Bash(ls -la)", status: "done" },
           { id: newId(), kind: "tool", text: "Read project README", detail: "Read(README.md)", status: "done" },
         ] },
-        { id: newId(), role: "user", text: "yes, and the proto contract too", ts: 0 },
+        { id: newId(), role: "user", text: "yes, and the proto contract too", ts: Date.now() / 1000 - 8 },
+ // In-flight assistant placeholder (pending): empty text → renders the live
+ // step card with the last step spinning, exactly as during a real turn.
+        { id: newId(), role: "assistant", text: "", ts: Date.now() / 1000, pending: true, steps: [
+          { id: newId(), kind: "tool", text: "List directory contents", detail: "Bash(ls -la)", status: "done" },
+          { id: newId(), kind: "thinking", text: "thinking…", status: "done" },
+          { id: newId(), kind: "tool", text: "Read(proto/README.md)", status: "running" },
+        ] },
       ],
     };
     this.sessions = [s];
@@ -370,7 +405,7 @@ class Store {
     ];
     for (const [key, title, prev, ago] of hist) {
       this.sessions.push({
-        botId: "main", key, channelType: key.startsWith("group:") ? 2 : 1, title, messages: [], awaiting: false, awaitingSince: 0, proc: emptyProc(),
+        botId: "main", key, channelType: key.startsWith("group:") ? 2 : 1, title, messages: [], awaiting: false, awaitingSince: 0,
         inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, costUsd: 0,
         lastActivity: Date.now() - ago, preview: prev,
       });
@@ -530,7 +565,7 @@ class Store {
     const s = this.currentSession;
     if (s) {
       s.messages = [];
-      s.proc = emptyProc();
+      s.awaiting = false;   // messages=[] already dropped any in-flight pending placeholder
  // Bump the epoch so any History response issued before this reset
  // (still in flight over the control bus) is dropped on arrival
  // instead of restoring the rows the operator just cleared. Also
@@ -627,20 +662,34 @@ class Store {
       case "session.activity": {
         const s = this.route(env);
         if (!s) break;
-        if (env.body.kind === "turnStart") { s.awaiting = true; s.awaitingSince = Date.now(); s.proc = emptyProc(); s.proc.active = true; }
+        if (env.body.kind === "turnStart") {
+ // Open the in-flight assistant placeholder NOW (empty text → renders the
+ // typing dots) and keep it for the whole turn; tool/thinking events mutate
+ // its steps, session.reply fills its text in place. One stable node = no
+ // unmount/remount on the live→final swap (the redraw fix).
+          s.awaiting = true;
+          s.awaitingSince = Date.now();
+          dropPending(s);          // clear any orphan from a prior abandoned turn
+          ensurePending(s);
+        }
         else if (env.body.kind === "thinking") {
  // Thinking is process → step card. Finish the prior step, then add a
  // running thinking step (coalescing consecutive thinking markers).
-          s.proc.active = true;
-          const last = s.proc.steps[s.proc.steps.length - 1];
+          const m = ensurePending(s);
+          const last = m.steps![m.steps!.length - 1];
           if (!last || last.kind !== "thinking") {
-            finishLastStep(s.proc);
-            s.proc.steps.push({ id: newId(), kind: "thinking", text: "thinking…", status: "running" });
+            finishLast(m.steps!);
+            m.steps!.push({ id: newId(), kind: "thinking", text: "thinking…", status: "running" });
           }
         }
  // toolResult marks the previous step (the tool call) finished → ✓. It
- // carries no payload; it's purely the "running step done" signal.
-        else if (env.body.kind === "toolResult") finishLastStep(s.proc);
+ // carries no payload; it's purely the "running step done" signal. Use
+ // ensurePending (not a bare pendingMsg) so a toolResult arriving after the
+ // placeholder was dropped (sweep/reconnect) still resurrects the in-flight
+ // indicator, matching the thinking/tool/text handlers — otherwise the
+ // recreate-or-not behavior depended on which event type happened to arrive
+ // first after a drop. finishLast no-ops on an empty step list.
+        else if (env.body.kind === "toolResult") finishLast(ensurePending(s).steps!);
  // turnDone just clears the typing affordance; session.reply (next) is the
  // single point that delivers the answer into the chat.
         else if (env.body.kind === "turnDone") s.awaiting = false;
@@ -651,9 +700,9 @@ class Store {
         if (!s) break;
  // Model prose is NOT rendered mid-turn and NOT buffered: the chat shows a
  // working indicator, and the whole answer arrives authoritatively in
- // session.reply. We only keep the turn marked active. (This keeps the
- // final answer out of the step card by construction.)
-        s.proc.active = true;
+ // session.reply. We only keep the turn alive. (This keeps the final answer
+ // out of the step card by construction.)
+        ensurePending(s);
         s.lastActivity = Date.now();
         break;
       }
@@ -662,11 +711,11 @@ class Store {
         if (!s) break;
  // A tool call is process → step card. Finish the prior step (✓), then add
  // this tool as the new running step (◌).
-        s.proc.active = true;
-        finishLastStep(s.proc);
+        const m = ensurePending(s);
+        finishLast(m.steps!);
  // Prefer the daemon's readable summary; fall back to name(params) for an
  // older daemon. detail (raw name(params)) drives the expand affordance.
-        s.proc.steps.push({
+        m.steps!.push({
           id: newId(),
           kind: "tool",
           text: env.body.summary ?? `${env.body.name}(${env.body.params ?? ""})`,
@@ -681,15 +730,37 @@ class Store {
         if (!s) break;
  // The single point the answer enters the chat: the gateway sends the full
  // assembled assistant text here (the same text it persists), so we use it
- // verbatim — no client-side reconstruction. Snapshot the live steps onto
- // the assistant message (all done) so the card stays attached above the
- // bubble, then clear the live proc.
+ // verbatim — no client-side reconstruction. MUTATE the in-flight placeholder
+ // in place (fill text, mark steps done, clear pending) so the avatar + step
+ // card stay mounted and only the answer bubble fades in — no flash.
         const final = (env.body.text ?? "").trim();
-        finishLastStep(s.proc);
-        const steps = s.proc.steps.map((st) => ({ ...st, status: "done" as const }));
-        if (final) s.messages.push({ id: newId(), role: "assistant", text: final, ts: Date.now() / 1000, steps: steps.length ? steps : undefined });
+        const m = pendingMsg(s);
+        if (m) {
+ // Finalize the in-flight placeholder in place: fill text, stamp the final
+ // ts, drop the pending flag. The DOM node (avatar + step card) persists;
+ // only the answer bubble appears. Branch on steps: with steps, mark them ALL
+ // done (the running last one included) and keep the card; without, normalize
+ // to undefined so Bubble renders no card, and if there's no text either the
+ // node has nothing to show — drop it. (An empty-text reply that kept its card
+ // still renders no blank bubble; Bubble's showBubble suppresses it.)
+          m.text = final;
+          m.ts = Date.now() / 1000;
+          m.pending = false;
+          if (m.steps?.length) {
+            m.steps.forEach((st) => (st.status = "done"));
+          } else {
+            m.steps = undefined;
+            if (!final) dropPending(s);
+          }
+        } else if (final && s.awaiting) {
+ // No placeholder but a turn is genuinely in flight (a reply with no
+ // preceding activity events) — append the answer directly. Gated on
+ // `awaiting` so a late reply for an already-cancelled turn (swept / dropped
+ // on reconnect, the operator already saw the timeout error) can't silently
+ // re-inject an answer bubble into the transcript.
+          s.messages.push({ id: newId(), role: "assistant", text: final, ts: Date.now() / 1000 });
+        }
         s.awaiting = false;
-        s.proc = emptyProc();   // clear the live step card
         s.lastActivity = Date.now();
         break;
       }
@@ -767,7 +838,7 @@ class Store {
             for (const s of this.sessions) {
               if (s.awaiting) {
                 s.awaiting = false;
-                s.proc = emptyProc();
+                dropPending(s);
               }
             }
           }
@@ -804,7 +875,7 @@ class Store {
   private ensureSession(botId: string, key: string, initialActivity = Date.now(), channelType = 1): Session {
     let s = this.sessions.find((x) => x.botId === botId && x.key === key);
     if (!s) {
-      s = { botId, key, channelType, title: prettyTitle(key), messages: [], awaiting: false, awaitingSince: 0, proc: emptyProc(), inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, costUsd: 0, lastActivity: initialActivity };
+      s = { botId, key, channelType, title: prettyTitle(key), messages: [], awaiting: false, awaitingSince: 0, inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, costUsd: 0, lastActivity: initialActivity };
       this.sessions.push(s);
     } else if (channelType > 0) {
       s.channelType = channelType;
@@ -882,6 +953,13 @@ class Store {
       else slots.set(k, [m]);
     }
     const localOnly = s.messages.filter((m) => {
+ // A pending placeholder is live-only state for the in-flight turn, not a
+ // persisted row — always retain it (it stays at the tail) and never let it
+ // dedupe against a persisted row. This matters now that empty-text assistant
+ // rows can be persisted (tool-only replies keep their step card with text:"")
+ // — without this guard the pending placeholder (role:assistant, text:"")
+ // could match such a row and vanish mid-turn.
+      if (m.pending) return true;
       const k = `${m.role}\x00${m.text}\x00${Math.floor(m.ts)}`;
       const list = slots.get(k);
       if (list && list.length > 0) {
@@ -938,7 +1016,7 @@ class Store {
       if (s.awaiting && s.awaitingSince > 0 && now - s.awaitingSince > TURN_MAX_MS) {
         s.awaiting = false;
         s.awaitingSince = 0;
-        s.proc = emptyProc();
+        dropPending(s);
         this.setError("[turn] 长时间未收到响应，已取消等待 — 请重试或检查网关");
       }
     }
