@@ -37,7 +37,7 @@ func (s *EventSink) OnEvent(sessionKey string, ev agent.AgentEvent) {
 	case agent.KindThinking:
 		s.srv.Broadcast("session.activity", SessionActivityBody{BotID: s.botID, SessionKey: sessionKey, Kind: "thinking"})
 	case agent.KindToolUse:
-		s.srv.Broadcast("session.tool", SessionToolBody{BotID: s.botID, SessionKey: sessionKey, Name: ev.ToolName, Params: ev.ToolParams})
+		s.srv.Broadcast("session.tool", SessionToolBody{BotID: s.botID, SessionKey: sessionKey, Name: ev.ToolName, Params: ev.ToolParams, Summary: ev.ToolSummary, Detail: ev.ToolDetail})
 	case agent.KindToolResult:
 		s.srv.Broadcast("session.activity", SessionActivityBody{BotID: s.botID, SessionKey: sessionKey, Kind: "toolResult"})
 	case agent.KindTurnDone:

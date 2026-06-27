@@ -45,6 +45,12 @@ type Message struct {
 	// bubble to "You". Empty for assistant rows and legacy rows predating
 	// the column.
 	FromUID string
+	// Steps is the JSON array of process steps (tool calls / thinking) the
+	// agent took producing an assistant row, e.g.
+	// `[{"kind":"tool","text":"Read(README.md)"}]`. Persisted so a reload
+	// re-renders the step card above the reply bubble. Empty for user rows
+	// and legacy assistant rows predating the column.
+	Steps string
 	// Source classifies the row's origin. SourceUser (default human
 	// inbound), SourceCron (scheduler fire), SourceAssistant (bot reply).
 	// Persisted so the desktop GUI's "cron" corner badge survives a
@@ -99,6 +105,9 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 	if err := migrateMessagesAddFromUID(db); err != nil {
+		return nil, err
+	}
+	if err := migrateMessagesAddSteps(db); err != nil {
 		return nil, err
 	}
 	return &Store{db: db, now: time.Now}, nil
@@ -163,18 +172,21 @@ func (s *Store) AppendUser(sessionID, content, fromName, fromUID, source string)
 	if source == "" {
 		source = SourceUser
 	}
-	return s.appendMessage(sessionID, RoleUser, content, fromName, fromUID, source)
+	return s.appendMessage(sessionID, RoleUser, content, fromName, fromUID, source, "")
 }
 
-func (s *Store) AppendAssistant(sessionID, content, botName string) error {
-	return s.appendMessage(sessionID, RoleAssistant, content, botName, "", SourceAssistant)
+// AppendAssistant persists a bot reply. stepsJSON is the JSON array of process
+// steps the agent took this turn (tool calls / thinking), or "" when there were
+// none — replayed by the desktop to re-render the step card above the bubble.
+func (s *Store) AppendAssistant(sessionID, content, botName, stepsJSON string) error {
+	return s.appendMessage(sessionID, RoleAssistant, content, botName, "", SourceAssistant, stepsJSON)
 }
 
-func (s *Store) appendMessage(sessionID string, role Role, content, fromName, fromUID, source string) error {
+func (s *Store) appendMessage(sessionID string, role Role, content, fromName, fromUID, source, steps string) error {
 	now := s.now().Unix()
 	_, err := s.db.Exec(
-		`INSERT INTO messages(session_id, role, content, timestamp, from_name, from_uid, source) VALUES(?,?,?,?,?,?,?)`,
-		sessionID, string(role), content, now, fromName, fromUID, source)
+		`INSERT INTO messages(session_id, role, content, timestamp, from_name, from_uid, source, steps) VALUES(?,?,?,?,?,?,?,?)`,
+		sessionID, string(role), content, now, fromName, fromUID, source, steps)
 	if err != nil {
 		return fmt.Errorf("append %s: %w", role, err)
 	}
@@ -191,7 +203,7 @@ func (s *Store) appendMessage(sessionID string, role Role, content, fromName, fr
 // order (oldest first), for first-turn history injection.
 func (s *Store) RecentMessages(sessionID string, limit int) ([]Message, error) {
 	rows, err := s.db.Query(
-		`SELECT role, content, timestamp, COALESCE(from_name,''), COALESCE(from_uid,''), COALESCE(source,'user')
+		`SELECT role, content, timestamp, COALESCE(from_name,''), COALESCE(from_uid,''), COALESCE(source,'user'), COALESCE(steps,'')
 		 FROM messages WHERE session_id=? ORDER BY id DESC LIMIT ?`,
 		sessionID, limit)
 	if err != nil {
@@ -202,7 +214,7 @@ func (s *Store) RecentMessages(sessionID string, limit int) ([]Message, error) {
 	for rows.Next() {
 		var m Message
 		var role string
-		if err := rows.Scan(&role, &m.Content, &m.Timestamp, &m.FromName, &m.FromUID, &m.Source); err != nil {
+		if err := rows.Scan(&role, &m.Content, &m.Timestamp, &m.FromName, &m.FromUID, &m.Source, &m.Steps); err != nil {
 			return nil, err
 		}
 		m.Role = Role(role)

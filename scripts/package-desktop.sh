@@ -22,7 +22,15 @@ desktop="$repo_root/desktop"
 core="$repo_root/core"
 out="$repo_root/output"
 app_name="octobuddy"
-bundle="$desktop/bin/${app_name}.app"
+# Wails builds the bundle under its own APP_NAME (lowercase "octobuddy",
+# desktop/Taskfile.yml). We ship it as the brand-cased "OctoBuddy.app" (matches
+# CFBundleName + the name CLAUDE.md / the release zip advertise): the macOS
+# bundle DIRECTORY name is independent of CFBundleExecutable, so renaming the
+# directory after the Wails build is the whole change — executable, Info.plist,
+# and `wails3 dev` all keep the lowercase name. wails_bundle is the path Wails
+# emits; bundle is where we rename it to and what every step below operates on.
+wails_bundle="$desktop/bin/${app_name}.app"
+bundle="$desktop/bin/OctoBuddy.app"
 sign_identity="${OCTOBUDDY_SIGN_IDENTITY:-}"
 notary_profile="${OCTOBUDDY_NOTARY_PROFILE:-}"
 notary_key_path="${OCTOBUDDY_NOTARY_KEY_PATH:-}"
@@ -88,14 +96,21 @@ echo "▸ building the Wails app (.app bundle)…"
 # re-signed (hash changes) while its sidecar stays put → EnsureInstalled fails
 # closed on "sha256 mismatch" at runtime. Removing the bundle first makes each
 # package run hermetic (the helpers are re-copied fresh and the sidecar, when
-# octo is embedded, is computed against the final signed bytes).
-rm -rf "$bundle"
+# octo is embedded, is computed against the final signed bytes). Also clear the
+# stale bin/<app> intermediate binary: wails3's darwin:build:native does
+# `go build -o bin/<app>`, and go refuses to overwrite an existing non-object
+# file there (a prior universal lipo output), so a leftover aborts the build.
+rm -rf "$bundle" "$wails_bundle" "$desktop/bin/${app_name}"
 if [[ -n "$universal" ]]; then
   ( cd "$desktop" && wails3 task darwin:package:universal )
 else
   ( cd "$desktop" && wails3 task darwin:package )
 fi
-[[ -d "$bundle" ]] || { echo "✗ bundle not produced at $bundle"; exit 1; }
+[[ -d "$wails_bundle" ]] || { echo "✗ bundle not produced at $wails_bundle"; exit 1; }
+# Re-case to the shipped name. Done before signing so the seal covers the final
+# bundle (the directory name isn't part of the seal, but keeping all mutations
+# ahead of codesign keeps the flow uniform).
+mv "$wails_bundle" "$bundle"
 
 # Stamp the bundle's Info.plist with the release version so Finder → Get Info
 # and About dialogs reflect what we actually shipped (the source Info.plist

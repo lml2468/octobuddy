@@ -5,7 +5,6 @@
   import { store } from "./lib/store.svelte";
   import Sidebar from "./lib/components/Sidebar.svelte";
   import Transcript from "./lib/components/Transcript.svelte";
-  import StatusBar from "./lib/components/StatusBar.svelte";
   import Composer from "./lib/components/Composer.svelte";
   import TrafficLights from "./lib/components/TrafficLights.svelte";
   import WorkspacePanel from "./lib/components/WorkspacePanel.svelte";
@@ -256,7 +255,6 @@
           {/if}
         </header>
         <Transcript onpick={pick} />
-        <StatusBar />
         {#if store.isConsole}
           <Composer bind:this={composer} />
         {/if}

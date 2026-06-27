@@ -117,7 +117,14 @@ type AgentEvent struct {
 
 	// Tool fields for KindToolUse / KindToolResult.
 	ToolName   string
-	ToolParams string // truncated one-liner, for progress UI
+	ToolParams string // truncated one-liner — consumed by the IM tool-progress notice + CLI
+	// ToolSummary / ToolDetail feed the desktop step card: Summary is a
+	// human-readable one-liner (the tool input's "description", else
+	// Name(params)); Detail is the raw "Name(params)" shown when a step is
+	// expanded. Computed once in claude_parse so the live + persisted paths
+	// carry identical text.
+	ToolSummary string
+	ToolDetail  string
 
 	// Usage on KindTurnDone.
 	Usage *TokenUsage

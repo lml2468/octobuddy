@@ -64,6 +64,12 @@ export interface Message {
  // and persisted history rows have neither, and Bubble falls back to "You".
   senderUid?: string;
   senderName?: string;
+  // steps is the process card attached to an assistant message: the tool
+  // calls / thinking the agent did producing this reply, all "done". Set at
+  // session.reply time from the live proc (snapshot), and restored from
+  // persisted history on reload. Undefined for user messages and step-less
+  // replies (no card rendered).
+  steps?: ProcStep[];
 }
 
 // ProcStep is one process item shown in the status strip: a tool call or a
@@ -74,6 +80,16 @@ export interface ProcStep {
   id: string;
   kind: "tool" | "thinking";
   text: string;
+  // detail is the raw Name(params) shown when a tool step is expanded; the
+  // readable summary lives in `text`. Absent for thinking steps, for tool
+  // calls whose summary already is the Name(params), and for legacy persisted
+  // steps — all render non-expandable.
+  detail?: string;
+  // status drives the per-row affordance: "running" → spinner ◌, "done" → ✓.
+  // Live steps start "running" and flip to "done" when the next step begins
+  // (or the turn ends); steps snapshotted onto an assistant Message and steps
+  // restored from history are all "done".
+  status: "running" | "done";
 }
 
 // ProcState is the live, in-flight process for a session's current turn — the
@@ -86,6 +102,14 @@ export interface ProcState {
 }
 
 const emptyProc = (): ProcState => ({ steps: [], active: false });
+
+// finishLastStep flips the last still-running step to "done" — called when the
+// next step begins (a new tool/thinking, a toolResult, or the final reply) so
+// at most one step shows the spinner at a time and completed steps get a ✓.
+const finishLastStep = (p: ProcState): void => {
+  const last = p.steps[p.steps.length - 1];
+  if (last && last.status === "running") last.status = "done";
+};
 
 export interface Session {
   botId: string;
@@ -150,6 +174,24 @@ interface Envelope {
 
 let uid = 0;
 const newId = () => `m${++uid}`;
+
+// parseSteps restores an assistant message's step card from the persisted JSON
+// (wire HistoryMessage.steps). Tolerant by design: undefined/empty/garbled or a
+// non-array yields undefined (no card); each valid {kind,text} entry is stamped
+// with a fresh id and status "done" (history steps are all complete).
+const parseSteps = (raw: unknown): ProcStep[] | undefined => {
+  if (typeof raw !== "string" || !raw) return undefined;
+  try {
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr)) return undefined;
+    const steps = arr
+      .filter((e) => e && (e.kind === "tool" || e.kind === "thinking") && typeof e.text === "string")
+      .map((e) => ({ id: newId(), kind: e.kind as "tool" | "thinking", text: e.text as string, detail: typeof e.detail === "string" && e.detail ? e.detail : undefined, status: "done" as const }));
+    return steps.length ? steps : undefined;
+  } catch {
+    return undefined;
+  }
+};
 
 function prettyTitle(key: string): string {
   if (key === CONSOLE_UID || key === "console") return "Console";
@@ -302,14 +344,17 @@ class Store {
  // answer-in-progress is NOT here — the chat shows a working indicator
  // until the whole reply arrives in session.reply.
         steps: [
-          { id: newId(), kind: "tool", text: "Bash(ls -la)" },
-          { id: newId(), kind: "thinking", text: "thinking…" },
-          { id: newId(), kind: "tool", text: "Read(proto/README.md)" },
+          { id: newId(), kind: "tool", text: "List directory contents", detail: "Bash(ls -la)", status: "done" },
+          { id: newId(), kind: "thinking", text: "thinking…", status: "done" },
+          { id: newId(), kind: "tool", text: "Read(proto/README.md)", status: "running" },
         ],
       },
       inputTokens: 1450, outputTokens: 92, cachedInputTokens: 1200, costUsd: 0.0123, lastActivity: Date.now(), messages: [
         { id: newId(), role: "user", text: "List the files in the project root and summarize what this repo does.", ts: 0 },
-        { id: newId(), role: "assistant", text: "It's a **Go + Svelte** monorepo:\n\n- `core/` — the `octobuddy-daemon` gateway daemon\n- `desktop/` — this Wails app\n- `proto/` — the control-bus contract\n\n```go\nfunc main() {\n    app.Run()\n}\n```\n\nWant me to open the README?", ts: 0 },
+        { id: newId(), role: "assistant", text: "It's a **Go + Svelte** monorepo:\n\n- `core/` — the `octobuddy-daemon` gateway daemon\n- `desktop/` — this Wails app\n- `proto/` — the control-bus contract\n\n```go\nfunc main() {\n    app.Run()\n}\n```\n\nWant me to open the README?", ts: 0, steps: [
+          { id: newId(), kind: "tool", text: "List directory contents", detail: "Bash(ls -la)", status: "done" },
+          { id: newId(), kind: "tool", text: "Read project README", detail: "Read(README.md)", status: "done" },
+        ] },
         { id: newId(), role: "user", text: "yes, and the proto contract too", ts: 0 },
       ],
     };
@@ -584,11 +629,18 @@ class Store {
         if (!s) break;
         if (env.body.kind === "turnStart") { s.awaiting = true; s.awaitingSince = Date.now(); s.proc = emptyProc(); s.proc.active = true; }
         else if (env.body.kind === "thinking") {
- // Thinking is process → status strip. Coalesce consecutive markers.
+ // Thinking is process → step card. Finish the prior step, then add a
+ // running thinking step (coalescing consecutive thinking markers).
           s.proc.active = true;
           const last = s.proc.steps[s.proc.steps.length - 1];
-          if (!last || last.kind !== "thinking") s.proc.steps.push({ id: newId(), kind: "thinking", text: "thinking…" });
+          if (!last || last.kind !== "thinking") {
+            finishLastStep(s.proc);
+            s.proc.steps.push({ id: newId(), kind: "thinking", text: "thinking…", status: "running" });
+          }
         }
+ // toolResult marks the previous step (the tool call) finished → ✓. It
+ // carries no payload; it's purely the "running step done" signal.
+        else if (env.body.kind === "toolResult") finishLastStep(s.proc);
  // turnDone just clears the typing affordance; session.reply (next) is the
  // single point that delivers the answer into the chat.
         else if (env.body.kind === "turnDone") s.awaiting = false;
@@ -600,7 +652,7 @@ class Store {
  // Model prose is NOT rendered mid-turn and NOT buffered: the chat shows a
  // working indicator, and the whole answer arrives authoritatively in
  // session.reply. We only keep the turn marked active. (This keeps the
- // final answer out of the status strip by construction.)
+ // final answer out of the step card by construction.)
         s.proc.active = true;
         s.lastActivity = Date.now();
         break;
@@ -608,9 +660,19 @@ class Store {
       case "session.tool": {
         const s = this.route(env);
         if (!s) break;
- // A tool call is process → status strip.
+ // A tool call is process → step card. Finish the prior step (✓), then add
+ // this tool as the new running step (◌).
         s.proc.active = true;
-        s.proc.steps.push({ id: newId(), kind: "tool", text: `${env.body.name}(${env.body.params ?? ""})` });
+        finishLastStep(s.proc);
+ // Prefer the daemon's readable summary; fall back to name(params) for an
+ // older daemon. detail (raw name(params)) drives the expand affordance.
+        s.proc.steps.push({
+          id: newId(),
+          kind: "tool",
+          text: env.body.summary ?? `${env.body.name}(${env.body.params ?? ""})`,
+          detail: env.body.detail || undefined,
+          status: "running",
+        });
         s.lastActivity = Date.now();
         break;
       }
@@ -619,11 +681,15 @@ class Store {
         if (!s) break;
  // The single point the answer enters the chat: the gateway sends the full
  // assembled assistant text here (the same text it persists), so we use it
- // verbatim — no client-side reconstruction. Then clear the status strip.
+ // verbatim — no client-side reconstruction. Snapshot the live steps onto
+ // the assistant message (all done) so the card stays attached above the
+ // bubble, then clear the live proc.
         const final = (env.body.text ?? "").trim();
-        if (final) s.messages.push({ id: newId(), role: "assistant", text: final, ts: Date.now() / 1000 });
+        finishLastStep(s.proc);
+        const steps = s.proc.steps.map((st) => ({ ...st, status: "done" as const }));
+        if (final) s.messages.push({ id: newId(), role: "assistant", text: final, ts: Date.now() / 1000, steps: steps.length ? steps : undefined });
         s.awaiting = false;
-        s.proc = emptyProc();   // clear the status strip
+        s.proc = emptyProc();   // clear the live step card
         s.lastActivity = Date.now();
         break;
       }
@@ -789,6 +855,10 @@ class Store {
       // fromName may have been empty at append time) and a nameless group
       // row never collapses to "You" on reload.
       senderUid: r.fromUid || undefined,
+      // Restore the assistant's step card from persisted JSON so a reloaded
+      // reply shows its ✓ steps. parseSteps tolerates missing/legacy/garbled
+      // values (returns undefined → no card).
+      steps: parseSteps((r as any).steps),
     }));
     if (s.messages.length === 0) {
       s.messages = persisted;

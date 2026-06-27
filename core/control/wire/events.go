@@ -31,6 +31,12 @@ type SessionToolBody struct {
 	SessionKey string `json:"sessionKey"`
 	Name       string `json:"name"`
 	Params     string `json:"params"`
+	// Summary is the human-readable one-liner the step card shows by default
+	// (the tool input's "description", else Name(params)). Detail is the raw
+	// Name(params) shown when the user expands the step. Both computed daemon-
+	// side so the live card and the persisted card read identically.
+	Summary string `json:"summary,omitempty"`
+	Detail  string `json:"detail,omitempty"`
 }
 
 type SessionUsageBody struct {
@@ -115,6 +121,13 @@ type HistoryMessage struct {
 	// stored name. Empty for assistant rows and legacy rows predating the
 	// store column.
 	FromUID string `json:"fromUid,omitempty"`
+	// Steps is the raw JSON array of process steps (tool calls / thinking) an
+	// assistant row's turn produced, e.g.
+	// `[{"kind":"tool","text":"Read(README.md)"}]`. Passed through verbatim
+	// from the store (not re-modeled here) so the desktop re-renders the step
+	// card above a reloaded reply bubble. Empty for user rows and legacy
+	// assistant rows predating the store column.
+	Steps string `json:"steps,omitempty"`
 }
 
 // HistoryResponse is the session.history response. It echoes the requested botId

@@ -39,6 +39,14 @@ CREATE TABLE IF NOT EXISTS messages (
   -- the badge and conflate scheduled prompts with operator-typed ones).
   -- Replaces the legacy 'cron INTEGER' column; migration backfills.
   source     TEXT NOT NULL DEFAULT 'user',
+  -- steps is the JSON array of process steps (tool calls / thinking markers)
+  -- the agent took producing an assistant row, e.g.
+  -- [{"kind":"tool","text":"Read(README.md)"},…]. Persisted so a chat-window
+  -- reload re-renders the step card attached above the reply bubble (the live
+  -- steps stream over the control bus during the turn, but vanish on reconnect
+  -- without this). Empty for user rows and legacy assistant rows predating the
+  -- column; added by migrateMessagesAddSteps.
+  steps      TEXT,
   FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
 );
 
@@ -319,6 +327,24 @@ func migrateMessagesAddFromUID(db *sql.DB) error {
 	}
 	if _, err := db.Exec(`ALTER TABLE messages ADD COLUMN from_uid TEXT`); err != nil {
 		return fmt.Errorf("migrate messages.from_uid add column: %w", err)
+	}
+	return nil
+}
+
+// migrateMessagesAddSteps adds the messages.steps column to DBs created before
+// it existed. No backfill: legacy assistant rows predate step capture, so they
+// keep NULL and render without a step card. Idempotent — a no-op once present.
+// Mirrors migrateMessagesAddFromUID.
+func migrateMessagesAddSteps(db *sql.DB) error {
+	cols, err := messagesColumnSet(db)
+	if err != nil {
+		return err
+	}
+	if _, has := cols["steps"]; has {
+		return nil
+	}
+	if _, err := db.Exec(`ALTER TABLE messages ADD COLUMN steps TEXT`); err != nil {
+		return fmt.Errorf("migrate messages.steps add column: %w", err)
 	}
 	return nil
 }

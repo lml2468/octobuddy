@@ -107,11 +107,14 @@ func parseClaudeAssistantLine(msg *claudeMessage, line string) []AgentEvent {
 				evs = append(evs, AgentEvent{Kind: KindThinking, Text: b.Text, Raw: line})
 			}
 		case "tool_use":
+			summary, detail := toolSummary(b.Name, b.Input)
 			evs = append(evs, AgentEvent{
-				Kind:       KindToolUse,
-				ToolName:   b.Name,
-				ToolParams: truncateParams(b.Input),
-				Raw:        line,
+				Kind:        KindToolUse,
+				ToolName:    b.Name,
+				ToolParams:  truncateParams(b.Input),
+				ToolSummary: summary,
+				ToolDetail:  detail,
+				Raw:         line,
 			})
 		}
 	}
@@ -167,15 +170,40 @@ func truncateParams(raw json.RawMessage) string {
 	}
 	s := string(raw)
 	s = strings.Join(strings.Fields(s), " ") // collapse whitespace/newlines
-	const max = 120
-	if len(s) > max {
-		// Back up to a rune boundary so we never split a multibyte codepoint
-		// and emit invalid UTF-8 into the progress event.
-		cut := max
-		for cut > 0 && !utf8.RuneStart(s[cut]) {
-			cut--
-		}
-		s = s[:cut] + "…"
+	return clip(s, 120)
+}
+
+// clip caps s at max bytes, backing up to a rune boundary so we never split a
+// multibyte codepoint, and appends an ellipsis when it truncates. Shared by the
+// param one-liner and the tool summary so both stay valid UTF-8 one-liners.
+func clip(s string, max int) string {
+	if len(s) <= max {
+		return s
 	}
-	return s
+	cut := max
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "…"
+}
+
+// toolSummary derives the desktop step card's two strings for a tool call:
+//   - summary: a human-readable one-liner — the tool input's top-level
+//     "description" field (Bash and many built-in tools carry one), falling
+//     back to detail when absent/blank.
+//   - detail: the raw "Name(params)" shown when the step is expanded.
+//
+// Computed once here so the live path (SessionToolBody) and the persisted path
+// (turnStep) carry identical text — the frontend never re-parses input.
+func toolSummary(name string, input json.RawMessage) (summary, detail string) {
+	detail = name + "(" + truncateParams(input) + ")"
+	var probe struct {
+		Description string `json:"description"`
+	}
+	// Tolerate non-object / malformed input — just fall back to detail.
+	_ = json.Unmarshal(input, &probe)
+	if d := strings.TrimSpace(probe.Description); d != "" {
+		return clip(strings.Join(strings.Fields(d), " "), 120), detail
+	}
+	return detail, detail
 }

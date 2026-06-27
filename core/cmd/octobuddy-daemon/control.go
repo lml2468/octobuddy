@@ -328,6 +328,11 @@ func historyFromMessages(msgs []store.Message) []control.HistoryMessage {
 			// have been empty (cache miss) at append time.
 			row.FromUID = m.FromUID
 		}
+		if m.Role == store.RoleAssistant {
+			// Forward the persisted step JSON verbatim so a reloaded reply
+			// bubble re-renders its step card.
+			row.Steps = m.Steps
+		}
 		out = append(out, row)
 	}
 	return out

@@ -3,6 +3,7 @@
   import Bubble from "./Bubble.svelte";
   import Avatar from "./Avatar.svelte";
   import EmptyState from "./EmptyState.svelte";
+  import StepCard from "./StepCard.svelte";
 
   let { onpick }: { onpick: (prompt: string) => void } = $props();
 
@@ -54,11 +55,17 @@
         <Bubble message={m} botId={session?.botId} />
       {/each}
       {#if session?.awaiting}
- <!-- The answer streams into the status box (process), not here. The chat
-             shows a working indicator until the final answer lands at turn end. -->
+ <!-- Live process: while a turn is in flight, show the streaming step card
+             (✓ done / ◌ running) once the first step arrives; before any step
+             (thinking-only / pre-first-tool) fall back to the typing dots. The
+             answer itself lands whole in session.reply, never here. -->
         <div class="row">
           <Avatar octopus size={36} />
-          <div class="typing" aria-label="对方正在输入"><span></span><span></span><span></span></div>
+          {#if session.proc.steps.length}
+            <div class="live-col"><StepCard steps={session.proc.steps} live /></div>
+          {:else}
+            <div class="typing" aria-label="对方正在输入"><span></span><span></span><span></span></div>
+          {/if}
         </div>
       {/if}
     {/if}
@@ -74,6 +81,9 @@
   .err-x:hover { opacity: 1; }
 
   .row { display: flex; gap: 10px; align-items: flex-start; }
+ /* Caps the live step card at the same 74% slot the assistant bubble column
+    uses, so the live card and the card that stays after the reply line up. */
+  .live-col { min-width: 0; max-width: 74%; }
   .typing { display: inline-flex; gap: 5px; padding: 13px 14px; background: var(--in-bubble); border-radius: var(--bubble-radius); border-top-left-radius: 3px; box-shadow: 0 1px 1.5px rgba(20,22,28,0.08); }
   .typing span { width: 6px; height: 6px; border-radius: 50%; background: var(--ink-faint); animation: bounce 1.2s infinite ease-in-out; }
   .typing span:nth-child(2) { animation-delay: 0.15s; }

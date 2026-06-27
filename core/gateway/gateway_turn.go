@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 
 	"github.com/lml2468/octobuddy/core/agent"
@@ -53,7 +54,7 @@ func (g *Gateway) runTurn(ctx context.Context, sessionKey string, msg router.Inb
 		return nil
 	}
 
-	g.completeSuccessfulTurn(sessionKey, msg, attemptResult.newResume, attemptResult.reply)
+	g.completeSuccessfulTurn(sessionKey, msg, attemptResult)
 	turnDelivered = true
 	return nil
 }
@@ -69,6 +70,25 @@ type agentAttemptResult struct {
 	termTransient bool
 	termHint      string
 	resumeBad     bool
+	// steps accumulates this turn's process steps (tool calls / thinking) in
+	// order, mirroring the live session.tool / session.activity stream the
+	// desktop renders. Persisted as JSON with the assistant row so a reload
+	// re-renders the step card. Only filled on the surviving attempt (a
+	// stale-resume retry discards its events before reaching consumeAgentEvent).
+	steps []turnStep
+}
+
+// turnStep is one persisted process step. Kind is "tool" or "thinking"; Text is
+// the same display string the desktop builds live (e.g. "Read(README.md)" or
+// "thinking…"), so a reloaded card reads identically to the live one. The JSON
+// tags are the shape the desktop's parseSteps expects.
+type turnStep struct {
+	Kind string `json:"kind"`
+	Text string `json:"text"`
+	// Detail is the raw Name(params) shown when a tool step is expanded in the
+	// desktop card. Empty (omitted) for thinking steps and for tool calls whose
+	// summary already IS the Name(params) — those render non-expandable.
+	Detail string `json:"detail,omitempty"`
 }
 
 func (g *Gateway) consumeAgentAttempt(sessionKey string, events <-chan agent.AgentEvent, idle *idleGuard, gated bool) agentAttemptResult {
@@ -128,6 +148,22 @@ func (g *Gateway) consumeAgentEvent(sessionKey string, ev agent.AgentEvent, idle
 		releaseGate()
 	case agent.KindTextDelta:
 		reply.WriteString(ev.Text)
+	case agent.KindToolUse:
+		// Persist the readable summary as the step text + the raw Name(params)
+		// as expandable detail (computed once in claude_parse, same values the
+		// live session.tool carries). Detail is elided when it equals the
+		// summary (no description) so the card renders it non-expandable.
+		step := turnStep{Kind: "tool", Text: ev.ToolSummary}
+		if ev.ToolDetail != ev.ToolSummary {
+			step.Detail = ev.ToolDetail
+		}
+		res.steps = append(res.steps, step)
+	case agent.KindThinking:
+		// Coalesce consecutive thinking markers into one step, mirroring the
+		// desktop fold(). The literal "thinking…" matches the FE's live label.
+		if n := len(res.steps); n == 0 || res.steps[n-1].Kind != "thinking" {
+			res.steps = append(res.steps, turnStep{Kind: "thinking", Text: "thinking…"})
+		}
 	case agent.KindTurnDone:
 		g.consumeTurnDone(sessionKey, ev, idle, res)
 	case agent.KindError:
@@ -259,13 +295,14 @@ func (g *Gateway) handleTerminalAgentError(sessionKey, termErr string, transient
 	return true
 }
 
-func (g *Gateway) completeSuccessfulTurn(sessionKey string, msg router.InboundMessage, newResume, text string) {
-	if newResume != "" {
-		if err := g.store.SaveResume(sessionKey, g.driver.Name(), newResume); err != nil {
+func (g *Gateway) completeSuccessfulTurn(sessionKey string, msg router.InboundMessage, res agentAttemptResult) {
+	text := res.reply
+	if res.newResume != "" {
+		if err := g.store.SaveResume(sessionKey, g.driver.Name(), res.newResume); err != nil {
 			glog().Error("save resume", "session", sessionKey, "err", err)
 		}
 	}
-	if err := g.store.AppendAssistant(sessionKey, text, g.driver.Name()); err != nil {
+	if err := g.store.AppendAssistant(sessionKey, text, g.driver.Name(), marshalSteps(res.steps)); err != nil {
 		glog().Error("append assistant", "session", sessionKey, "err", err)
 	}
 	g.notifySessionTouch(sessionKey, msg.ChannelID, msg.ChannelType)
@@ -275,4 +312,20 @@ func (g *Gateway) completeSuccessfulTurn(sessionKey string, msg router.InboundMe
 			glog().Error("save reply seq", "session", sessionKey, "err", err)
 		}
 	}
+}
+
+// marshalSteps serializes a turn's process steps to the JSON the desktop's
+// parseSteps expects, or "" when there were none. Best-effort: a marshal error
+// degrades to "" (no card) rather than failing the turn — matches the
+// append-assistant error handling above.
+func marshalSteps(steps []turnStep) string {
+	if len(steps) == 0 {
+		return ""
+	}
+	b, err := json.Marshal(steps)
+	if err != nil {
+		glog().Error("marshal steps", "err", err)
+		return ""
+	}
+	return string(b)
 }

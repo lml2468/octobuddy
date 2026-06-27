@@ -82,9 +82,9 @@ func TestMessagesChronologicalAndLimited(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = s.AppendUser("g:1", "first", "alice", "u:alice", SourceUser)
-	_ = s.AppendAssistant("g:1", "reply1", "bot")
+	_ = s.AppendAssistant("g:1", "reply1", "bot", "")
 	_ = s.AppendUser("g:1", "second", "bob", "u:bob", SourceUser)
-	_ = s.AppendAssistant("g:1", "reply2", "bot")
+	_ = s.AppendAssistant("g:1", "reply2", "bot", "")
 
 	msgs, err := s.RecentMessages("g:1", 3)
 	if err != nil {
@@ -99,6 +99,32 @@ func TestMessagesChronologicalAndLimited(t *testing.T) {
 	}
 	if msgs[0].Role != RoleAssistant || msgs[1].Role != RoleUser {
 		t.Fatalf("roles wrong: %+v", msgs)
+	}
+}
+
+// TestAppendAssistantStepsRoundTrip proves an assistant row's step JSON persists
+// and reads back verbatim, while a step-less reply round-trips as "".
+func TestAppendAssistantStepsRoundTrip(t *testing.T) {
+	s := openTemp(t)
+	if _, err := s.GetOrCreate("g:1", "1", 2); err != nil {
+		t.Fatal(err)
+	}
+	steps := `[{"kind":"tool","text":"Read(README.md)"},{"kind":"thinking","text":"thinking…"}]`
+	if err := s.AppendAssistant("g:1", "with steps", "bot", steps); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AppendAssistant("g:1", "no steps", "bot", ""); err != nil {
+		t.Fatal(err)
+	}
+	msgs, err := s.RecentMessages("g:1", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msgs[0].Steps != steps {
+		t.Fatalf("steps round-trip = %q, want %q", msgs[0].Steps, steps)
+	}
+	if msgs[1].Steps != "" {
+		t.Fatalf("step-less reply Steps = %q, want empty", msgs[1].Steps)
 	}
 }
 
@@ -119,7 +145,7 @@ func createListedSessions(t *testing.T, s *Store) []SessionSummary {
 		t.Fatal(err)
 	}
 	_ = s.AppendUser("a", "hi from a", "alice", "u:alice", SourceUser)
-	_ = s.AppendAssistant("a", "a-reply", "bot")
+	_ = s.AppendAssistant("a", "a-reply", "bot", "")
 
 	clk = time.Unix(2000, 0)
 	if _, err := s.GetOrCreate("b", "b", 2); err != nil {

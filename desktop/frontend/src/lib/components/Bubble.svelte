@@ -3,6 +3,7 @@
   import { store } from "../store.svelte";
   import { renderMarkdown, onMarkdownCopyClick } from "../markdown";
   import Avatar from "./Avatar.svelte";
+  import StepCard from "./StepCard.svelte";
 
   let { message, botId }: { message: Message; botId?: string } = $props();
 
@@ -61,6 +62,12 @@
     <div class="bubble-col">
       {#if showSenderLabel}
         <div class="sender" title={message.senderUid || ""}>{senderLabel}</div>
+      {/if}
+      {#if !isUser && message.steps?.length}
+ <!-- The process card that stayed attached after the turn: the tool calls /
+             thinking this reply came from, all ✓. Sits above the answer bubble,
+             sharing the column's width cap. Restored from history on reload. -->
+        <StepCard steps={message.steps} />
       {/if}
       <div
         class="bubble"

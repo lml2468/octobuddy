@@ -218,7 +218,7 @@ func TestSourceRoundTrip(t *testing.T) {
 	if err := s.AppendUser("sess", "cron fire", "cronbot", "", SourceCron); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.AppendAssistant("sess", "ok", "bot"); err != nil {
+	if err := s.AppendAssistant("sess", "ok", "bot", ""); err != nil {
 		t.Fatal(err)
 	}
 

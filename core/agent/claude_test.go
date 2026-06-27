@@ -74,6 +74,33 @@ func TestParseToolUse(t *testing.T) {
 	if evs[0].ToolParams == "" {
 		t.Fatalf("tool params should be a non-empty one-liner")
 	}
+	// Summary prefers the input's "description" ("list"); detail is the raw
+	// Name(params) shown on expand.
+	if evs[0].ToolSummary != "list" {
+		t.Fatalf("summary should be the description, got %q", evs[0].ToolSummary)
+	}
+	if evs[0].ToolDetail != `Bash({"command":"ls -la","description":"list"})` {
+		t.Fatalf("detail should be Name(params), got %q", evs[0].ToolDetail)
+	}
+}
+
+func TestToolSummaryFallback(t *testing.T) {
+	// No description → summary falls back to the Name(params) detail.
+	summary, detail := toolSummary("Read", json.RawMessage(`{"file_path":"README.md"}`))
+	want := `Read({"file_path":"README.md"})`
+	if summary != want || detail != want {
+		t.Fatalf("no-description fallback: summary=%q detail=%q, want both %q", summary, detail, want)
+	}
+	// Blank description is treated as absent.
+	summary, _ = toolSummary("Bash", json.RawMessage(`{"command":"ls","description":"   "}`))
+	if summary != `Bash({"command":"ls","description":" "})` {
+		t.Fatalf("blank description should fall back, got %q", summary)
+	}
+	// No params → Name().
+	summary, detail = toolSummary("TodoWrite", nil)
+	if summary != "TodoWrite()" || detail != "TodoWrite()" {
+		t.Fatalf("empty input: summary=%q detail=%q, want TodoWrite()", summary, detail)
+	}
 }
 
 func TestParseToolResult(t *testing.T) {
