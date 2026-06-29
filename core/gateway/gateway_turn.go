@@ -248,7 +248,7 @@ func (g *Gateway) prepareAgentRequest(ctx context.Context, sessionKey string, ms
 		Cwd:            cwd,
 		MemoryDir:      memDir,
 		Model:          g.model,
-		SystemPrompt:   g.buildSystemPrompt(msg, g.rosterPrefix(msg)),
+		SystemPrompt:   g.buildSystemPrompt(msg, g.rosterPrefix(msg), cwd),
 		SettingSources: g.settingSources,
 	}
 	// Per-channel/bot tool surface. Unconfigured sessions — the common case,

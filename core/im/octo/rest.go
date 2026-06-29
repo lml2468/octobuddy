@@ -206,6 +206,47 @@ func (c *RESTClient) GetThreadInfo(ctx context.Context, groupNo, shortID string)
 	return raw.Name, nil
 }
 
+// GroupMd is the server-stored GROUP.md / thread-md reply from the md-get
+// endpoints (octo-server modules/bot_api getGroupMd / botGetThreadMd). Content
+// is "" + Version 0 when unset. Content is operator/bot-authored markdown.
+type GroupMd struct {
+	Content   string `json:"content"`
+	Version   int64  `json:"version"`
+	UpdatedBy string `json:"updated_by"`
+}
+
+// GetGroupMd fetches the server-stored GROUP.md for a group
+// (GET /v1/bot/groups/{groupNo}/md). 404 → zero GroupMd, nil err; transient
+// failure → err so the caller can skip the local mirror write and retry on the
+// next event. Pass a bare group_no (the endpoint rejects thread compound ids).
+func (c *RESTClient) GetGroupMd(ctx context.Context, groupNo string) (GroupMd, error) {
+	if groupNo == "" {
+		return GroupMd{}, nil
+	}
+	var out GroupMd
+	if err := c.getJSON(ctx, "/v1/bot/groups/"+url.PathEscape(groupNo)+"/md", &out, true); err != nil {
+		clog.For("octo").Warn("getGroupMd", "group_no", groupNo, "err", err)
+		return GroupMd{}, err
+	}
+	return out, nil
+}
+
+// GetThreadMd fetches the server-stored thread GROUP.md for a thread / 子区
+// (GET /v1/bot/groups/{groupNo}/threads/{shortID}/md). Same contract as
+// GetGroupMd.
+func (c *RESTClient) GetThreadMd(ctx context.Context, groupNo, shortID string) (GroupMd, error) {
+	if groupNo == "" || shortID == "" {
+		return GroupMd{}, nil
+	}
+	var out GroupMd
+	path := "/v1/bot/groups/" + url.PathEscape(groupNo) + "/threads/" + url.PathEscape(shortID) + "/md"
+	if err := c.getJSON(ctx, path, &out, true); err != nil {
+		clog.For("octo").Warn("getThreadMd", "group_no", groupNo, "short_id", shortID, "err", err)
+		return GroupMd{}, err
+	}
+	return out, nil
+}
+
 func firstNonEmpty(a, b string) string {
 	if a != "" {
 		return a

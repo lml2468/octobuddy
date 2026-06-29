@@ -33,7 +33,7 @@ core_dir="$repo_root/core"
 out_dir="$repo_root/output"
 
 # Shared build helpers (resolve_version, build_octobuddy_daemon,
-# build_frontend, wait_for_jobs). Each previously had its own copy here.
+# build_frontend, wait_for_pids). Each previously had its own copy here.
 # shellcheck source=lib/build-common.sh
 source "$repo_root/scripts/lib/build-common.sh"
 version="$(resolve_version "$repo_root")"
@@ -67,9 +67,10 @@ fi
 # so the cgo desktop build still follows.
 goarch="${GOARCH:-$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')}"
 echo "▸ building octobuddy-daemon + frontend in parallel…"
-build_octobuddy_daemon "$core_dir" linux "$goarch" "$out_dir/octobuddy-daemon-linux" &
-build_frontend "$desktop_dir" &
-wait_for_jobs "linux build phase"
+build_pids=()
+build_octobuddy_daemon "$core_dir" linux "$goarch" "$out_dir/octobuddy-daemon-linux" & build_pids+=($!)
+build_frontend "$desktop_dir" & build_pids+=($!)
+wait_for_pids "linux build phase" "${build_pids[@]}"
 
 # Desktop binary (cgo on — links GTK4 + WebKitGTK natively).
 echo "▸ building octobuddy (Wails desktop)…"

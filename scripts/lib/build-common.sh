@@ -63,15 +63,19 @@ build_frontend() {
   ( cd "$desktop_dir/frontend" && npm ci --silent && npm run build )
 }
 
-# wait_for_jobs collects every background PID launched with `&` in the
-# current shell scope and aborts (exit 1) if any of them returned non-zero.
-# Replaces the boilerplate `for pid in $(jobs -p); do wait "$pid" || fail=1; done`
-# duplicated in callers. Pass a human-readable label as $1 for the failure
-# message ("daemon cross-compiles", "linux build phase", …).
-wait_for_jobs() {
-  local label="${1:-background jobs}"
+# wait_for_pids waits on an explicit list of background PIDs and aborts (exit 1)
+# if any returned non-zero. Pass the label as $1, then the PIDs.
+#
+# Why explicit PIDs instead of `jobs -p`: in zsh, `$(jobs -p)` runs the builtin
+# in a command-substitution SUBSHELL that sees NONE of the parent shell's
+# background jobs, so the old `for pid in $(jobs -p)` loop silently waited on
+# nothing and returned immediately — letting a downstream `lipo`/`cp` race
+# against still-building outputs (stale daemon embedded in the .app). Capturing
+# `$!` right after each `&` at the call site is correct in both bash and zsh.
+wait_for_pids() {
+  local label="${1:-background jobs}"; shift
   local fail=0 pid
-  for pid in $(jobs -p); do
+  for pid in "$@"; do
     wait "$pid" || fail=1
   done
   if [ "$fail" -ne 0 ]; then

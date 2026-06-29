@@ -40,7 +40,7 @@ universal="${OCTOBUDDY_UNIVERSAL:-}"
 entitlements="$desktop/build/darwin/entitlements.plist"
 
 # Shared build helpers (resolve_version, build_octobuddy_daemon,
-# wait_for_jobs). One file per script grew its own copy before #119.
+# wait_for_pids). One file per script grew its own copy before #119.
 # shellcheck source=lib/build-common.sh
 source "$repo_root/scripts/lib/build-common.sh"
 version="$(resolve_version "$repo_root")"
@@ -51,13 +51,17 @@ mkdir -p "$out"
 echo "▸ cross-compiling octobuddy-daemon (zero-cgo)…"
 # Daemon binaries for all four platforms (CI picks these up for win/linux).
 # Run the five cross-compiles in parallel — independent inputs, independent
-# outputs, idle CPU cores otherwise. wait_for_jobs aborts if any fail.
-build_octobuddy_daemon "$core" darwin  arm64 "$out/octobuddy-daemon-darwin-arm64"   &
-build_octobuddy_daemon "$core" darwin  amd64 "$out/octobuddy-daemon-darwin-amd64"   &
-build_octobuddy_daemon "$core" windows amd64 "$out/octobuddy-daemon-windows-amd64.exe" &
-build_octobuddy_daemon "$core" linux   amd64 "$out/octobuddy-daemon-linux-amd64"    &
-build_octobuddy_daemon "$core" linux   arm64 "$out/octobuddy-daemon-linux-arm64"    &
-wait_for_jobs "octobuddy-daemon cross-compiles"
+# outputs, idle CPU cores otherwise. Capture each PID with $! right after `&`
+# (NOT `jobs -p`, whose $(...) subshell sees no jobs in zsh) so wait_for_pids
+# blocks until EVERY slice is fully written before the lipo below — otherwise
+# lipo races a half-built slice and embeds a stale daemon.
+daemon_pids=()
+build_octobuddy_daemon "$core" darwin  arm64 "$out/octobuddy-daemon-darwin-arm64"   & daemon_pids+=($!)
+build_octobuddy_daemon "$core" darwin  amd64 "$out/octobuddy-daemon-darwin-amd64"   & daemon_pids+=($!)
+build_octobuddy_daemon "$core" windows amd64 "$out/octobuddy-daemon-windows-amd64.exe" & daemon_pids+=($!)
+build_octobuddy_daemon "$core" linux   amd64 "$out/octobuddy-daemon-linux-amd64"    & daemon_pids+=($!)
+build_octobuddy_daemon "$core" linux   arm64 "$out/octobuddy-daemon-linux-arm64"    & daemon_pids+=($!)
+wait_for_pids "octobuddy-daemon cross-compiles" "${daemon_pids[@]}"
 lipo -create -output "$out/octobuddy-daemon" "$out/octobuddy-daemon-darwin-arm64" "$out/octobuddy-daemon-darwin-amd64"
 echo "  ✓ octobuddy-daemon (mac universal + win/linux in $out)"
 

@@ -88,6 +88,13 @@ type Connector struct {
 	// the inbound read loop; a full buffer drops the receipt rather than
 	// blocking.
 	receiptCh chan readReceiptReq
+
+	// sysDebounce coalesces bursts of group control-plane events (a single
+	// GROUP.md change can emit several) so the GROUP.md mirror refresh fires at
+	// most once per channel per sysDebounceWindow. Keyed by channelID (the write
+	// target); guarded by sysMu. See sysmsg.go.
+	sysMu       sync.Mutex
+	sysDebounce map[string]time.Time
 }
 
 type readReceiptReq struct {
@@ -210,6 +217,7 @@ func NewConnector(rest *RESTClient) *Connector {
 		reconnectBase: 3 * time.Second,
 		reconnectMax:  60 * time.Second,
 		receiptCh:     make(chan readReceiptReq, 64),
+		sysDebounce:   make(map[string]time.Time),
 	}
 }
 

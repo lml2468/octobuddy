@@ -133,3 +133,26 @@ func (c *Connector) WaitTurns() {
 	c.mu.Unlock()
 	c.turnsWG.Wait()
 }
+
+// goTracked starts fn in a goroutine tracked by turnsWG so WaitTurns blocks on
+// it during graceful shutdown. The Add happens under c.mu together with the
+// c.closed check — WaitTurns flips c.closed under c.mu then Wait()s, so an Add
+// outside the lock could land after Wait observed counter==0 (WaitGroup misuse)
+// and run work against a tearing-down connector. Returns false (fn not started)
+// when the connector is already closed. Used for off-queue background work
+// (e.g. the system-message GROUP.md refresh); queue turns use enqueueTurn, which
+// inlines the same invariant alongside its worker-start bookkeeping.
+func (c *Connector) goTracked(fn func()) bool {
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return false
+	}
+	c.turnsWG.Add(1)
+	c.mu.Unlock()
+	go func() {
+		defer c.turnsWG.Done()
+		fn()
+	}()
+	return true
+}
