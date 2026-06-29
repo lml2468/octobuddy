@@ -5,6 +5,7 @@ import (
 
 	"github.com/lml2468/octobuddy/core/groupctx"
 	"github.com/lml2468/octobuddy/core/router"
+	"github.com/lml2468/octobuddy/core/safepath"
 	"github.com/lml2468/octobuddy/core/safety"
 )
 
@@ -14,6 +15,18 @@ import (
 // the gateway does not import config (it stays dependent on primitives), so the
 // header is a local literal rather than a derived string.
 const bootstrapPromptHeader = "## BOOTSTRAP.md (first-run ritual — owner only)"
+
+// groupDocFilename is the per-session GROUP.md the octo connector mirrors from
+// the server (octo.groupDocFilename). The gateway re-reads it per group turn and
+// injects it as untrusted background. Kept as a local literal — the gateway does
+// not import the octo connector.
+const groupDocFilename = "GROUP.md"
+
+// groupDocMaxInjectBytes caps how much of GROUP.md is injected into the prompt.
+// Must be >= the octo connector's mirror cap (octo.groupDocMaxBytes, 256 KiB):
+// SafeRead ERRORS (not truncates) past the cap, so a smaller value here would
+// silently drop a large-but-valid mirrored GROUP.md from the prompt entirely.
+const groupDocMaxInjectBytes = 256 * 1024
 
 // buildGroupPrompt assembles the prompt for a turn. For a DM (or when group
 // context is disabled) it returns the raw message text. For a group message it
@@ -100,7 +113,7 @@ func renderGroupPrompt(deltaText, currentText string) string {
 // injection mirrors openclaw inbound.ts (synthesized group hint + free-form
 // persona prompt). All are config/gateway-authored (never from message
 // payloads), so each is wrapped as safety.TrustedText after the SecurityPrefix.
-func (g *Gateway) buildSystemPrompt(msg router.InboundMessage, rosterPrefix string) string {
+func (g *Gateway) buildSystemPrompt(msg router.InboundMessage, rosterPrefix, cwd string) string {
 	parts := []safety.SafeText{safety.TrustedText(safety.SecurityPrefix)}
 	if sp := g.effectiveSystemPrompt(); sp != "" {
 		parts = append(parts, safety.TrustedText(sp))
@@ -108,9 +121,37 @@ func (g *Gateway) buildSystemPrompt(msg router.InboundMessage, rosterPrefix stri
 	if rosterPrefix != "" {
 		parts = append(parts, safety.TrustedText(rosterPrefix))
 	}
+	parts = g.appendGroupHandbook(parts, msg, cwd)
 	parts = g.appendPersonaInstructions(parts)
 	parts = g.appendBootstrap(parts, msg)
 	return joinSystemPromptParts(parts)
+}
+
+// appendGroupHandbook injects the per-session GROUP.md (mirrored from the server
+// by the octo connector) as UNTRUSTED background for group / thread turns. The
+// content is group-member-authored, so it is escaped via safety.SafeBody and
+// fenced under the [Group handbook] header that SecurityPrefix names as
+// untrusted — a crafted handbook can never forge prompt structure or displace
+// the operator-trusted SOUL/AGENTS above it. No-op for DMs, when no sandbox cwd
+// is set, or when GROUP.md is absent/empty.
+func (g *Gateway) appendGroupHandbook(parts []safety.SafeText, msg router.InboundMessage, cwd string) []safety.SafeText {
+	if cwd == "" || msg.ChannelType != router.ChannelGroup {
+		return parts
+	}
+	raw, err := safepath.SafeRead(cwd, groupDocFilename, groupDocMaxInjectBytes)
+	if err != nil || len(raw) == 0 {
+		return parts // absent / unreadable → skip (best-effort)
+	}
+	body := strings.TrimSpace(string(raw))
+	if body == "" {
+		return parts
+	}
+	// Header is a trusted literal (the privileged marker); the body is escaped so
+	// a crafted GROUP.md can't forge a second marker or a role label. Assemble
+	// the escaped body under the literal header, then mint the combined block as
+	// SafeText (already escaped — TrustedText documents that the header is ours).
+	block := safety.GroupHandbookHeader + "\n" + safety.SanitizePromptBody(body)
+	return append(parts, safety.TrustedText(block))
 }
 
 // appendBootstrap injects the first-run ritual (BOOTSTRAP.md) — but ONLY in an

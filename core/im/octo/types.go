@@ -30,7 +30,48 @@ const (
 	MsgMultipleForward MessageType = 11
 	// MsgRichText is text + inline images (types.ts MessageType.RichText).
 	MsgRichText MessageType = 14
+
+	// --- System / control-plane payloads (octo-lib common/msg.go) ---
+	// These are NOT user-authored chat — octo-server broadcasts them into the
+	// channel as ordinary messages (carrying the operator's from_uid), so they
+	// must be filtered out of the LLM turn path. octo-server's own search layer
+	// hard-filters payload.type ∈ [1000,2000] (modules/messages_search) for the
+	// same reason. MsgCMD(99) is the command frame; MsgSystemMin/Max bound the
+	// system-event range.
+	//
+	// NOTE: octo-server ALSO emits some control-plane notifications as a plain
+	// Text(=1) payload carrying a structured `event` envelope (e.g.
+	// group_md_updated, and it @-mentions the bot). Those are NOT in this type
+	// range — detect them via MessagePayload.IsControlEvent / the Event field,
+	// not the type. See PayloadEvent below.
+	MsgCMD       MessageType = 99
+	MsgSystemMin MessageType = 1000
+	MsgSystemMax MessageType = 2000
 )
+
+// Control-plane event.type values octo-server stamps on the `event` envelope of
+// a Text-payload notification (octo-server modules/{group,thread,robot}). These
+// are not chat — onInbound routes them to the deterministic handler, never the
+// classifier. The md ones additionally drive the GROUP.md / thread-md mirror.
+const (
+	EventGroupMdUpdated    = "group_md_updated"
+	EventGroupMdDeleted    = "group_md_deleted"
+	EventThreadMdUpdated   = "thread_md_updated"
+	EventThreadMdDeleted   = "thread_md_deleted"
+	EventMentionPrefUpdate = "mention_pref_updated"
+)
+
+// IsSystem reports whether t is a system / control-plane payload TYPE rather
+// than a user-authored chat message. Such messages MUST never trigger an LLM
+// turn (they carry the operator's from_uid, so the empty-from_uid drop misses
+// them) — the whole [1000,2000] range (group create / member add-remove-quit /
+// settings change / tip / …) plus CMD is suppressed. Mirrors octo-server's
+// [1000,2000] + CMD hard-filter. NOTE: this does NOT cover the Text-payload
+// `event`-envelope notifications — combine with MessagePayload.IsControlEvent at
+// the call site.
+func (t MessageType) IsSystem() bool {
+	return t == MsgCMD || (t >= MsgSystemMin && t <= MsgSystemMax)
+}
 
 // Mention is the @-mention payload (types.ts MentionPayload). Only the fields
 // the connector needs are modeled; humans/ais/all are three-state ints.
@@ -83,6 +124,33 @@ type MessagePayload struct {
 	OBORespondAs         string
 	OBOGrantorUID        string
 	OBOSystemHint        string
+
+	// Event is the control-plane envelope octo-server stamps on some Text(=1)
+	// notifications (group_md_updated, thread_md_updated, mention_pref_updated,
+	// …). Non-nil means "this is a control-plane event, not chat" — see
+	// IsControlEvent. Nil for ordinary messages.
+	Event *PayloadEvent
+}
+
+// PayloadEvent is the `event` envelope on a control-plane notification payload
+// (octo-server modules/{group,thread,robot} sendGroupMdNotification etc.). Only
+// the fields the connector acts on are modeled. Version/UpdatedBy accompany the
+// md events; GroupNo accompanies mention_pref.
+type PayloadEvent struct {
+	Type      string `json:"type"`
+	Version   int64  `json:"version,omitempty"`
+	UpdatedBy string `json:"updated_by,omitempty"`
+	GroupNo   string `json:"group_no,omitempty"`
+}
+
+// IsControlEvent reports whether this payload is a control-plane notification
+// carrying an `event` envelope (group_md_updated, mention_pref_updated, …)
+// rather than a chat message. Such payloads arrive as Text(=1) and @-mention
+// the bot, so without this check they'd reach the classifier and trigger an LLM
+// turn. Pair with Type.IsSystem() at the inbound gate to cover both control-
+// plane shapes.
+func (p MessagePayload) IsControlEvent() bool {
+	return p.Event != nil && p.Event.Type != ""
 }
 
 // payloadWire is the on-the-wire shape used to decode MessagePayload. content is
@@ -111,6 +179,8 @@ type payloadWire struct {
 	OBORespondAs         string `json:"obo_respond_as"`
 	OBOGrantorUID        string `json:"obo_grantor_uid"`
 	OBOSystemHint        string `json:"obo_system_hint"`
+
+	Event *PayloadEvent `json:"event"`
 }
 
 // UnmarshalJSON decodes a MessagePayload, splitting the polymorphic `content`
@@ -144,6 +214,7 @@ func (p *MessagePayload) UnmarshalJSON(b []byte) error {
 		OBORespondAs:         w.OBORespondAs,
 		OBOGrantorUID:        w.OBOGrantorUID,
 		OBOSystemHint:        w.OBOSystemHint,
+		Event:                w.Event,
 	}
 	if len(w.Content) > 0 && string(w.Content) != "null" {
 		var anyVal any

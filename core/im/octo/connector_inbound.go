@@ -31,6 +31,17 @@ func (c *Connector) onInbound(m BotMessage) {
 	if m.StreamOn {
 		return
 	}
+	// System / control-plane payloads must NEVER reach the trigger classifier
+	// (that's the group-announcement false-trigger bug). Two shapes:
+	//   1. true system TYPES (CMD / 1000-2000) — Type.IsSystem();
+	//   2. Text(=1) notifications carrying an `event` envelope (group_md_updated,
+	//      mention_pref_updated, …) that ALSO @-mention the bot — IsControlEvent.
+	// Route both to the deterministic handler, which may mirror GROUP.md but
+	// never enqueues an LLM turn.
+	if m.Payload.Type.IsSystem() || m.Payload.IsControlEvent() {
+		c.handleSystemMessage(m)
+		return
+	}
 
 	inbound, key, tgt, ok := c.prepareInboundTurn(m, uid)
 	if !ok {
