@@ -3,6 +3,7 @@ package gateway
 import (
 	"strings"
 
+	"github.com/lml2468/octobuddy/core/agent"
 	"github.com/lml2468/octobuddy/core/groupctx"
 	"github.com/lml2468/octobuddy/core/router"
 	"github.com/lml2468/octobuddy/core/safepath"
@@ -102,18 +103,23 @@ func renderGroupPrompt(deltaText, currentText string) string {
 	return b.String()
 }
 
-// buildSystemPrompt assembles the frozen system-prompt append: the
-// non-overridable security prefix, the operator-trusted SOUL/config prompt,
-// then (for GROUP/thread turns) the gateway-authored member roster +
-// mention-format hint, and (for persona clones) the persona instruction. The
-// SecurityPrefix always stays first and non-overridable. (The driver's preset
-// base prompt is prepended by the agent CLI.)
+// buildSystemPrompt assembles the structured system-prompt intent: the
+// non-overridable security prefix as Mandatory, then (for GROUP/thread turns)
+// the operator-trusted SOUL/config prompt + member roster, the GROUP.md
+// handbook, persona instructions, and bootstrap — all as Persona segments in
+// their established order. The SecurityPrefix always stays first. (The driver's
+// preset base prompt is prepended by the agent CLI.)
+//
+// NOTE (migration phase 2): the GROUP.md handbook is still placed inline in the
+// Persona segment to keep Flatten() byte-identical with the previous flat
+// assembly. Moving it to the Background segment (after all trusted segments) is
+// a deliberate, separately-reviewed change deferred to a later phase.
 //
 // rosterPrefix is "" for DMs and for groups with no learned members. Persona
 // injection mirrors openclaw inbound.ts (synthesized group hint + free-form
 // persona prompt). All are config/gateway-authored (never from message
 // payloads), so each is wrapped as safety.TrustedText after the SecurityPrefix.
-func (g *Gateway) buildSystemPrompt(msg router.InboundMessage, rosterPrefix, cwd string) string {
+func (g *Gateway) buildSystemPrompt(msg router.InboundMessage, rosterPrefix, cwd string) agent.SystemPrompt {
 	parts := []safety.SafeText{safety.TrustedText(safety.SecurityPrefix)}
 	if sp := g.effectiveSystemPrompt(); sp != "" {
 		parts = append(parts, safety.TrustedText(sp))
@@ -124,7 +130,7 @@ func (g *Gateway) buildSystemPrompt(msg router.InboundMessage, rosterPrefix, cwd
 	parts = g.appendGroupHandbook(parts, msg, cwd)
 	parts = g.appendPersonaInstructions(parts)
 	parts = g.appendBootstrap(parts, msg)
-	return joinSystemPromptParts(parts)
+	return systemPromptFromParts(parts)
 }
 
 // appendGroupHandbook injects the per-session GROUP.md (mirrored from the server
@@ -196,13 +202,20 @@ func (g *Gateway) appendPersonaInstructions(parts []safety.SafeText) []safety.Sa
 	return parts
 }
 
-func joinSystemPromptParts(parts []safety.SafeText) string {
-	var b strings.Builder
-	for i, p := range parts {
-		if i > 0 {
-			b.WriteString("\n\n")
-		}
-		b.WriteString(p.String())
+// systemPromptFromParts maps the assembled SafeText segments onto the structured
+// agent.SystemPrompt. parts[0] is always the SecurityPrefix (the non-overridable
+// Mandatory segment); everything after it is operator-trusted Persona. The
+// Background segment stays empty in this phase — see buildSystemPrompt's note on
+// the deferred GROUP.md move. Flatten() over (Mandatory, Persona…) reproduces the
+// previous flat join byte-for-byte.
+func systemPromptFromParts(parts []safety.SafeText) agent.SystemPrompt {
+	sp := agent.SystemPrompt{}
+	if len(parts) == 0 {
+		return sp
 	}
-	return b.String()
+	sp.Mandatory = parts[0].String()
+	for _, p := range parts[1:] {
+		sp.Persona = append(sp.Persona, p.String())
+	}
+	return sp
 }

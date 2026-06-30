@@ -242,13 +242,18 @@ func (g *Gateway) prepareAgentRequest(ctx context.Context, sessionKey string, ms
 	if media := g.materializeAttachments(ctx, cwd, msg.Attachments); media != "" {
 		prompt += media
 	}
+	sys := g.buildSystemPrompt(msg, g.rosterPrefix(msg), cwd)
 	req := agent.Request{
-		Prompt:         prompt,
-		SessionID:      resumeID,
-		Cwd:            cwd,
-		MemoryDir:      memDir,
-		Model:          g.model,
-		SystemPrompt:   g.buildSystemPrompt(msg, g.rosterPrefix(msg), cwd),
+		Prompt:    prompt,
+		SessionID: resumeID,
+		Cwd:       cwd,
+		MemoryDir: memDir,
+		Model:     g.model,
+		System:    sys,
+		// Phase-2 bridge: keep the flat field populated (= Flatten of the struct)
+		// so the test seam reading req.SystemPrompt and the driver's flat fallback
+		// stay byte-identical until phase 3 removes the field.
+		SystemPrompt:   sys.Flatten(),
 		SettingSources: g.settingSources,
 	}
 	// Per-channel/bot tool surface. Unconfigured sessions — the common case,
