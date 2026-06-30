@@ -237,7 +237,7 @@ func (d *ClaudeDriver) appendMinimalModeArgs(args []string, req Request, mcpActi
 	// Always emit --system-prompt in minimal mode (even with an empty
 	// value) so a missing prompt is loud, not a silent fallback to
 	// claude's built-in default that would drop SecurityPrefix.
-	args = append(args, "--system-prompt", req.sysPrompt())
+	args = append(args, "--system-prompt", req.System.Flatten())
 	// --tools is the surface-restrict flag: the model only sees the listed
 	// names. "" disables every built-in. nil = caller expressed no opinion,
 	// so we resolve the headless-safe set probed from THIS binary (minus
@@ -305,7 +305,7 @@ func withMCPWildcard(tools []string, mcpActive bool) []string {
 // tools are already included).
 func (d *ClaudeDriver) appendClaudeCodeModeArgs(args []string, req Request) []string {
 	args = append(args, "--permission-mode", "bypassPermissions")
-	if sp := req.sysPrompt(); sp != "" {
+	if sp := req.System.Flatten(); sp != "" {
 		args = append(args, "--append-system-prompt", sp)
 	}
 	// nil = no opinion → leave the full built-in surface in force (no --tools;

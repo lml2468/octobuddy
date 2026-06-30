@@ -47,21 +47,20 @@ func TestSystemPromptIsZero(t *testing.T) {
 	}
 }
 
-// TestRequestSysPromptPrecedence pins that structured System wins over the legacy
-// flat SystemPrompt, and the flat field is the fallback when System is zero.
-func TestRequestSysPromptPrecedence(t *testing.T) {
-	// System set → structured wins, flat ignored.
-	r := Request{SystemPrompt: "FLAT", System: SystemPrompt{Mandatory: "STRUCT"}}
-	if got := r.sysPrompt(); got != "STRUCT" {
-		t.Fatalf("System should win: got %q", got)
+// TestDriverConsumesSystemStruct pins that ClaudeDriver builds the system-prompt
+// flag from Request.System (Flatten order preserved), the structured replacement
+// for the removed flat SystemPrompt field.
+func TestDriverConsumesSystemStruct(t *testing.T) {
+	d := newTestDriver()
+	args := d.buildArgs(Request{Prompt: "hi", System: SystemPrompt{
+		Mandatory: "SEC",
+		Persona:   []string{"SOUL"},
+	}})
+	got, ok := systemPromptArg(args)
+	if !ok {
+		t.Fatal("expected --system-prompt in minimal mode")
 	}
-	// System zero → fall back to flat.
-	r = Request{SystemPrompt: "FLAT"}
-	if got := r.sysPrompt(); got != "FLAT" {
-		t.Fatalf("zero System should fall back to flat: got %q", got)
-	}
-	// Both empty → "".
-	if got := (Request{}).sysPrompt(); got != "" {
-		t.Fatalf("both empty should be \"\": got %q", got)
+	if got != "SEC\n\nSOUL" {
+		t.Fatalf("driver should flatten System: got %q", got)
 	}
 }

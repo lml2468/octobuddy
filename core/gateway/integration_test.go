@@ -73,12 +73,13 @@ func assertGroupContextRequest(t *testing.T, second agent.Request) {
 	if !strings.Contains(second.Prompt[anchorIdx:], "what did alice say?") {
 		t.Fatalf("real request not after anchor:\n%s", second.Prompt)
 	}
-	// SystemPrompt carries the security prefix + SOUL.
-	if !strings.Contains(second.SystemPrompt, "UNTRUSTED") {
-		t.Fatalf("security prefix missing from system prompt:\n%s", second.SystemPrompt)
+	// System carries the security prefix + SOUL.
+	secondSys := second.System.Flatten()
+	if !strings.Contains(secondSys, "UNTRUSTED") {
+		t.Fatalf("security prefix missing from system prompt:\n%s", secondSys)
 	}
-	if !strings.Contains(second.SystemPrompt, "you are OctoBuddy") {
-		t.Fatalf("SOUL prompt missing from system prompt:\n%s", second.SystemPrompt)
+	if !strings.Contains(secondSys, "you are OctoBuddy") {
+		t.Fatalf("SOUL prompt missing from system prompt:\n%s", secondSys)
 	}
 	// The configured model override reaches the driver.
 	if second.Model != "claude-opus-4-8" {
@@ -180,7 +181,7 @@ func TestGroupRosterInjectedIntoSystemPrompt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sys := drv.requests[0].SystemPrompt
+	sys := drv.requests[0].System.Flatten()
 	// Security prefix stays first and non-overridable.
 	if !strings.Contains(sys, "UNTRUSTED") {
 		t.Fatalf("security prefix missing:\n%s", sys)
@@ -218,7 +219,7 @@ func TestDMTurnHasNoRoster(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sys := drv.requests[0].SystemPrompt
+	sys := drv.requests[0].System.Flatten()
 	if strings.Contains(sys, "[Group Members]") || strings.Contains(sys, "ONE colon") {
 		t.Fatalf("DM turn must not carry a roster:\n%s", sys)
 	}

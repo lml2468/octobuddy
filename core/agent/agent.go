@@ -242,16 +242,11 @@ type Request struct {
 	MemoryDir string // per-session auto-memory dir ("" = driver default)
 	Model     string // optional model override
 
-	// SystemPrompt is the legacy flattened operator-trusted system prompt.
-	// Retained as a fallback for callers that have not yet moved to the
-	// structured System field (REPL / older embedders). When System is non-zero
-	// it takes precedence; see Request.sysPrompt in claude.go. Removed once all
-	// callers populate System (migration Phase 3).
-	SystemPrompt string
-
 	// System is the structured system-prompt intent (Mandatory / Persona /
-	// Background). Preferred over SystemPrompt; the gateway populates it so
-	// drivers can preserve segment roles instead of parsing a blob.
+	// Background) the gateway assembles. Drivers map the segments onto their own
+	// CLI flags but MUST keep Mandatory first and non-overridable; see the
+	// SystemPrompt type doc. A claude-style driver that takes a single string
+	// calls System.Flatten().
 	System SystemPrompt
 
 	// AllowedTools scopes the tools the agent may call.
@@ -266,17 +261,6 @@ type Request struct {
 	// names (claude: "user", "project"). Empty → driver default ("user"
 	// for claude). The driver maps to its own flag (`--setting-sources`).
 	SettingSources []string
-}
-
-// sysPrompt returns the effective system-prompt string for a driver that takes
-// a single flattened value: the structured System when set, else the legacy
-// flat SystemPrompt. Bridges callers mid-migration (some set System, some still
-// set SystemPrompt) so the driver has one source of truth.
-func (r Request) sysPrompt() string {
-	if !r.System.IsZero() {
-		return r.System.Flatten()
-	}
-	return r.SystemPrompt
 }
 
 // Capabilities advertises what a driver supports, so the gateway can adapt.

@@ -222,7 +222,7 @@ func TestFullTurnSequence(t *testing.T) {
 // is restricted via --tools.
 func TestClaudeArgsMinimalMode(t *testing.T) {
 	d := newTestDriver()
-	args := d.buildArgs(Request{Prompt: "hi", SystemPrompt: "you are X"})
+	args := d.buildArgs(Request{Prompt: "hi", System: SystemPrompt{Persona: []string{"you are X"}}})
 	if !contains(args, "--system-prompt") {
 		t.Fatalf("--system-prompt missing: %v", args)
 	}
@@ -252,7 +252,7 @@ func TestClaudeArgsMinimalMode(t *testing.T) {
 // caller doesn't silently fall back to claude's built-in default.
 func TestClaudeArgsMinimalModeEmptyPromptStillReplaces(t *testing.T) {
 	d := newTestDriver()
-	args := d.buildArgs(Request{Prompt: "hi", SystemPrompt: ""})
+	args := d.buildArgs(Request{Prompt: "hi", System: SystemPrompt{}})
 	idx := -1
 	for i, a := range args {
 		if a == "--system-prompt" {
@@ -274,7 +274,7 @@ func TestClaudeArgsMinimalModeEmptyPromptStillReplaces(t *testing.T) {
 func TestClaudeArgsClaudeCodeModeEscapeHatch(t *testing.T) {
 	d := NewClaudeDriver("claude")
 	d.Mode = PromptModeClaudeCode
-	args := d.buildArgs(Request{Prompt: "hi", SystemPrompt: "soul"})
+	args := d.buildArgs(Request{Prompt: "hi", System: SystemPrompt{Persona: []string{"soul"}}})
 	if !contains(args, "--append-system-prompt") {
 		t.Fatalf("claude_code mode must use --append-system-prompt: %v", args)
 	}
@@ -297,6 +297,17 @@ func TestClaudeArgsClaudeCodeModeEscapeHatch(t *testing.T) {
 func toolsArg(args []string) (string, bool) {
 	for i, a := range args {
 		if a == "--tools" && i+1 < len(args) {
+			return args[i+1], true
+		}
+	}
+	return "", false
+}
+
+// systemPromptArg returns the value following --system-prompt (minimal mode),
+// mirroring toolsArg. Matches the exact flag, not --append-system-prompt.
+func systemPromptArg(args []string) (string, bool) {
+	for i, a := range args {
+		if a == "--system-prompt" && i+1 < len(args) {
 			return args[i+1], true
 		}
 	}

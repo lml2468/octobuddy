@@ -30,7 +30,7 @@ func TestPersonaSystemPromptInjection(t *testing.T) {
 	if len(drv.requests) != 1 {
 		t.Fatalf("want 1 request, got %d", len(drv.requests))
 	}
-	sp := drv.requests[0].SystemPrompt
+	sp := drv.requests[0].System.Flatten()
 
 	// SecurityPrefix must be first.
 	if !strings.HasPrefix(sp, safety.SecurityPrefix) {
@@ -69,7 +69,7 @@ func TestNonCloneHasNoPersonaPrompt(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("handle: %v", err)
 	}
-	sp := drv.requests[0].SystemPrompt
+	sp := drv.requests[0].System.Flatten()
 	if strings.Contains(sp, "persona clone") || strings.Contains(sp, "分身") {
 		t.Fatalf("non-clone must not carry persona instruction:\n%s", sp)
 	}

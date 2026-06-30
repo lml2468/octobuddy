@@ -24,7 +24,7 @@ func dmTurn(t *testing.T, gw *Gateway, drv *fakeDriver, text string) string {
 	if len(drv.requests) == 0 {
 		t.Fatal("driver saw no requests")
 	}
-	return drv.requests[len(drv.requests)-1].SystemPrompt
+	return drv.requests[len(drv.requests)-1].System.Flatten()
 }
 
 // TestSystemPromptResolverPerTurn proves the resolver is consulted EVERY turn:
@@ -115,7 +115,7 @@ func TestBootstrapInjectionGate(t *testing.T) {
 		if len(drv.requests) == 0 {
 			t.Fatal("driver saw no requests")
 		}
-		return drv.requests[len(drv.requests)-1].SystemPrompt
+		return drv.requests[len(drv.requests)-1].System.Flatten()
 	}
 
 	// Console turn (FromUID is the synthetic gui-user, NOT the owner) → injected.

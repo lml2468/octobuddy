@@ -41,7 +41,7 @@ func groupTurn(t *testing.T, gw *Gateway, drv *fakeDriver, channelID, text strin
 	if len(drv.requests) == 0 {
 		t.Fatal("driver saw no requests")
 	}
-	return drv.requests[len(drv.requests)-1].SystemPrompt
+	return drv.requests[len(drv.requests)-1].System.Flatten()
 }
 
 // handbookBlock returns the injected [Group handbook] block (header + body), or

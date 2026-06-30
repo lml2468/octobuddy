@@ -71,7 +71,7 @@ func TestClaudeMinimalModeAppliesBypass(t *testing.T) {
 	// Seed the probe cache so buildArgs() doesn't itself spawn a probe; we only
 	// care that minimal mode requests bypassPermissions.
 	d := newTestDriver()
-	args := d.buildArgs(Request{Prompt: "hi", SystemPrompt: "t"})
+	args := d.buildArgs(Request{Prompt: "hi", System: SystemPrompt{Persona: []string{"t"}}})
 
 	init := spawnReadInit(t, args)
 	if got, _ := init["permissionMode"].(string); got != "bypassPermissions" {
