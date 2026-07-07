@@ -115,7 +115,6 @@ func TestRenderGroupAnchorAndEscape(t *testing.T) {
 	}
 }
 
-
 // TestRenderGroupNoDelta pins that an empty delta omits the delta block entirely
 // (the prompt starts with the anchor).
 func TestRenderGroupNoDelta(t *testing.T) {
