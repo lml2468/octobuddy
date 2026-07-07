@@ -59,7 +59,8 @@ func main() {
 }
 
 type daemonFlags struct {
-	claudeBin   string
+	driver      string
+	agentBin    string
 	fromUID     string
 	dbPath      string
 	maxPerMin   int
@@ -75,7 +76,9 @@ type daemonFlags struct {
 }
 
 func parseDaemonFlags() daemonFlags {
-	claudeBin := flag.String("claude-bin", "", "claude executable (default: 'claude' on PATH)")
+	driver := flag.String("agent", "", "agent driver to spawn (claude, …; default: claude)")
+	agentBin := flag.String("agent-bin", "", "agent executable (default: the driver name on PATH)")
+	claudeBin := flag.String("claude-bin", "", "deprecated alias for -agent-bin")
 	fromUID := flag.String("uid", "repl-user", "synthetic from_uid for REPL inbound (DM session key)")
 	dbPath := flag.String("db", filepath.Join(os.TempDir(), "octobuddy-daemon.db"), "sqlite path")
 	maxPerMin := flag.Int("rate", 30, "max messages per minute per session")
@@ -89,8 +92,15 @@ func parseDaemonFlags() daemonFlags {
 	debug := flag.Bool("debug", false, "log DEBUG-level lines (selfcheck details, gateway internals)")
 	logJSON := flag.Bool("log-json", false, "emit logs as JSON (structured; for log aggregators)")
 	flag.Parse()
+	// -agent-bin is the canonical flag; -claude-bin is kept as a back-compat
+	// alias (the canonical one wins when both are set).
+	bin := *agentBin
+	if bin == "" {
+		bin = *claudeBin
+	}
 	return daemonFlags{
-		claudeBin:   *claudeBin,
+		driver:      *driver,
+		agentBin:    bin,
 		fromUID:     *fromUID,
 		dbPath:      *dbPath,
 		maxPerMin:   *maxPerMin,
@@ -113,17 +123,22 @@ func runSingleBotMode(flags daemonFlags) {
 	}
 	defer st.Close()
 
-	drv := agent.NewClaudeDriver(flags.claudeBin)
+	// Single-bot secrets are seeded from flags/env and can be updated via control.
+	sec := &secretStore{}
+
+	drv, err := agent.New(flags.driver, agent.Options{
+		Bin:       flags.agentBin,
+		EnvSpecFn: singleBotEnvSpecFn(sec, flags.octoAPI),
+	})
+	if err != nil {
+		fatal("agent driver: %v", err)
+	}
 
 	started := time.Now()
 
 	// Signal cancellation lets control-bus and IM turns finish before defers run.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-
-	// Single-bot secrets are seeded from flags/env and can be updated via control.
-	sec := &secretStore{}
-	drv.EnvFn = singleBotEnvFn(sec, flags.octoAPI)
 
 	rt := router.New(router.Config{MaxPerMinute: flags.maxPerMin})
 	sinks, srv := singleBotSinks(flags.controlSock)
@@ -173,21 +188,18 @@ func singleBotGateway(drv agent.Driver, st *store.Store, rt *router.Router, sink
 		WithGroupBackfill(connector.BotUID, connector.BackfillFetch)
 }
 
-func singleBotEnvFn(sec *secretStore, octoAPI string) func() []string {
-	return func() []string {
-		var out []string
-		if t := sec.GatewayToken(); t != "" {
-			out = append(out, "ANTHROPIC_AUTH_TOKEN="+t)
+// singleBotEnvSpecFn supplies the driver-neutral EnvSpec for single-bot mode:
+// the gateway token + octo-cli companion credential, resolved live so an
+// injected token wins. The selected driver maps these onto its own var names
+// (Claude → ANTHROPIC_AUTH_TOKEN). Single-bot mode has no per-bot config dir or
+// gateway base URL, so those spec fields stay empty.
+func singleBotEnvSpecFn(sec *secretStore, octoAPI string) func() agent.EnvSpec {
+	return func() agent.EnvSpec {
+		return agent.EnvSpec{
+			GatewayToken: sec.GatewayToken(),
+			OctoToken:    sec.OctoToken(),
+			OctoAPIURL:   octoAPI,
 		}
-		// octo-cli companion credential: the agent's octo-cli reads these from
-		// the env (no on-disk profile). Mirrors DriverEnvForOcto in -config mode.
-		if t := sec.OctoToken(); t != "" {
-			out = append(out, "OCTO_BOT_TOKEN="+t)
-		}
-		if octoAPI != "" {
-			out = append(out, "OCTO_API_BASE_URL="+octoAPI)
-		}
-		return out
 	}
 }
 
@@ -208,7 +220,7 @@ func singleBotConnector(octoAPI, octoToken string, sec *secretStore, sinks *mult
 	return connector
 }
 
-func configureSingleBotControl(ctx context.Context, srv *control.Server, gw *gateway.Gateway, st *store.Store, drv *agent.ClaudeDriver, sec *secretStore, started time.Time, flags daemonFlags) (func(), func()) {
+func configureSingleBotControl(ctx context.Context, srv *control.Server, gw *gateway.Gateway, st *store.Store, drv agent.Driver, sec *secretStore, started time.Time, flags daemonFlags) (func(), func()) {
 	handler, target := makeCommandHandler(ctx, gw, st, drv, sec, srv, started)
 	srv.SetHandler(handler)
 	configureBusAuth(srv, flags.authStdin)

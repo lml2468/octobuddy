@@ -287,9 +287,9 @@ class Store {
     this.lastError = text;
   }
   connected = $state(false);
- // Cached claude tool surface (probed on install/upgrade), loaded once for the
+ // Cached agent tool surface (probed on install/upgrade), loaded once for the
  // settings tool picker. null until LoadToolset resolves.
-  toolset = $state<{ probed: boolean; claudeVersion: string; headlessSafe: string[] } | null>(null);
+  toolset = $state<{ probed: boolean; version: string; headlessSafe: string[] } | null>(null);
  // Last mcp.check response (per-bot MCP health), and a monotonic seq the
  // settings pane uses to detect a fresh reply to its own CheckMCP call.
   mcpCheck = $state<{ botId: string; configured: boolean; servers: { name: string; status: string; tools: string[] }[] } | null>(null);
@@ -365,7 +365,7 @@ class Store {
       { id: "research", connected: false, lastError: "awaiting secret", usage: { 0: pv(412_900, 38_540, 201_770, 64_200, 1.2045, 92) } },
     ];
     // Mock probed toolset so the tool pickers (基础信息 + chat panel) render in preview.
-    this.toolset = { probed: true, claudeVersion: "2.1.187", headlessSafe: ["Read", "Edit", "Write", "Bash", "Grep", "Glob", "WebSearch", "WebFetch", "NotebookEdit", "TodoWrite", "Task", "Skill"] };
+    this.toolset = { probed: true, version: "2.1.187", headlessSafe: ["Read", "Edit", "Write", "Bash", "Grep", "Glob", "WebSearch", "WebFetch", "NotebookEdit", "TodoWrite", "Task", "Skill"] };
     this.health = "claude · 2 bots";
     this.connected = true;
     this.selectedBotId = "main";

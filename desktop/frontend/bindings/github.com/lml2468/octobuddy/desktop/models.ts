@@ -106,14 +106,15 @@ export class OctoCliStatus {
 }
 
 /**
- * ToolsetInfo is the tool-picker view of the probed claude tool surface.
- * Probed is false when claude has not been probed yet (no binary / first run);
- * the picker then shows a "probing…" state. HeadlessSafe is the set the picker
- * offers (Available minus interactive tools).
+ * ToolsetInfo is the tool-picker view of the probed agent tool surface.
+ * Probed is false when the agent binary has not been probed yet (no binary /
+ * first run); the picker then shows a "probing…" state. HeadlessSafe is the set
+ * the picker offers (Available minus interactive tools). Version is the probed
+ * binary's version, for display.
  */
 export class ToolsetInfo {
     "probed": boolean;
-    "claudeVersion": string;
+    "version": string;
     "headlessSafe": string[];
 
     /** Creates a new ToolsetInfo instance. */
@@ -121,8 +122,8 @@ export class ToolsetInfo {
         if (!("probed" in $$source)) {
             this["probed"] = false;
         }
-        if (!("claudeVersion" in $$source)) {
-            this["claudeVersion"] = "";
+        if (!("version" in $$source)) {
+            this["version"] = "";
         }
         if (!("headlessSafe" in $$source)) {
             this["headlessSafe"] = [];

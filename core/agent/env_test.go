@@ -86,7 +86,7 @@ func scanMergedEnv(env []string) mergedEnvSeen {
 func TestClaudeDriverInjectsEnv(t *testing.T) {
 	bin := writeFakeBin(t, `echo "GOT:$OCTOBUDDY_INJECTED"`)
 	d := NewClaudeDriver(bin)
-	d.Env = []string{"OCTOBUDDY_INJECTED=hello-env"}
+	d.StaticEnv = []string{"OCTOBUDDY_INJECTED=hello-env"}
 
 	ch, err := d.Query(context.Background(), Request{Prompt: "x"})
 	if err != nil {

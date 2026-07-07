@@ -44,6 +44,14 @@ func (v *EnvValue) UnmarshalJSON(data []byte) error {
 // AgentConfig is the on-disk "agent" block: the model and the model-gateway
 // routing (base URL + token) plus any extra env vars injected into the agent CLI.
 type AgentConfig struct {
+	// Driver selects which agent adapter the daemon spawns (matches the name a
+	// driver registers in core/agent: "claude", "codex", …). Empty → "claude"
+	// (the default), so existing config.json files keep working. Not validated
+	// here (config is a leaf and cannot import core/agent); the daemon validates
+	// it when it builds the driver via agent.New — an unknown name fails that
+	// bot's startup (single-bot: fatal; multi-bot: that bot is marked failed
+	// while the others keep running).
+	Driver         string              `json:"driver,omitempty"`
 	Model          string              `json:"model,omitempty"`
 	GatewayBaseURL string              `json:"gatewayBaseUrl,omitempty"`
 	GatewayToken   string              `json:"gatewayToken,omitempty"`
@@ -230,16 +238,17 @@ type File struct {
 	Bots []BotEntry `json:"bots,omitempty"`
 }
 
-// ToolsetCache records the claude binary's tool surface as last probed by the
-// desktop. ClaudeVersion is the binary version the probe ran against (so the
+// ToolsetCache records the agent binary's tool surface as last probed by the
+// desktop. Version is the binary version the probe ran against (so the
 // desktop can re-probe on change); Available is the raw built-in tool set;
 // HeadlessSafe is Available minus interactive tools — the set the picker
-// offers. ProbedAt is a unix timestamp for display/staleness only.
+// offers. ProbedAt is a unix timestamp for display/staleness only. GUI-only
+// state: the daemon never reads this (it probes live per turn).
 type ToolsetCache struct {
-	ClaudeVersion string   `json:"claudeVersion,omitempty"`
-	ProbedAt      int64    `json:"probedAt,omitempty"`
-	Available     []string `json:"available,omitempty"`
-	HeadlessSafe  []string `json:"headlessSafe,omitempty"`
+	Version      string   `json:"version,omitempty"`
+	ProbedAt     int64    `json:"probedAt,omitempty"`
+	Available    []string `json:"available,omitempty"`
+	HeadlessSafe []string `json:"headlessSafe,omitempty"`
 }
 
 // Resolved is a single bot's fully-resolved, ready-to-run configuration.
@@ -275,12 +284,14 @@ type Resolved struct {
 	DataDir    string // ~/.octobuddy/<id>/data       — SQLite + state
 	CwdBase    string // ~/.octobuddy/<id>/workspace   — per-session cwd sandboxes
 	MemoryBase string // ~/.octobuddy/<id>/memory      — per-session auto-memory (outside CwdBase)
-	// ClaudeConfigDir is the per-bot CLAUDE_CONFIG_DIR (~/.octobuddy/<id>/.claude).
-	// Set as the agent's config root to ISOLATE it from the operator's ~/.claude
-	// (user-scope skills + installed plugins would otherwise leak into every
-	// bot). Empty when agent.inheritUserConfig is set. The bot's own skills /
-	// workflows live under it (.claude/skills,.claude/workflows) and are
-	// auto-discovered by the claude CLI as user-scope assets — no per-turn
-	// sandbox symlinking needed.
-	ClaudeConfigDir string
+	// AgentConfigDir is the per-bot isolated config root the driver's CLI uses
+	// (Claude → CLAUDE_CONFIG_DIR, ~/.octobuddy/<id>/.claude). It ISOLATES the
+	// agent from the operator's user-scope config (skills + installed plugins
+	// would otherwise leak into every bot). The base name (".claude") is the
+	// DRIVER's choice, not config's: load.go leaves this empty and the daemon
+	// fills it via agent.ConfigDirNamer before spawn — keeping config free of any
+	// driver-specific literal. Empty when agent.inheritUserConfig is set, or
+	// before the daemon resolves it. The bot's own skills / workflows live under
+	// it and are auto-discovered by the CLI as user-scope assets.
+	AgentConfigDir string
 }

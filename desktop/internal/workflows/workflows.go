@@ -19,16 +19,18 @@ import (
 	"strings"
 
 	"github.com/lml2468/octobuddy/core/safepath"
+	"github.com/lml2468/octobuddy/desktop/internal/agentdir"
 )
 
-// botDir is ~/.octobuddy/<botID>/.claude/workflows — inside CLAUDE_CONFIG_DIR so
-// the claude CLI loads it as user-scope on launch.
+// botDir is ~/.octobuddy/<botID>/<agent-config-dir>/workflows — inside the agent
+// config dir (Claude: .claude) so the agent CLI loads it as user-scope on
+// launch. The config-dir segment is the configured driver's, via agentdir.
 func botDir(botID string) (string, error) {
 	if !safepath.ValidSlug(botID) {
 		return "", fmt.Errorf("invalid bot id %q — letters, digits, . _ - only", botID)
 	}
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".octobuddy", botID, ".claude", "workflows"), nil
+	return filepath.Join(home, ".octobuddy", botID, agentdir.Name(botID), "workflows"), nil
 }
 
 // workflowRel returns "<name>.js" after slug-validating name. The result
@@ -165,8 +167,8 @@ func writeIn(root, name, content string) error {
 	return nil
 }
 
-// ensureBotWorkflowsDir creates ~/.octobuddy/<botID>/.claude/workflows via the
-// dirfd-walk SafeMkdirAll so every intermediate component is symlink-
+// ensureBotWorkflowsDir creates ~/.octobuddy/<botID>/<agent-config-dir>/workflows
+// via the dirfd-walk SafeMkdirAll so every intermediate component is symlink-
 // refused. replaces the prior `os.MkdirAll(root, …)`
 // in writeIn that followed any symlinked intermediate component.
 func ensureBotWorkflowsDir(botID string) error {
@@ -174,7 +176,7 @@ func ensureBotWorkflowsDir(botID string) error {
 		return fmt.Errorf("invalid bot id %q", botID)
 	}
 	home, _ := os.UserHomeDir()
-	return safepath.SafeMkdirAll(home, ".octobuddy/"+botID+"/.claude/workflows", 0o755)
+	return safepath.SafeMkdirAll(home, ".octobuddy/"+botID+"/"+agentdir.Name(botID)+"/workflows", 0o755)
 }
 
 func createIn(root, name string) error {

@@ -47,7 +47,7 @@ func spawnReadInit(t *testing.T, args []string) map[string]any {
 		_ = cmd.Wait()
 	})
 
-	sc := newClaudeScanner(stdout)
+	sc := newLineScanner(stdout)
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
 		if line == "" {

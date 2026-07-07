@@ -275,9 +275,9 @@
   <fieldset>
     <legend>内置可用工具（Bot 级默认）</legend>
     {#if !toolset}
-      <small>正在探测 claude 可用工具…（首次安装/升级后生成）</small>
+      <small>正在探测可用工具…（首次安装/升级 Agent 后生成）</small>
     {:else if !toolset.probed || (toolset.headlessSafe ?? []).length === 0}
-      <small>尚未探测到工具集。安装/升级 claude 后将自动填充。</small>
+      <small>尚未探测到工具集。安装/升级 Agent 后将自动填充。</small>
     {:else if scopedTools == null}
       <small>当前使用全部 headless-安全内置工具（{(toolset.headlessSafe ?? []).length} 个）。</small>
       <button class="add sm" type="button" onclick={startScoping}>限定可用工具…</button>

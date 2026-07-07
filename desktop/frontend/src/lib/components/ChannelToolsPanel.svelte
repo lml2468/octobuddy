@@ -130,7 +130,7 @@
   </header>
 
   {#if !toolset || !toolset.probed || (toolset.headlessSafe ?? []).length === 0}
-    <p class="hint">尚未探测到工具集。安装/升级 claude 后将自动填充。</p>
+    <p class="hint">尚未探测到工具集。安装/升级 Agent 后将自动填充。</p>
   {:else}
     <div class="modeseg">
       <button type="button" class:active={!configured} onclick={followDefault}>跟随 Bot 默认</button>

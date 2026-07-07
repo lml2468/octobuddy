@@ -1,64 +1,28 @@
 package config
 
-// DriverEnv builds the KEY=VALUE environment to layer onto the claude CLI's
-// process env: the user-declared agent.env, the model-gateway routing vars
-// (mapped to the names claude understands), the octo-cli companion credential,
-// and the per-bot CLAUDE_CONFIG_DIR isolation toggle. Tokens are supplied
-// explicitly so the caller can pass runtime-injected values (from the in-memory
-// secret store) rather than the config-file copies; empty strings omit the
-// corresponding env var. secretValue resolves EnvValue.SecretRef entries from
-// the active secret backend. Order matters: agent.env first, the named vars last —
-// so the routing/credential injections always win over a same-named agent.env
-// entry.
+// AgentEnvExtra resolves the user-declared per-bot agent.env into KEY=VALUE
+// entries (plain values pass through; secretRef entries are resolved from the
+// active secret backend, and an unresolved ref is omitted). This is the
+// DRIVER-NEUTRAL part of the spawn environment — it names nothing
+// driver-specific. The daemon (the join-point that imports core/agent) combines
+// it with the gateway/octo/config-dir scalars into an agent.EnvSpec and hands
+// that to the driver's EnvMapper, which owns the concrete var names
+// (ANTHROPIC_*/CLAUDE_CONFIG_DIR for Claude). Keeping the naming behind the
+// driver is what lets config stay a leaf with no agent import.
 //
-//	ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN
-//	OCTO_BOT_TOKEN / OCTO_API_BASE_URL
-//	CLAUDE_CONFIG_DIR (suppressed by agent.inheritUserConfig)
+// Order among the agent.env entries is unspecified (map iteration); the daemon
+// appends the named routing/credential vars AFTER these, so an injection wins
+// over a same-named agent.env entry regardless.
 //
-// Security note: the token is handed to the spawned `claude` child as an
-// environment variable. On Linux that makes it readable from
-// /proc/<pid>/environ by any same-uid process (and via `ps eww`), so the
-// in-memory-only secret store's guarantee does not extend past the exec
-// boundary. This is the accepted tradeoff documented in SECURITY.md — the
-// agent CLI takes its credentials via env, and the daemon runs as the operator.
-//
-// octo-cli specifics: when OCTO_BOT_ID is set (the wizard always sets it),
-// octo-cli does a DISK-PROFILE lookup keyed by robot id and IGNORES
-// OCTO_BOT_TOKEN entirely — so the bf_ token alone in env isn't enough; the
-// desktop side must also run `octo-cli auth login` per bot to write the disk
-// profile (see desktop/internal/octocli.Login, called from configstore.Save).
-// We still inject OCTO_BOT_TOKEN + OCTO_API_BASE_URL here as the fallback path
-// for any agent code that bypasses --bot-id (e.g. a one-off `octo-cli api …`).
-func (r Resolved) DriverEnv(gatewayToken, octoToken string, secretValue func(string) string) []string {
-	out := agentEnvEntries(r.Agent.Env, secretValue)
-	if r.Agent.GatewayBaseURL != "" {
-		out = append(out, "ANTHROPIC_BASE_URL="+r.Agent.GatewayBaseURL)
-	}
-	if gatewayToken != "" {
-		out = append(out, "ANTHROPIC_AUTH_TOKEN="+gatewayToken)
-	}
-	// octo-cli companion credential (appended last so it wins over any same-named
-	// agent.env entry, mirroring the gateway vars above).
-	if octoToken != "" {
-		out = append(out, "OCTO_BOT_TOKEN="+octoToken)
-	}
-	if r.APIURL != "" {
-		out = append(out, "OCTO_API_BASE_URL="+r.APIURL)
-	}
-	// Isolate the agent's config root from the operator's ~/.claude (user-scope
-	// skills + installed plugins) unless explicitly told to inherit it. Auth is
-	// env-based (above), so this is safe; built-in CLI skills still load.
-	if r.ClaudeConfigDir != "" && !r.Agent.InheritUserConfig {
-		out = append(out, "CLAUDE_CONFIG_DIR="+r.ClaudeConfigDir)
-	}
-	return out
-}
-
-func agentEnvEntries(env map[string]EnvValue, secretValue func(string) string) []string {
+// Security note: the gateway token ultimately reaches the spawned CLI as an
+// environment variable. On Linux that makes it readable from /proc/<pid>/environ
+// by any same-uid process; this is the accepted tradeoff documented in
+// SECURITY.md — the agent CLI takes credentials via env and the daemon runs as
+// the operator.
+func (r Resolved) AgentEnvExtra(secretValue func(string) string) []string {
 	var out []string
-	for k, ev := range env {
-		v, ok := resolveEnvValue(ev, secretValue)
-		if ok {
+	for k, ev := range r.Agent.Env {
+		if v, ok := resolveEnvValue(ev, secretValue); ok {
 			out = append(out, k+"="+v)
 		}
 	}

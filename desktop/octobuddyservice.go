@@ -374,19 +374,20 @@ func (x *OctoBuddyService) LoadConfig() ([]configstore.BotConfig, error) {
 	return configstore.Load()
 }
 
-// ToolsetInfo is the tool-picker view of the probed claude tool surface.
-// Probed is false when claude has not been probed yet (no binary / first run);
-// the picker then shows a "probing…" state. HeadlessSafe is the set the picker
-// offers (Available minus interactive tools).
+// ToolsetInfo is the tool-picker view of the probed agent tool surface.
+// Probed is false when the agent binary has not been probed yet (no binary /
+// first run); the picker then shows a "probing…" state. HeadlessSafe is the set
+// the picker offers (Available minus interactive tools). Version is the probed
+// binary's version, for display.
 type ToolsetInfo struct {
-	Probed        bool     `json:"probed"`
-	ClaudeVersion string   `json:"claudeVersion"`
-	HeadlessSafe  []string `json:"headlessSafe"`
+	Probed       bool     `json:"probed"`
+	Version      string   `json:"version"`
+	HeadlessSafe []string `json:"headlessSafe"`
 }
 
-// LoadToolset returns the cached claude tool surface (probed on
+// LoadToolset returns the cached agent tool surface (probed on
 // install/upgrade) so the settings tool picker can offer the selectable set.
-// Probed is false when claude has not been probed yet. Best-effort: it also
+// Probed is false when the agent has not been probed yet. Best-effort: it also
 // triggers a background refresh so a stale or missing cache self-heals without
 // blocking the UI (the next LoadToolset call sees the fresh result).
 func (x *OctoBuddyService) LoadToolset() (ToolsetInfo, error) {
@@ -402,7 +403,7 @@ func (x *OctoBuddyService) LoadToolset() (ToolsetInfo, error) {
 	if ts == nil {
 		return ToolsetInfo{Probed: false}, nil
 	}
-	return ToolsetInfo{Probed: true, ClaudeVersion: ts.ClaudeVersion, HeadlessSafe: ts.HeadlessSafe}, nil
+	return ToolsetInfo{Probed: true, Version: ts.Version, HeadlessSafe: ts.HeadlessSafe}, nil
 }
 
 // SaveConfig writes the bots back (config.json + SOUL/AGENTS + secret backend).

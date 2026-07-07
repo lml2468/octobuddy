@@ -272,8 +272,103 @@ type Capabilities struct {
 
 // Driver is the contract every agent adapter implements. Query spawns the
 // agent for one turn and streams normalized events until the channel closes.
+//
+// Beyond this core trio, a driver MAY implement the capability interfaces below
+// (EnvMapper, ConfigDirNamer, MCPProber, ToolProber). The cmd/desktop layers
+// type-assert for them rather than for a concrete driver type, so a driver that
+// has no MCP concept simply omits MCPProber and the MCP health-check degrades to
+// "unsupported" instead of breaking compilation.
 type Driver interface {
 	Name() string
 	Capabilities() Capabilities
 	Query(ctx context.Context, req Request) (<-chan AgentEvent, error)
+}
+
+// EnvSpec is the driver-agnostic description of a bot's process environment.
+// config produces it from neutral fields (it must not name ANTHROPIC_* or
+// CLAUDE_CONFIG_DIR — config is a leaf that doesn't import agent); a driver's
+// EnvMapper translates it into the concrete KEY=VALUE entries its CLI expects.
+// This is the seam that lets the env-var contract vary per driver: Claude emits
+// ANTHROPIC_BASE_URL/ANTHROPIC_AUTH_TOKEN/CLAUDE_CONFIG_DIR, a future driver
+// emits its own names from the SAME spec.
+type EnvSpec struct {
+	// Extra are user-declared agent.env entries (already secret-resolved),
+	// emitted FIRST so the named vars below win over a same-named entry.
+	Extra []string
+	// GatewayBaseURL / GatewayToken route the model API (Claude: ANTHROPIC_*).
+	// Empty values are omitted.
+	GatewayBaseURL string
+	GatewayToken   string
+	// OctoToken / OctoAPIURL are the octo-cli companion credential fallback
+	// (OCTO_BOT_TOKEN / OCTO_API_BASE_URL — these are octo-cli's contract, not
+	// the agent's, so every driver emits them identically). Empty → omitted.
+	OctoToken  string
+	OctoAPIURL string
+	// ConfigDir is the per-bot isolated config root (Claude: CLAUDE_CONFIG_DIR).
+	// Empty, or InheritUserConfig true, suppresses the isolation var so the
+	// agent inherits the operator's user-scope config.
+	ConfigDir         string
+	InheritUserConfig bool
+}
+
+// mapEnvSpec is the shared EnvSpec→[]string projection every driver's EnvMapper
+// uses: it emits the user agent.env first (so the named vars below win over a
+// same-named entry), then the gateway routing pair under driver-specific names
+// (baseURLVar/authTokenVar), then the octo-cli companion fallback (identical
+// across drivers — octo-cli's contract, not the agent's), then the per-bot
+// config-dir isolation var (configDirVar), suppressed when unset or inheriting.
+// Empty values are omitted. Centralizing this keeps the ordering + omission
+// rules — pinned by TestClaudeEnvMapperContract — identical across drivers, so a
+// new driver only supplies its three var names.
+func mapEnvSpec(spec EnvSpec, baseURLVar, authTokenVar, configDirVar string) []string {
+	out := append([]string(nil), spec.Extra...)
+	if spec.GatewayBaseURL != "" {
+		out = append(out, baseURLVar+"="+spec.GatewayBaseURL)
+	}
+	if spec.GatewayToken != "" {
+		out = append(out, authTokenVar+"="+spec.GatewayToken)
+	}
+	if spec.OctoToken != "" {
+		out = append(out, "OCTO_BOT_TOKEN="+spec.OctoToken)
+	}
+	if spec.OctoAPIURL != "" {
+		out = append(out, "OCTO_API_BASE_URL="+spec.OctoAPIURL)
+	}
+	if spec.ConfigDir != "" && !spec.InheritUserConfig {
+		out = append(out, configDirVar+"="+spec.ConfigDir)
+	}
+	return out
+}
+
+// EnvMapper maps a neutral EnvSpec onto the concrete env-var names a driver's
+// CLI consumes. Implemented by drivers; called by the cmd join-point (which
+// imports both config and agent) to build Options.EnvFn.
+type EnvMapper interface {
+	Env(spec EnvSpec) []string
+}
+
+// ConfigDirNamer reports the per-bot config-directory base name a driver uses
+// under the bot root (Claude: ".claude"). The daemon joins it with the bot root
+// to form EnvSpec.ConfigDir and to mkdir it before spawn; the desktop joins it
+// to locate skills/workflows/mcp config. Centralizing it here keeps core and
+// desktop from drifting on the literal.
+type ConfigDirNamer interface {
+	ConfigDirName() string
+}
+
+// MCPProber is implemented by drivers that support MCP servers and can report
+// per-server health (the desktop's "test connection"). Replaces the old
+// drv.(*ClaudeDriver) reach-through in the daemon. cwd is the sandbox dir a real
+// turn runs in; mcpPath is the bot's MCP config file.
+type MCPProber interface {
+	ProbeMCPConfig(ctx context.Context, cwd string, env []string, mcpPath string) ([]MCPServerStatus, error)
+}
+
+// ToolProber is implemented by drivers whose tool surface is discovered from
+// the live binary (rather than a static list). The desktop's tool picker probes
+// through this. ResolveBin exposes the per-turn binary so an out-of-turn probe
+// uses the same executable a real Query would.
+type ToolProber interface {
+	ResolveBin() string
+	ProbeToolNames(ctx context.Context, env []string) ([]string, error)
 }

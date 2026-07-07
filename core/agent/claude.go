@@ -1,16 +1,13 @@
 package agent
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os/exec"
 	"slices"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/lml2468/octobuddy/core/clog"
@@ -49,29 +46,12 @@ var interactiveExclusions = map[string]bool{
 // It is the ONE place that knows about the claude binary, its argv
 // shape, and its env requirements (ANTHROPIC_*, CLAUDE_CONFIG_DIR).
 type ClaudeDriver struct {
-	// Bin is the claude executable. Default "claude" on PATH; set to an
-	// absolute path to pin a specific install.
-	Bin string
-	// BinFn, when set, overrides Bin per-Query. Lets the daemon refresh
-	// the resolved path on every turn so a freshly-landed background
-	// install (~/.octobuddy/bin/claude from the desktop's claudecli) is
-	// picked up on the next user message — without waiting for restart.
-	BinFn func() string
-	// ExtraArgs are appended verbatim.
-	ExtraArgs []string
-	// Env are extra KEY=VALUE entries layered onto os.Environ for the spawned
-	// CLI (e.g. ANTHROPIC_BASE_URL, OCTO_BOT_ID, GH_TOKEN).
-	Env []string
-	// EnvFn, when set, is evaluated on every Query to build the extra env,
-	// overriding the static Env.
-	EnvFn func() []string
-	// MCPConfigFn, when set, is evaluated per Query to resolve the path to
-	// this bot's .mcp.json (under its CLAUDE_CONFIG_DIR). A non-empty result
-	// adds `--mcp-config <path> --strict-mcp-config` so the bot's configured
-	// MCP servers load (and only those). Resolved per turn so a freshly-
-	// written .mcp.json takes effect on the next message without a restart;
-	// return "" when the file is absent.
-	MCPConfigFn func() string
+	// procDriver carries the shared process-spawning state (Bin/BinFn/EnvFn/
+	// EnvSpecFn/StaticEnv/MCPConfigFn/ExtraArgs) + binPath()/queryEnv(). Embedded
+	// so a second driver reuses the resolution logic instead of re-copying it.
+	// StaticEnv here layers ANTHROPIC_BASE_URL/OCTO_BOT_ID/GH_TOKEN etc; EnvSpecFn
+	// is mapped through this driver's Env() (wired as procDriver.envMap in init).
+	procDriver
 
 	// selfcheckOnce gates a one-time diagnostic line emitted on the
 	// FIRST Query: claude path resolution, masked ANTHROPIC_AUTH_TOKEN,
@@ -117,10 +97,60 @@ func NewClaudeDriver(bin string) *ClaudeDriver {
 	if bin == "" {
 		bin = "claude"
 	}
-	return &ClaudeDriver{Bin: bin}
+	d := &ClaudeDriver{}
+	d.Bin = bin
+	d.envMap = d.Env // map EnvSpecFn results through this driver's var names
+	return d
+}
+
+// init self-registers the claude driver so importing the agent package makes
+// "claude" selectable via New. The factory maps the generic Options onto the
+// embedded procDriver fields the daemon used to set by hand.
+func init() {
+	Register("claude", func(o Options) Driver {
+		d := NewClaudeDriver(o.Bin)
+		d.BinFn = o.BinFn
+		d.EnvFn = o.EnvFn
+		d.EnvSpecFn = o.EnvSpecFn
+		d.MCPConfigFn = o.MCPConfigFn
+		d.ExtraArgs = o.ExtraArgs
+		return d
+	})
 }
 
 func (d *ClaudeDriver) Name() string { return "claude" }
+
+// ConfigDirName is the per-bot config-dir base under the bot root. Claude reads
+// CLAUDE_CONFIG_DIR; we point it at <botRoot>/.claude. (agent.ConfigDirNamer)
+func (d *ClaudeDriver) ConfigDirName() string { return ".claude" }
+
+// Env maps the neutral EnvSpec onto the env vars the claude CLI consumes
+// (ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN / CLAUDE_CONFIG_DIR) plus the
+// octo-cli companion fallback. Order matches the legacy config.DriverEnv: the
+// user-declared agent.env first, then the named vars (so the routing/credential
+// injections win over a same-named agent.env entry). (agent.EnvMapper)
+//
+// Security note: the gateway token is handed to the spawned claude child as an
+// environment variable. On Linux that makes it readable from /proc/<pid>/environ
+// by any same-uid process; this is the accepted tradeoff documented in
+// SECURITY.md — the agent CLI takes credentials via env and the daemon runs as
+// the operator.
+func (d *ClaudeDriver) Env(spec EnvSpec) []string {
+	return mapEnvSpec(spec, "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CONFIG_DIR")
+}
+
+// ProbeMCPConfig satisfies agent.MCPProber: it probes the bot's saved MCP config
+// with the bot's resolved binary, so the daemon's MCP health check no longer
+// needs to type-assert the concrete driver. (agent.MCPProber)
+func (d *ClaudeDriver) ProbeMCPConfig(ctx context.Context, cwd string, env []string, mcpPath string) ([]MCPServerStatus, error) {
+	return ProbeMCP(ctx, d.binPath(), cwd, env, mcpPath)
+}
+
+// ProbeToolNames satisfies agent.ToolProber: the desktop tool picker probes the
+// live binary's tool surface through this. (agent.ToolProber; ResolveBin below.)
+func (d *ClaudeDriver) ProbeToolNames(ctx context.Context, env []string) ([]string, error) {
+	return ProbeTools(ctx, d.binPath(), env)
+}
 
 func (d *ClaudeDriver) Capabilities() Capabilities {
 	return Capabilities{Streaming: true, Resume: true, ToolEvents: true}
@@ -387,7 +417,7 @@ func probeInit(ctx context.Context, bin, cwd string, env, extraArgs []string) (i
 		_ = cmd.Wait()
 	}()
 
-	sc := newClaudeScanner(stdout)
+	sc := newLineScanner(stdout)
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
 		if line == "" {
@@ -474,93 +504,11 @@ func ProbeMCP(ctx context.Context, bin, cwd string, env []string, mcpConfigPath 
 
 func (d *ClaudeDriver) Query(ctx context.Context, req Request) (<-chan AgentEvent, error) {
 	cmd := d.buildCommand(ctx, req)
-	stdout, stderr, err := commandPipes(cmd)
-	if err != nil {
-		return nil, err
-	}
-
-	if err := cmd.Start(); err != nil {
-		// On Start failure cmd.Wait never runs, so Go's normal pipe-close
-		// path never triggers and these descriptors leak until the *Cmd is
-		// GC'd. Under fd exhaustion or repeated start failures this
-		// accumulates quickly — close them explicitly.
-		_ = stdout.Close()
-		_ = stderr.Close()
-		return nil, fmt.Errorf("start %s: %w", d.binPath(), err)
-	}
-
-	out := make(chan AgentEvent, 64)
-	var wg sync.WaitGroup
-	wg.Add(2)
-	var sawTurnDone atomic.Bool
-	d.startReaders(ctx, stdout, stderr, req.SessionID, out, &wg, &sawTurnDone)
-	waitAndClose(ctx, cmd, out, &wg, &sawTurnDone)
-	return out, nil
-}
-
-func (d *ClaudeDriver) startReaders(ctx context.Context, stdout, stderr io.Reader, sessionID string, out chan<- AgentEvent, wg *sync.WaitGroup, sawTurnDone *atomic.Bool) {
-	go func() {
-		defer wg.Done()
-		d.drainStderr(ctx, stderr, sessionID, out)
-	}()
-	go func() {
-		defer wg.Done()
-		d.drainStdout(ctx, stdout, out, sawTurnDone)
-	}()
-}
-
-func waitAndClose(ctx context.Context, cmd *exec.Cmd, out chan AgentEvent, wg *sync.WaitGroup, sawTurnDone *atomic.Bool) {
-	go func() {
-		defer close(out)
-		wg.Wait()
-		if err := cmd.Wait(); err != nil {
-			emitAgentEvent(ctx, out, AgentEvent{
-				Kind:        KindError,
-				Err:         fmt.Sprintf("claude exited: %v", err),
-				Recoverable: sawTurnDone.Load(),
-				Raw:         err.Error(),
-			})
-		}
-	}()
-}
-
-func (d *ClaudeDriver) drainStderr(ctx context.Context, stderr io.Reader, sessionID string, out chan<- AgentEvent) {
-	sc := newClaudeScanner(stderr)
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" {
-			continue
-		}
-		emitAgentEvent(ctx, out, stderrLineEvent(line, sessionID))
-	}
-	if err := sc.Err(); err != nil {
-		emitAgentEvent(ctx, out, AgentEvent{Kind: KindError, Err: fmt.Sprintf("stderr scan: %v", err), Recoverable: true, Raw: err.Error()})
-	}
-}
-
-func (d *ClaudeDriver) drainStdout(ctx context.Context, stdout io.Reader, out chan<- AgentEvent, sawTurnDone *atomic.Bool) {
-	sc := newClaudeScanner(stdout)
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" {
-			continue
-		}
-		for _, ev := range parseClaudeLine(line) {
-			if ev.Kind == KindTurnDone {
-				sawTurnDone.Store(true)
-			}
-			emitAgentEvent(ctx, out, ev)
-		}
-	}
-	if err := sc.Err(); err != nil {
-		emitAgentEvent(ctx, out, AgentEvent{Kind: KindError, Err: fmt.Sprintf("stdout scan: %v", err), Raw: err.Error()})
-	}
-}
-
-func newClaudeScanner(r io.Reader) *bufio.Scanner {
-	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
-	return sc
+	sessionID := req.SessionID
+	return streamCommand(ctx, cmd, "claude",
+		parseClaudeLine,
+		func(line string) AgentEvent { return stderrLineEvent(line, sessionID) },
+	)
 }
 
 func stderrLineEvent(line, sessionID string) AgentEvent {
@@ -573,67 +521,13 @@ func stderrLineEvent(line, sessionID string) AgentEvent {
 	return AgentEvent{Kind: KindError, Err: line, Recoverable: true, Raw: line}
 }
 
-func emitAgentEvent(ctx context.Context, out chan<- AgentEvent, ev AgentEvent) {
-	select {
-	case out <- ev:
-	case <-ctx.Done():
-	}
-}
-
 func (d *ClaudeDriver) buildCommand(ctx context.Context, req Request) *exec.Cmd {
-	cmd := exec.CommandContext(ctx, d.binPath(), d.buildArgs(req)...)
-	if req.Cwd != "" {
-		cmd.Dir = req.Cwd
-	}
-	cmd.Stdin = strings.NewReader(req.Prompt)
-	cmd.Env = mergedEnv(d.queryEnv())
+	cmd := newAgentCmd(ctx, d.binPath(), d.buildArgs(req), req, d.queryEnv())
 	d.selfcheckOnce.Do(func() { d.logSelfcheck(cmd.Env, req) })
-	// Run claude as its own process-group leader and, on context cancellation
-	// (idle timeout / daemon shutdown), kill the WHOLE group — not just claude.
-	// Claude spawns its configured MCP servers as child processes; the default
-	// CommandContext cancel SIGKILLs only the direct child, orphaning those
-	// servers to init where they linger forever. cmd.Cancel overrides that.
-	setProcessGroup(cmd)
-	cmd.Cancel = func() error {
-		killProcessGroup(cmd)
-		return nil
-	}
-	cmd.WaitDelay = 10 * time.Second
 	return cmd
-}
-
-// binPath resolves d.Bin via BinFn when set so a background install can
-// be picked up between turns.
-func (d *ClaudeDriver) binPath() string {
-	if d.BinFn != nil {
-		if p := d.BinFn(); p != "" {
-			return p
-		}
-	}
-	return d.Bin
 }
 
 // ResolveBin exposes the per-turn resolved binary path (binPath) so callers
 // that drive an out-of-turn probe (e.g. the daemon's MCP health check via
 // ProbeMCP) use the same binary a real Query would.
 func (d *ClaudeDriver) ResolveBin() string { return d.binPath() }
-
-func (d *ClaudeDriver) queryEnv() []string {
-	if d.EnvFn != nil {
-		return d.EnvFn()
-	}
-	return d.Env
-}
-
-func commandPipes(cmd *exec.Cmd) (stdout, stderr io.ReadCloser, err error) {
-	stdout, err = cmd.StdoutPipe()
-	if err != nil {
-		return nil, nil, fmt.Errorf("stdout pipe: %w", err)
-	}
-	stderr, err = cmd.StderrPipe()
-	if err != nil {
-		_ = stdout.Close()
-		return nil, nil, fmt.Errorf("stderr pipe: %w", err)
-	}
-	return stdout, stderr, nil
-}

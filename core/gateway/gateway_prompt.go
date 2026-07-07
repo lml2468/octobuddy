@@ -5,17 +5,17 @@ import (
 
 	"github.com/lml2468/octobuddy/core/agent"
 	"github.com/lml2468/octobuddy/core/groupctx"
+	"github.com/lml2468/octobuddy/core/prompt"
 	"github.com/lml2468/octobuddy/core/router"
 	"github.com/lml2468/octobuddy/core/safepath"
-	"github.com/lml2468/octobuddy/core/safety"
 )
 
 // bootstrapPromptHeader labels the first-run ritual block in the assembled
-// system prompt. The filename is kept in sync with config.BootstrapName by a
-// compile-time assertion in the test package (TestBootstrapHeaderMatchesName);
-// the gateway does not import config (it stays dependent on primitives), so the
-// header is a local literal rather than a derived string.
-const bootstrapPromptHeader = "## BOOTSTRAP.md (first-run ritual — owner only)"
+// system prompt. It aliases prompt.BootstrapHeader (the assembly package owns the
+// literal now) so the compile-time cross-check against config.BootstrapName
+// (TestBootstrapHeaderMatchesName) keeps guarding filename drift without the
+// gateway importing config.
+const bootstrapPromptHeader = prompt.BootstrapHeader
 
 // groupDocFilename is the per-session GROUP.md the octo connector mirrors from
 // the server (octo.groupDocFilename). The gateway re-reads it per group turn and
@@ -50,7 +50,7 @@ func (g *Gateway) buildGroupPrompt(sessionKey string, msg router.InboundMessage)
 	// Advance the cursor past everything now in the channel.
 	g.groups.SetCursor(msg.ChannelID, g.groups.MaxID(msg.ChannelID))
 
-	return renderGroupPrompt(deltaText, msg.Text)
+	return prompt.RenderGroup(deltaText, msg.Text)
 }
 
 func (g *Gateway) backfillGroupContext(sessionKey, channelID string) {
@@ -86,98 +86,58 @@ func (g *Gateway) botReplyCutoffSeq(sessionKey string) int64 {
 	return cutoffSeq
 }
 
-func renderGroupPrompt(deltaText, currentText string) string {
-	var b strings.Builder
-	if deltaText != "" {
-		// The whole block (header + raw bodies) is escaped once here.
-		b.WriteString(safety.SanitizePromptBody(deltaText))
-		b.WriteString("\n")
-	}
-	b.WriteString(safety.CurrentMessageAnchor)
-	b.WriteString("\n")
-	// Defense-in-depth: the current-message body is untrusted. Escape role labels
-	// / section markers so a crafted body cannot forge prompt structure below the
-	// real anchor (e.g. a second [Current message …] anchor or a fake
-	// [Recent group messages] header).
-	b.WriteString(safety.SafeBody(currentText).String())
-	return b.String()
-}
-
-// buildSystemPrompt assembles the structured system-prompt intent: the
-// non-overridable security prefix as Mandatory, then (for GROUP/thread turns)
-// the operator-trusted SOUL/config prompt + member roster, the GROUP.md
-// handbook, persona instructions, and bootstrap — all as Persona segments in
-// their established order. The SecurityPrefix always stays first. (The driver's
+// buildSystemPrompt gathers this turn's already-resolved raw inputs (per-turn
+// resolvers, roster snapshot, GROUP.md read, owner-trust gate, persona) and hands
+// them to prompt.AssembleSystem, which owns the SafeText wrapping + fixed ordering
+// + injection escaping. The SecurityPrefix always stays first. (The driver's
 // preset base prompt is prepended by the agent CLI.)
 //
-// NOTE (migration phase 2): the GROUP.md handbook is still placed inline in the
-// Persona segment to keep Flatten() byte-identical with the previous flat
-// assembly. Moving it to the Background segment (after all trusted segments) is
-// a deliberate, separately-reviewed change deferred to a later phase.
-//
-// rosterPrefix is "" for DMs and for groups with no learned members. Persona
-// injection mirrors openclaw inbound.ts (synthesized group hint + free-form
-// persona prompt). All are config/gateway-authored (never from message
-// payloads), so each is wrapped as safety.TrustedText after the SecurityPrefix.
+// rosterPrefix is "" for DMs and for groups with no learned members.
 func (g *Gateway) buildSystemPrompt(msg router.InboundMessage, rosterPrefix, cwd string) agent.SystemPrompt {
-	parts := []safety.SafeText{safety.TrustedText(safety.SecurityPrefix)}
-	if sp := g.effectiveSystemPrompt(); sp != "" {
-		parts = append(parts, safety.TrustedText(sp))
-	}
-	if rosterPrefix != "" {
-		parts = append(parts, safety.TrustedText(rosterPrefix))
-	}
-	parts = g.appendGroupHandbook(parts, msg, cwd)
-	parts = g.appendPersonaInstructions(parts)
-	parts = g.appendBootstrap(parts, msg)
-	return systemPromptFromParts(parts)
+	pg, ph := g.personaSegments()
+	return prompt.AssembleSystem(prompt.SystemInputs{
+		OperatorPrompt: g.effectiveSystemPrompt(),
+		RosterPrefix:   rosterPrefix,
+		Handbook:       g.groupHandbookBody(msg, cwd),
+		IsGroup:        msg.ChannelType == router.ChannelGroup,
+		PersonaGroup:   pg,
+		PersonaHint:    ph,
+		Bootstrap:      g.bootstrapBody(msg),
+	})
 }
 
-// appendGroupHandbook injects the per-session GROUP.md (mirrored from the server
-// by the octo connector) as UNTRUSTED background for group / thread turns. The
-// content is group-member-authored, so it is escaped via safety.SafeBody and
-// fenced under the [Group handbook] header that SecurityPrefix names as
-// untrusted — a crafted handbook can never forge prompt structure or displace
-// the operator-trusted SOUL/AGENTS above it. No-op for DMs, when no sandbox cwd
-// is set, or when GROUP.md is absent/empty.
-func (g *Gateway) appendGroupHandbook(parts []safety.SafeText, msg router.InboundMessage, cwd string) []safety.SafeText {
+// groupHandbookBody reads the per-session GROUP.md (mirrored from the server by
+// the octo connector) and returns its RAW body for a group turn — escaping +
+// fencing is prompt.AssembleSystem's job. Returns "" for DMs, when no sandbox cwd
+// is set, or when GROUP.md is absent/empty/unreadable (best-effort). The
+// safepath.SafeRead stays here because it is gateway filesystem I/O.
+func (g *Gateway) groupHandbookBody(msg router.InboundMessage, cwd string) string {
 	if cwd == "" || msg.ChannelType != router.ChannelGroup {
-		return parts
+		return ""
 	}
 	raw, err := safepath.SafeRead(cwd, groupDocFilename, groupDocMaxInjectBytes)
 	if err != nil || len(raw) == 0 {
-		return parts // absent / unreadable → skip (best-effort)
+		return ""
 	}
-	body := strings.TrimSpace(string(raw))
-	if body == "" {
-		return parts
-	}
-	// Header is a trusted literal (the privileged marker); the body is escaped so
-	// a crafted GROUP.md can't forge a second marker or a role label. Assemble
-	// the escaped body under the literal header, then mint the combined block as
-	// SafeText (already escaped — TrustedText documents that the header is ours).
-	block := safety.GroupHandbookHeader + "\n" + safety.SanitizePromptBody(body)
-	return append(parts, safety.TrustedText(block))
+	return strings.TrimSpace(string(raw))
 }
 
-// appendBootstrap injects the first-run ritual (BOOTSTRAP.md) — but ONLY in an
+// bootstrapBody returns the first-run ritual (BOOTSTRAP.md) body — but ONLY in an
 // owner-trusted channel (router.InboundMessage.OwnerTrusted: a Console turn or
-// the owner's IM DM; never a group or non-owner DM). The ritual instructs the
-// bot to (re)write its own SOUL.md, so letting an untrusted user drive it would
-// be self-injection of the trusted prompt. Operator-authored content, so wrapped
-// as TrustedText. No-op once the bot deletes BOOTSTRAP.md (per-turn reload → "").
-func (g *Gateway) appendBootstrap(parts []safety.SafeText, msg router.InboundMessage) []safety.SafeText {
+// the owner's IM DM; never a group or non-owner DM). The ritual instructs the bot
+// to (re)write its own SOUL.md, so letting an untrusted user drive it would be
+// self-injection of the trusted prompt. Returns "" once the bot deletes
+// BOOTSTRAP.md (per-turn reload → ""). The owner-trust gate stays here because it
+// needs g.owner + msg.OwnerTrusted, which prompt (a leaf) must not import.
+func (g *Gateway) bootstrapBody(msg router.InboundMessage) string {
 	ownerUID := ""
 	if g.owner != nil {
 		ownerUID = g.owner()
 	}
 	if !msg.OwnerTrusted(ownerUID) {
-		return parts
+		return ""
 	}
-	if body := g.effectiveBootstrap(); body != "" {
-		parts = append(parts, safety.TrustedText(bootstrapPromptHeader+"\n\n"+body))
-	}
-	return parts
+	return g.effectiveBootstrap()
 }
 
 // effectiveBootstrap returns the per-turn BOOTSTRAP.md body, or "" when no
@@ -190,32 +150,12 @@ func (g *Gateway) effectiveBootstrap() string {
 	return g.resolveBootstrapFn()
 }
 
-func (g *Gateway) appendPersonaInstructions(parts []safety.SafeText) []safety.SafeText {
-	if g.persona.Configured() {
-		if p := g.persona.BuildGroupSystemPrompt(); p != "" {
-			parts = append(parts, safety.TrustedText(p))
-		}
-		if h := g.persona.ComposeHint(g.personaPrompt); h != "" {
-			parts = append(parts, safety.TrustedText(h))
-		}
+// personaSegments returns the OBO persona-clone system segments (group hint +
+// free-form hint), or ("", "") for a regular bot. AssembleSystem wraps them as
+// trusted segments.
+func (g *Gateway) personaSegments() (group, hint string) {
+	if !g.persona.Configured() {
+		return "", ""
 	}
-	return parts
-}
-
-// systemPromptFromParts maps the assembled SafeText segments onto the structured
-// agent.SystemPrompt. parts[0] is always the SecurityPrefix (the non-overridable
-// Mandatory segment); everything after it is operator-trusted Persona. The
-// Background segment stays empty in this phase — see buildSystemPrompt's note on
-// the deferred GROUP.md move. Flatten() over (Mandatory, Persona…) reproduces the
-// previous flat join byte-for-byte.
-func systemPromptFromParts(parts []safety.SafeText) agent.SystemPrompt {
-	sp := agent.SystemPrompt{}
-	if len(parts) == 0 {
-		return sp
-	}
-	sp.Mandatory = parts[0].String()
-	for _, p := range parts[1:] {
-		sp.Persona = append(sp.Persona, p.String())
-	}
-	return sp
+	return g.persona.BuildGroupSystemPrompt(), g.persona.ComposeHint(g.personaPrompt)
 }
