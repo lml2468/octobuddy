@@ -51,7 +51,9 @@ func TestNameUnknownDriverFallsBack(t *testing.T) {
 func withHome(t *testing.T, configJSON string) {
 	t.Helper()
 	home := t.TempDir()
+	// UserHomeDir reads $HOME on unix but %USERPROFILE% on Windows — set both.
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	dir := filepath.Join(home, ".octobuddy")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
