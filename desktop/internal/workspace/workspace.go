@@ -24,6 +24,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/lml2468/octobuddy/core/agent"
 	"github.com/lml2468/octobuddy/core/safepath"
 	"github.com/lml2468/octobuddy/core/sandbox"
 )
@@ -376,12 +377,30 @@ func kindOf(mime string, textual bool) string {
 	}
 }
 
+// agentConfigDirs is the set of per-bot agent CLI config-dir names to skip,
+// derived ONCE from the driver registry (Claude ".claude", Codex ".codex", …)
+// rather than hardcoded — so a newly-registered driver's config dir is skipped
+// automatically instead of silently leaking into the file pane until someone
+// remembers to extend a literal switch. Lowercased for the case-insensitive
+// match in skipDir. ".claude" is always included as a floor in case a driver
+// reports no config dir.
+var agentConfigDirs = func() map[string]bool {
+	m := map[string]bool{".claude": true}
+	for _, name := range agent.Registered() {
+		if d := agent.ConfigDirNameFor(name); d != "" {
+			m[strings.ToLower(d)] = true
+		}
+	}
+	return m
+}()
+
 // skipDir reports whether the workspace file tree should refuse to descend
 // into the named child DIRECTORY. Two reasons to skip:
 //
-// - `.claude` — the per-bot CLI config dir. Always present, never
-// interesting in a workspace context, and contains skill bundles +
-// workflows that have their own UIs.
+// - per-bot agent CLI config dirs (`.claude` / `.codex` / …, from the driver
+// registry via agentConfigDirs). Always present for the bot's driver, never
+// interesting in a workspace context, and contain skill bundles + workflows
+// that have their own UIs.
 // - common credential-bearing dotdirs — the agent has Bash + bypass
 // permissions and chooses its own files. If it writes `.aws/credentials`
 // or `~/.ssh/id_rsa` under its cwd (e.g. a `cp ~/.aws/credentials.`
@@ -401,8 +420,12 @@ func kindOf(mime string, textual bool) string {
 // `cp ~/.aws.AWS` (Sec). Use skipFile for credential-bearing
 // FILES.
 func skipDir(name string) bool {
-	switch strings.ToLower(name) {
-	case ".claude",
+	lower := strings.ToLower(name)
+	if agentConfigDirs[lower] {
+		return true
+	}
+	switch lower {
+	case
 		// Cloud / SaaS credential stores. If the agent runs a Bash command
 		// that copies any of these into its cwd (e.g. a research turn that
 		// `cp ~/.aws/credentials.`), the desktop file pane would expose

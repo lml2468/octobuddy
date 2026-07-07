@@ -80,10 +80,10 @@ func Refresh(ctx context.Context) (*config.ToolsetCache, error) {
 	// in the cached surface marks a stale cache — force a re-probe to heal it,
 	// even when the version matches.
 	if cached != nil && len(cached.Available) > 0 && !hasMCP(cached.Available) {
-		if ver != "" && cached.ClaudeVersion == ver {
+		if ver != "" && cached.Version == ver {
 			return cached, nil
 		}
-		if ver == "" && cached.ClaudeVersion == "" {
+		if ver == "" && cached.Version == "" {
 			return cached, nil
 		}
 	}
@@ -105,10 +105,10 @@ func Refresh(ctx context.Context) (*config.ToolsetCache, error) {
 	}
 
 	ts := &config.ToolsetCache{
-		ClaudeVersion: ver,
-		ProbedAt:      nowFn().Unix(),
-		Available:     available,
-		HeadlessSafe:  agent.HeadlessSafeTools(available),
+		Version:      ver,
+		ProbedAt:     nowFn().Unix(),
+		Available:    available,
+		HeadlessSafe: agent.HeadlessSafeTools(available),
 	}
 	if err := configstore.SaveToolset(ts); err != nil {
 		return nil, err

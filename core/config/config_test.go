@@ -63,7 +63,7 @@ func assertSingleBotDerivedDirs(t *testing.T, dir string, b Resolved) {
 	}
 	if b.CwdBase != filepath.Join(dir, "default", "workspace") ||
 		b.MemoryBase != filepath.Join(dir, "default", "memory") ||
-		b.ClaudeConfigDir != filepath.Join(dir, "default", ".claude") {
+		b.BotRoot != filepath.Join(dir, "default") {
 		t.Fatalf("derived sandbox dirs wrong: %+v", b)
 	}
 }
@@ -270,29 +270,10 @@ func TestMissingTokenAllowed(t *testing.T) {
 	}
 }
 
-func TestDriverEnvInjectedTokens(t *testing.T) {
-	r := Resolved{Agent: AgentConfig{GatewayBaseURL: "https://gw.example/v1"}}
-	// Injected token is used, regardless of the (empty) config value.
-	env := r.DriverEnv("sk_injected", "", nil)
-	var sawToken, sawBase bool
-	for _, e := range env {
-		if e == "ANTHROPIC_AUTH_TOKEN=sk_injected" {
-			sawToken = true
-		}
-		if e == "ANTHROPIC_BASE_URL=https://gw.example/v1" {
-			sawBase = true
-		}
-	}
-	if !sawToken || !sawBase {
-		t.Fatalf("env missing entries: token=%v base=%v (%v)", sawToken, sawBase, env)
-	}
-	// Empty token omits the auth var.
-	for _, e := range r.DriverEnv("", "", nil) {
-		if e == "ANTHROPIC_AUTH_TOKEN=" {
-			t.Fatal("empty token must not emit ANTHROPIC_AUTH_TOKEN")
-		}
-	}
-}
+// NOTE: the env-var naming contract (ANTHROPIC_*/CLAUDE_CONFIG_DIR, ordering,
+// empty-token omission) moved behind the driver — it is now pinned by
+// agent.TestClaudeEnvMapperContract. config only owns the driver-neutral
+// agent.env resolution (TestAgentEnvExtra* in env_test.go).
 
 func TestNoBotsAllowed(t *testing.T) {
 	// Empty bots[] is a valid first-run state — the GUI writes config.json
@@ -319,5 +300,29 @@ func TestMissingConfigAllowed(t *testing.T) {
 	}
 	if len(bots) != 0 {
 		t.Fatalf("expected zero bots, got %d", len(bots))
+	}
+}
+
+// TestAgentDriverSurvivesLoad pins that the per-bot agent.driver selector is
+// carried through Load (mergeAgentScalars). A regression here silently routes
+// every bot to the default driver regardless of config — the whole driver
+// selection feature no-ops.
+func TestAgentDriverSurvivesLoad(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "config.json")
+	writeFile(t, cfg, `{"bots":[{"id":"alpha","octoToken":"t","agent":{"driver":"codex"}}]}`)
+	bots, err := Load(cfg)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if bots[0].Agent.Driver != "codex" {
+		t.Fatalf("agent.driver dropped on load: got %q want codex", bots[0].Agent.Driver)
+	}
+
+	// Absent driver resolves to empty (the daemon then defaults to claude).
+	writeFile(t, cfg, `{"bots":[{"id":"beta","octoToken":"t"}]}`)
+	bots, _ = Load(cfg)
+	if bots[0].Agent.Driver != "" {
+		t.Fatalf("absent driver should stay empty, got %q", bots[0].Agent.Driver)
 	}
 }

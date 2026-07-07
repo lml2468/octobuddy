@@ -229,7 +229,10 @@ func buildResolvedBot(global File, bot BotEntry, id, botRoot string) Resolved {
 	r.DataDir = filepath.Join(botRoot, "data")
 	r.CwdBase = filepath.Join(botRoot, "workspace")
 	r.MemoryBase = filepath.Join(botRoot, "memory")
-	r.ClaudeConfigDir = filepath.Join(botRoot, ".claude")
+	// AgentConfigDir is intentionally NOT set here: its base name (".claude") is
+	// the driver's choice, and config must stay free of any driver-specific
+	// literal (it doesn't import core/agent). The daemon fills it from the
+	// resolved driver's ConfigDirName() before spawn.
 
 	// Bot identity/agent config is per-bot only. Top-level config carries
 	// shared runtime policy (rateLimit/context), not bot defaults.
@@ -378,6 +381,9 @@ func cloneStrs(s []string) []string {
 }
 
 func mergeAgentScalars(dst *AgentConfig, src *AgentConfig) {
+	if src.Driver != "" {
+		dst.Driver = src.Driver
+	}
 	if src.Model != "" {
 		dst.Model = src.Model
 	}

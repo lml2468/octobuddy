@@ -13,19 +13,22 @@ import (
 	"path/filepath"
 
 	"github.com/lml2468/octobuddy/core/safepath"
+	"github.com/lml2468/octobuddy/desktop/internal/agentdir"
 )
 
 // maxBytes caps a stored mcp.json (it lists a handful of servers — kilobytes).
 const maxBytes = 1 << 20 // 1 MiB
 
-// botDir is ~/.octobuddy/<botID>/.claude — the bot's CLAUDE_CONFIG_DIR, where
-// the claude CLI looks for .mcp.json when pointed at it via --mcp-config.
+// botDir is ~/.octobuddy/<botID>/<agent-config-dir> — the bot's agent config
+// dir (Claude: .claude, the CLAUDE_CONFIG_DIR), where the CLI looks for .mcp.json
+// when pointed at it via --mcp-config. The config-dir segment is the configured
+// driver's, via agentdir.
 func botDir(botID string) (string, error) {
 	if !safepath.ValidSlug(botID) {
 		return "", fmt.Errorf("invalid bot id %q — letters, digits, . _ - only", botID)
 	}
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".octobuddy", botID, ".claude"), nil
+	return filepath.Join(home, ".octobuddy", botID, agentdir.Name(botID)), nil
 }
 
 // Load returns the raw .mcp.json text for a bot, or "" when none exists. The

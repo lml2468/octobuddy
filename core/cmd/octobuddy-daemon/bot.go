@@ -38,6 +38,14 @@ const (
 // agent events are also broadcast to the control bus tagged with the bot id, and
 // the bot is registered for command routing + bots.list. Blocks until ctx done.
 func runBot(ctx context.Context, configPath string, cfg config.Resolved, reg *botRegistry, srv *control.Server) error {
+	// Resolve the per-bot isolated config dir from the SELECTED driver's contract
+	// (Claude → <botRoot>/.claude). config left AgentConfigDir empty so it stays
+	// free of any driver-specific literal; the daemon (which imports core/agent)
+	// fills it here before the driver spawns. Empty dir-name (driver doesn't
+	// isolate, or inheritUserConfig) leaves AgentConfigDir "".
+	if dirName := agent.ConfigDirNameFor(cfg.Agent.Driver); dirName != "" && !cfg.Agent.InheritUserConfig {
+		cfg.AgentConfigDir = filepath.Join(cfg.BotRoot, dirName)
+	}
 	if err := prepareBotDirs(cfg); err != nil {
 		return err
 	}
@@ -60,22 +68,18 @@ func runBot(ctx context.Context, configPath string, cfg config.Resolved, reg *bo
 	_ = sec.Set(wire.SecretKindOcto, cfg.OctoToken)
 	_ = sec.Set(wire.SecretKindGateway, cfg.Agent.GatewayToken)
 
-	// Phase 1 ships the claude driver only; the agent.Driver seam keeps adding
-	// another (Codex, …) additive to the gateway.
-	drv := agent.NewClaudeDriver("")
-	// BinFn runs per Query so a freshly-landed background install
-	// (~/.octobuddy/bin/claude from claudecli) is picked up on the very
-	// next turn — no restart required.
-	drv.BinFn = resolveClaudeBin
-	// Resolve the gateway token lazily per turn so an injected token takes effect.
-	drv.EnvFn = func() []string { return cfg.DriverEnv(sec.GatewayToken(), sec.OctoToken(), sec.Secret) }
-	// Load this bot's MCP servers from <ClaudeConfigDir>/.mcp.json when the
-	// desktop has written one. Resolved per Query so a freshly-saved file
-	// applies on the next turn without a restart. Suppressed when the bot
-	// inherits the operator's ~/.claude (then MCP is whatever ~/.claude has).
-	if botMCPConfigPath(cfg) != "" {
-		root := cfg.ClaudeConfigDir
-		drv.MCPConfigFn = func() string { return existingFilePath(root, ".mcp.json") }
+	// Build the configured driver through the registry — agent-agnostic. The
+	// per-turn seams (bin/env/mcp-config) are wired via Options so a freshly-
+	// landed background install, an injected token, or a freshly-saved .mcp.json
+	// all apply on the next turn without a restart. The env is supplied as a
+	// driver-NEUTRAL EnvSpec; the driver maps it onto its own var names.
+	drv, err := agent.New(cfg.Agent.Driver, agent.Options{
+		BinFn:       resolveAgentBin(cfg.Agent.Driver),
+		EnvSpecFn:   func() agent.EnvSpec { return botEnvSpec(cfg, sec) },
+		MCPConfigFn: botMCPConfigFn(cfg),
+	})
+	if err != nil {
+		return fmt.Errorf("bot %s: %w", cfg.BotID, err)
 	}
 
 	rtBot, connector, cm, err := assembleBotRuntime(ctx, configPath, cfg, srv, st, rt, sec, drv)
@@ -206,45 +210,82 @@ func toBoolSet(vals []string) map[string]bool {
 	return m
 }
 
+// botEnvSpec assembles the driver-NEUTRAL env spec for one turn: the resolved
+// user agent.env, the gateway routing creds (resolved live so an injected token
+// wins), the octo-cli companion fallback, and the per-bot config-dir isolation.
+// The selected driver maps this onto its own var names (Claude →
+// ANTHROPIC_*/CLAUDE_CONFIG_DIR) via its EnvMapper — the daemon names nothing
+// driver-specific here.
+func botEnvSpec(cfg config.Resolved, sec *secretStore) agent.EnvSpec {
+	return agent.EnvSpec{
+		Extra:             cfg.AgentEnvExtra(sec.Secret),
+		GatewayBaseURL:    cfg.Agent.GatewayBaseURL,
+		GatewayToken:      sec.GatewayToken(),
+		OctoToken:         sec.OctoToken(),
+		OctoAPIURL:        cfg.APIURL,
+		ConfigDir:         cfg.AgentConfigDir,
+		InheritUserConfig: cfg.Agent.InheritUserConfig,
+	}
+}
+
+// botMCPConfigFn returns the per-Query MCP-config path resolver for the driver,
+// or nil when MCP doesn't apply to this bot (no isolated config dir, or it
+// inherits the operator's user config). Resolved per turn so a freshly-saved
+// .mcp.json applies next message without a restart.
+func botMCPConfigFn(cfg config.Resolved) func() string {
+	if botMCPConfigPath(cfg) == "" {
+		return nil
+	}
+	root := cfg.AgentConfigDir
+	return func() string { return existingFilePath(root, ".mcp.json") }
+}
+
 // botMCPConfigPath returns the bot's .mcp.json path (under its isolated
-// CLAUDE_CONFIG_DIR), or "" when MCP doesn't apply — no config dir, or the bot
-// inherits the operator's ~/.claude (then MCP is whatever ~/.claude carries,
+// per-bot config dir), or "" when MCP doesn't apply — no config dir, or the bot
+// inherits the operator's user config (then MCP is whatever that carries,
 // not a per-bot file). Single source of the path so the driver's per-turn
 // loader and the health-check probe never drift.
 //
-// Threat model: a loaded .mcp.json causes claude to spawn each declared server
-// as a child process (MCP server launch IS local command execution). This is
-// NOT a privilege escalation — writing .mcp.json requires Write/Bash, which the
-// agent only has when those tools are in its surface, i.e. it already has code
-// execution as the same user. The relevant guard is that .mcp.json is loaded
-// through existingFilePath → safepath.SafeLstat, which refuses a symlinked file
-// OR a symlinked parent component, so the agent cannot redirect the load to an
-// attacker-controlled path outside its own writable tree.
+// Threat model: a loaded .mcp.json causes the agent CLI to spawn each declared
+// server as a child process (MCP server launch IS local command execution). This
+// is NOT a privilege escalation — writing .mcp.json requires Write/Bash, which
+// the agent only has when those tools are in its surface, i.e. it already has
+// code execution as the same user. The relevant guard is that .mcp.json is
+// loaded through existingFilePath → safepath.SafeLstat, which refuses a symlinked
+// file OR a symlinked parent component, so the agent cannot redirect the load to
+// an attacker-controlled path outside its own writable tree.
 func botMCPConfigPath(cfg config.Resolved) string {
-	if cfg.ClaudeConfigDir == "" || cfg.Agent.InheritUserConfig {
+	if cfg.AgentConfigDir == "" || cfg.Agent.InheritUserConfig {
 		return ""
 	}
-	return filepath.Join(cfg.ClaudeConfigDir, ".mcp.json")
+	return filepath.Join(cfg.AgentConfigDir, ".mcp.json")
 }
 
-// makeMCPChecker builds the control-bus MCP health probe for one bot. It runs
-// agent.ProbeMCP against the bot's saved .mcp.json with the bot's resolved bin
-// + env (so the result matches a real turn), reading the per-server
-// connected/failed status from claude's system/init line. Returns
-// {Configured:false} when no .mcp.json exists yet. Capped at 60s.
+// makeMCPChecker builds the control-bus MCP health probe for one bot. It probes
+// the bot's saved .mcp.json with the bot's resolved bin + env (so the result
+// matches a real turn) via the driver's agent.MCPProber capability — no
+// concrete-type assertion. Returns nil when the driver has no MCP concept or the
+// bot has no config dir. {Configured:false} when no .mcp.json exists yet. 60s cap.
 func makeMCPChecker(cfg config.Resolved, sec *secretStore, drv agent.Driver) func(context.Context) (wire.MCPCheckResponse, error) {
-	cd, ok := drv.(*agent.ClaudeDriver)
+	prober, ok := drv.(agent.MCPProber)
+	if !ok {
+		return nil
+	}
+	// EnvMapper and MCPProber are INDEPENDENT optional capabilities (see the
+	// agent.Driver doc): a driver may implement one without the other, so guard
+	// the env-mapping assertion too rather than risk a panic on a future driver.
+	mapper, ok := drv.(agent.EnvMapper)
 	if !ok {
 		return nil
 	}
 	mcpPath := botMCPConfigPath(cfg)
 	return func(ctx context.Context) (wire.MCPCheckResponse, error) {
-		if mcpPath == "" || existingFilePath(cfg.ClaudeConfigDir, ".mcp.json") == "" {
+		if mcpPath == "" || existingFilePath(cfg.AgentConfigDir, ".mcp.json") == "" {
 			return wire.MCPCheckResponse{Configured: false}, nil
 		}
 		ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 		defer cancel()
-		env := cfg.DriverEnv(sec.GatewayToken(), sec.OctoToken(), sec.Secret)
+		env := mapper.Env(botEnvSpec(cfg, sec))
 		// Probe under the bot's sandbox base so a server with a cwd-relative
 		// command/path resolves the same way a real session turn would — but only
 		// when that dir already exists. CwdBase (~/.octobuddy/<id>/workspace) is
@@ -252,7 +293,7 @@ func makeMCPChecker(cfg config.Resolved, sec *secretStore, drv agent.Driver) fun
 		// absent; passing a nonexistent dir as the spawn cwd fails chdir and the
 		// probe would falsely report the MCP servers unreachable. Fall back to ""
 		// (the daemon's cwd) when it isn't there yet.
-		statuses, err := agent.ProbeMCP(ctx, cd.ResolveBin(), existingDir(cfg.BotRoot, "workspace"), env, mcpPath)
+		statuses, err := prober.ProbeMCPConfig(ctx, existingDir(cfg.BotRoot, "workspace"), env, mcpPath)
 		if err != nil {
 			return wire.MCPCheckResponse{}, err
 		}
@@ -304,11 +345,12 @@ func existingDir(root, rel string) string {
 	return ""
 }
 
-// resolveClaudeBin returns the desktop-managed binary at
-// ~/.octobuddy/bin/claude when it exists, falling back to "claude" on
-// PATH otherwise. Called per Query via ClaudeDriver.BinFn so a
-// freshly-completed background install lands on the next turn without
-// requiring a restart.
+// resolveAgentBin returns a per-Query binary resolver for the named driver: it
+// prefers the desktop-managed binary at ~/.octobuddy/bin/<name> when it exists,
+// falling back to the bare command on PATH otherwise. Wired as Options.BinFn so
+// a freshly-completed background install lands on the next turn without a
+// restart. The binary base name is the driver name (claude → "claude", codex →
+// "codex"); an empty/unknown driver resolves to the default ("claude").
 //
 // Uses safepath.SafeLstat (not a raw os.Lstat) so the whole chain under
 // ~/.octobuddy/bin/ — not just the leaf — is checked for symlinks: an agent
@@ -316,21 +358,27 @@ func existingDir(root, rel string) string {
 // consistent codebase stance (CLAUDE.md: symlink concerns live in safepath).
 // 0-byte and non-executable files are also rejected so a crashed install temp
 // doesn't masquerade as the binary.
-func resolveClaudeBin() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "claude"
+func resolveAgentBin(driver string) func() string {
+	name := driver
+	if name == "" {
+		name = agent.DefaultDriver
 	}
-	name := "claude"
-	if runtime.GOOS == "windows" {
-		name = "claude.exe"
+	return func() string {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return name
+		}
+		bin := name
+		if runtime.GOOS == "windows" {
+			bin = name + ".exe"
+		}
+		root := filepath.Join(home, ".octobuddy", "bin")
+		fi, err := safepath.SafeLstat(root, bin)
+		if err != nil || !safepath.UsableExecutable(fi) {
+			return name
+		}
+		return filepath.Join(root, bin)
 	}
-	root := filepath.Join(home, ".octobuddy", "bin")
-	fi, err := safepath.SafeLstat(root, name)
-	if err != nil || !safepath.UsableExecutable(fi) {
-		return "claude"
-	}
-	return filepath.Join(root, name)
 }
 
 func newBotGateway(
@@ -435,11 +483,12 @@ func prepareBotDirs(cfg config.Resolved) error {
 	if err := safepath.SafeMkdirAllAbs(cfg.DataDir, 0o755); err != nil {
 		return fmt.Errorf("bot %s: mkdir data: %w", cfg.BotID, err)
 	}
-	// Isolated per-bot CLAUDE_CONFIG_DIR (unless inheriting the operator's
-	// ~/.claude). Created here so the agent's config root exists before it spawns.
-	if cfg.ClaudeConfigDir != "" && !cfg.Agent.InheritUserConfig {
-		if err := safepath.SafeMkdirAllAbs(cfg.ClaudeConfigDir, 0o700); err != nil {
-			return fmt.Errorf("bot %s: mkdir claude config dir: %w", cfg.BotID, err)
+	// Isolated per-bot agent config dir (unless inheriting the operator's user
+	// config). Created here so the agent's config root exists before it spawns.
+	// AgentConfigDir was filled by runBot from the selected driver's contract.
+	if cfg.AgentConfigDir != "" && !cfg.Agent.InheritUserConfig {
+		if err := safepath.SafeMkdirAllAbs(cfg.AgentConfigDir, 0o700); err != nil {
+			return fmt.Errorf("bot %s: mkdir agent config dir: %w", cfg.BotID, err)
 		}
 	}
 	return nil

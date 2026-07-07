@@ -8,6 +8,8 @@
       "apiUrl": "https://your-octo-server.example",
       "_comment_tokens": "octoToken and agent.gatewayToken are intentionally absent. The desktop app stores them in the secret backend and injects them into octobuddy-daemon at runtime. Headless deployments may still provide inline tokens if they accept config-file exposure.",
       "agent": {
+        "_comment_driver": "Which agent adapter to spawn. Matches a driver registered in core/agent (currently 'claude'; 'codex' is a stub). Omit to use the default ('claude'). An unknown value fails when the daemon builds the driver — single-bot mode exits, multi-bot marks that bot failed (others keep running).",
+        "driver": "claude",
         "model": "claude-opus-4-8",
         "gatewayBaseUrl": "https://your-model-gateway.example/v1",
         "_comment_cron": "Set cron=true to enable this bot's scheduled tasks (#115): owner-gated cron.create/list/delete over the control bus, fired through the gateway. Off by default.",

@@ -20,16 +20,19 @@ import (
 	"strings"
 
 	"github.com/lml2468/octobuddy/core/safepath"
+	"github.com/lml2468/octobuddy/desktop/internal/agentdir"
 )
 
-// botDir is ~/.octobuddy/<botID>/.claude/skills — the bot's skills dir, sitting
-// inside CLAUDE_CONFIG_DIR so the claude CLI loads it as user-scope on launch.
+// botDir is ~/.octobuddy/<botID>/<agent-config-dir>/skills — the bot's skills
+// dir, sitting inside the agent config dir (Claude: .claude) so the agent CLI
+// loads it as user-scope on launch. The config-dir segment is the configured
+// driver's, resolved via agentdir (defaults to .claude).
 func botDir(botID string) (string, error) {
 	if !safepath.ValidSlug(botID) {
 		return "", fmt.Errorf("invalid bot id %q — letters, digits, . _ - only", botID)
 	}
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".octobuddy", botID, ".claude", "skills"), nil
+	return filepath.Join(home, ".octobuddy", botID, agentdir.Name(botID), "skills"), nil
 }
 
 // bundleRoot composes <root>/<name> as the validated per-bundle root, so the
@@ -281,8 +284,8 @@ func BotCreate(botID, name string) error {
 	return createIn(root, name)
 }
 
-// ensureBotSkillsDir creates ~/.octobuddy/<botID>/.claude/skills via the
-// dirfd-walk SafeMkdirAll so every intermediate component is symlink-refused.
+// ensureBotSkillsDir creates ~/.octobuddy/<botID>/<agent-config-dir>/skills via
+// the dirfd-walk SafeMkdirAll so every intermediate component is symlink-refused.
 // Skipping a regular MkdirAll here closes Sec #4.
 func ensureBotSkillsDir(botID string) error {
 	if !safepath.ValidSlug(botID) {
@@ -291,7 +294,7 @@ func ensureBotSkillsDir(botID string) error {
 	home, _ := os.UserHomeDir()
 	// `~/` is operator-trusted (operator shell == operator's own dirs);
 	// every component below is agent-reachable and gets checked.
-	return safepath.SafeMkdirAll(home, ".octobuddy/"+botID+"/.claude/skills", 0o755)
+	return safepath.SafeMkdirAll(home, ".octobuddy/"+botID+"/"+agentdir.Name(botID)+"/skills", 0o755)
 }
 
 // BotDelete removes one of the bot's skill bundles entirely.

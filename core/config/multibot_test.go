@@ -85,7 +85,7 @@ func assertMultiBotDataDirs(t *testing.T, a, b Resolved) {
 func assertMultiBotSandboxDirs(t *testing.T, a, b Resolved) {
 	t.Helper()
 
-	if a.CwdBase == b.CwdBase || a.MemoryBase == b.MemoryBase || a.ClaudeConfigDir == b.ClaudeConfigDir {
+	if a.CwdBase == b.CwdBase || a.MemoryBase == b.MemoryBase || a.BotRoot == b.BotRoot {
 		t.Fatalf("sandbox dirs not isolated: %+v / %+v", a, b)
 	}
 	base := filepath.Dir(filepath.Dir(a.CwdBase))

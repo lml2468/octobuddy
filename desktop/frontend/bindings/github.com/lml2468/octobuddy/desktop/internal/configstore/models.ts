@@ -97,8 +97,8 @@ export class BotConfig {
     static createFrom($$source: any = {}): BotConfig {
         const $$createField6_0 = $$createType0;
         const $$createField7_0 = $$createType1;
-        const $$createField12_0 = $$createType2;
-        const $$createField13_0 = $$createType4;
+        const $$createField11_0 = $$createType2;
+        const $$createField12_0 = $$createType4;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("env" in $$parsedSource) {
             $$parsedSource["env"] = $$createField6_0($$parsedSource["env"]);
@@ -107,10 +107,10 @@ export class BotConfig {
             $$parsedSource["secretEnv"] = $$createField7_0($$parsedSource["secretEnv"]);
         }
         if ("settingSources" in $$parsedSource) {
-            $$parsedSource["settingSources"] = $$createField12_0($$parsedSource["settingSources"]);
+            $$parsedSource["settingSources"] = $$createField11_0($$parsedSource["settingSources"]);
         }
         if ("tools" in $$parsedSource) {
-            $$parsedSource["tools"] = $$createField13_0($$parsedSource["tools"]);
+            $$parsedSource["tools"] = $$createField12_0($$parsedSource["tools"]);
         }
         return new BotConfig($$parsedSource as Partial<BotConfig>);
     }

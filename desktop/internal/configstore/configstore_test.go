@@ -553,10 +553,10 @@ func TestSaveLoadToolsetPreservesBots(t *testing.T) {
 	writeConfig(t, config.File{Bots: []config.BotEntry{{ID: "b1", APIURL: "https://x.example"}}})
 
 	ts := &config.ToolsetCache{
-		ClaudeVersion: "2.1.187",
-		ProbedAt:      123,
-		Available:     []string{"Read", "Bash", "AskUserQuestion"},
-		HeadlessSafe:  []string{"Read", "Bash"},
+		Version:      "2.1.187",
+		ProbedAt:     123,
+		Available:    []string{"Read", "Bash", "AskUserQuestion"},
+		HeadlessSafe: []string{"Read", "Bash"},
 	}
 	if err := SaveToolset(ts); err != nil {
 		t.Fatalf("SaveToolset: %v", err)
@@ -566,7 +566,7 @@ func TestSaveLoadToolsetPreservesBots(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadToolset: %v", err)
 	}
-	if got == nil || got.ClaudeVersion != "2.1.187" || len(got.HeadlessSafe) != 2 {
+	if got == nil || got.Version != "2.1.187" || len(got.HeadlessSafe) != 2 {
 		t.Fatalf("toolset round-trip wrong: %+v", got)
 	}
 

@@ -251,9 +251,9 @@ export function LoadMCPConfig(botID: string): $CancellablePromise<string> {
 }
 
 /**
- * LoadToolset returns the cached claude tool surface (probed on
+ * LoadToolset returns the cached agent tool surface (probed on
  * install/upgrade) so the settings tool picker can offer the selectable set.
- * Probed is false when claude has not been probed yet. Best-effort: it also
+ * Probed is false when the agent has not been probed yet. Best-effort: it also
  * triggers a background refresh so a stale or missing cache self-heals without
  * blocking the UI (the next LoadToolset call sees the fresh result).
  */

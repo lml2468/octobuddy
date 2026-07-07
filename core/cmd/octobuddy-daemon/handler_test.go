@@ -59,9 +59,9 @@ func exerciseBotAssemblyHelpers(t *testing.T) {
 
 	base := t.TempDir()
 	cfg := config.Resolved{
-		BotID:           "b2",
-		DataDir:         filepath.Join(base, "data"),
-		ClaudeConfigDir: filepath.Join(base, "claude"),
+		BotID:          "b2",
+		DataDir:        filepath.Join(base, "data"),
+		AgentConfigDir: filepath.Join(base, "claude"),
 	}
 	if err := prepareBotDirs(cfg); err != nil {
 		t.Fatalf("prepareBotDirs: %v", err)
