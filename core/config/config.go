@@ -78,8 +78,8 @@ type AgentConfig struct {
 	// DispatchTimeoutSec overrides the per-turn IDLE timeout (seconds) for this
 	// bot. The timer resets on every AgentEvent, so a long workflow with steady
 	// event flow is fine — only N seconds of silence kills the turn. <=0 leaves
-	// the daemon default (20 min). Set higher when a bot routinely runs long
-	// tools that can stay silent for >20 min (e.g. a slow Bash); set lower for
+	// the daemon default (30 min). Set higher when a bot routinely runs long
+	// tools that can stay silent for >30 min (e.g. a slow Bash); set lower for
 	// snappy DMs where a stuck turn should surface fast.
 	DispatchTimeoutSec int `json:"dispatchTimeoutSec,omitempty"`
 	// Tools scopes the tool surface the agent may call, per bot and

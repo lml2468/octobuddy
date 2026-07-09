@@ -1,6 +1,6 @@
 module github.com/lml2468/octobuddy/desktop
 
-go 1.26.4
+go 1.26.5
 
 require (
 	github.com/wailsapp/wails/v3 v3.0.0-alpha2.108
