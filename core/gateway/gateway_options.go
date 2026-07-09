@@ -209,7 +209,7 @@ func (g *Gateway) WithMediaAuth(fn MediaAuth) *Gateway {
 // resets on every AgentEvent, so a long turn with steady event flow is fine —
 // only N seconds of silence kills it. A value <=0 is a no-op (keeps the
 // current default), so a caller can blindly pass a config value of zero
-// meaning "unset" without breaking the fluent chain. Default 20 minutes.
+// meaning "unset" without breaking the fluent chain. Default 30 minutes.
 func (g *Gateway) WithDispatchTimeout(d time.Duration) *Gateway {
 	if d <= 0 {
 		return g

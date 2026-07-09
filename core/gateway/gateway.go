@@ -129,7 +129,7 @@ type Gateway struct {
 // defaultDispatchTimeout is the idle-deadline default — long enough for
 // most multi-tool workflows between events, short enough that a hung
 // turn frees its session lock.
-const defaultDispatchTimeout = 20 * time.Minute
+const defaultDispatchTimeout = 30 * time.Minute
 
 // Handle routes one reply-warranting inbound through the full pipeline,
 // holding the per-session lock across the turn so same-session turns

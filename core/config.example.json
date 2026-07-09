@@ -18,7 +18,7 @@
         "toolProgress": false,
         "_comment_inheritUserConfig": "When true, the agent inherits the operator's ~/.claude (user-scope skills + installed plugins). OFF by default: each bot gets an isolated CLAUDE_CONFIG_DIR (~/.octobuddy/<id>/.claude).",
         "inheritUserConfig": false,
-        "_comment_dispatchTimeoutSec": "Per-turn IDLE timeout (seconds). Omit to use the daemon default (1200 = 20 min).",
+        "_comment_dispatchTimeoutSec": "Per-turn IDLE timeout (seconds). Omit to use the daemon default (1800 = 30 min).",
         "dispatchTimeoutSec": 0,
         "_comment_settingSources": "Which claude filesystem setting scopes load. Allowed: 'user', 'project'; 'user' is required when set. Omit/empty = ['user'] (default: per-bot skills under CLAUDE_CONFIG_DIR load; project/local dropped). Adding 'project' loads the sandbox cwd's .claude/ + CLAUDE.md — a prompt-injection vector for untrusted group chats; enable only for trusted single-operator bots. 'local' is not allowed.",
         "settingSources": ["user"],
