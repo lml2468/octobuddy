@@ -197,7 +197,13 @@ func (c *Connector) mirrorGroupDoc(ctx context.Context, channelID, cwd string) {
 		c.deleteGroupDoc(cwd)
 		return
 	}
-	c.writeGroupDoc(cwd, groupDocFilename, truncateByBytes(content, GroupDocMaxBytes, "\n…（GROUP.md 已截断）"))
+	// Truncate so the WRITTEN file (content head + marker) never exceeds
+	// GroupDocMaxBytes: truncateByBytes returns up to maxBytes+len(marker), and
+	// the gateway's SafeRead ERRORS (not truncates) past its equal inject cap, so
+	// budgeting the marker into the limit keeps a large GROUP.md injectable
+	// instead of silently dropped.
+	const marker = "\n…（GROUP.md 已截断）"
+	c.writeGroupDoc(cwd, groupDocFilename, truncateByBytes(content, GroupDocMaxBytes-len(marker), marker))
 }
 
 // deleteGroupDoc removes the local GROUP.md mirror (best-effort; a missing file

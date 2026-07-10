@@ -86,6 +86,16 @@ func (c *Connector) enqueueTurn(key string, inbound router.InboundMessage, tgt r
 // the worker exits, so a burst is handled by a single worker.
 func (c *Connector) drainTurns(key string) {
 	defer c.turnsWG.Done()
+	// Defensive recover at the goroutine boundary: gateway.runTurn recovers
+	// panics in the turn body, but a panic in the routing/locking bookkeeping
+	// around it (gateway.Handle, router.RouteAndHandle) would otherwise escape
+	// this bare goroutine and crash the whole daemon, taking down every session
+	// for the bot. Degrade to a logged dropped turn instead.
+	defer func() {
+		if r := recover(); r != nil {
+			c.logf("drainTurns panic for %s: %v", key, r)
+		}
+	}()
 	for {
 		c.mu.Lock()
 		q := c.turnQueues[key]

@@ -5,6 +5,11 @@ import (
 	"time"
 )
 
+// breakerOpenErr is the internal termErr set on a short-circuited turn's result.
+// Never user-visible (the transient branch replies busyReply); paired with
+// agentAttemptResult.shortCircuited, which is the load-bearing signal.
+const breakerOpenErr = "circuit breaker open"
+
 // breakerState is the circuit-breaker's current mode.
 type breakerState int
 

@@ -22,7 +22,9 @@ import (
 // runs on the connector's per-session drain goroutine (and the cron/Console
 // paths), none of which recover. The recover also resolves the circuit breaker
 // (a panic during a half-open probe would otherwise wedge it) and delivers the
-// error apology. Registered first so it runs LAST, after finishCursor/idle.stop.
+// error apology. It is registered AFTER finishCursor so it runs BEFORE it (defer
+// LIFO), letting a recovered turn mark itself delivered before the cursor-rewind
+// guard runs.
 func (g *Gateway) runTurn(ctx context.Context, sessionKey string, msg router.InboundMessage) (err error) {
 	tc := &TurnContext{ctx: ctx, sessionKey: sessionKey, msg: msg}
 	// finishCursor registered first → runs LAST; recoverTurn registered after it
@@ -102,7 +104,7 @@ func (g *Gateway) composeTurn(tc *TurnContext) error {
 func (g *Gateway) executeTurn(tc *TurnContext) error {
 	if !g.breaker.allow() {
 		glog().Warn("circuit breaker open; short-circuiting turn", "session", tc.sessionKey, "driver", g.driver.Name())
-		tc.result = agentAttemptResult{termErr: "circuit breaker open", termTransient: true}
+		tc.result = agentAttemptResult{termErr: breakerOpenErr, termTransient: true, shortCircuited: true}
 		return nil
 	}
 	for attempt := 0; ; attempt++ {
@@ -129,18 +131,22 @@ func (g *Gateway) executeTurn(tc *TurnContext) error {
 }
 
 // deliverTurn picks the terminal branch (idle timeout → poison → terminal error
-// → success) and sets tc.delivered so finishCursor keeps the advanced cursor.
+// → success), sets tc.delivered so finishCursor keeps the advanced cursor, and
+// feeds the breaker the turn's real outcome.
 func (g *Gateway) deliverTurn(tc *TurnContext) {
-	// Feed the real outcome to the breaker so a success closes it and a transient
-	// terminal failure trips it. Skip the synthetic short-circuit result (it did
-	// not spawn — recording it would keep the breaker open forever); allow()
-	// already left the breaker half-open to admit the next probe.
-	if tc.result.termErr != "circuit breaker open" {
-		g.breaker.onResult(tc.result.termTransient, tc.result.termErr == "")
-	}
-
 	if g.handleDispatchTimeout(tc.ctx, tc.idle, tc.sessionKey, &tc.delivered) {
+		// A dispatch/idle timeout is an upstream stall (the driver went silent),
+		// not a success — count it toward tripping the breaker like a transient
+		// failure so timeout-shaped overload can open it.
+		g.breaker.onResult(true, false)
 		return
+	}
+	// Feed the real outcome to the breaker: a success (termErr=="") closes it, a
+	// transient terminal failure trips it. Skip the synthetic short-circuit result
+	// (it did not spawn — recording it would keep the breaker open forever;
+	// allow() already left the breaker half-open to admit the next probe).
+	if !tc.result.shortCircuited {
+		g.breaker.onResult(tc.result.termTransient, tc.result.termErr == "")
 	}
 	if g.handlePoisonedResume(tc.sessionKey, tc.result, &tc.delivered) {
 		return
@@ -164,6 +170,12 @@ type agentAttemptResult struct {
 	termHint      string
 	termPoisoned  bool
 	resumeBad     bool
+	// shortCircuited marks a result the circuit breaker produced WITHOUT spawning
+	// the driver (breaker open). deliverTurn must not feed it back into the
+	// breaker (that would count the breaker's own short-circuit as a fresh
+	// upstream failure and never let it close). A typed flag rather than a
+	// sentinel termErr string so the two sites can't drift.
+	shortCircuited bool
 	// steps accumulates this turn's process steps (tool calls / thinking) in
 	// order, mirroring the live session.tool / session.activity stream the
 	// desktop renders. Persisted as JSON with the assistant row so a reload

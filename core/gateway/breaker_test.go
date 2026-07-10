@@ -396,3 +396,51 @@ func TestGroupTurnPanicDoesNotResurface(t *testing.T) {
 		t.Fatal("panicked-but-apologized turn must hold the cursor (no resurface)")
 	}
 }
+
+// hangDriver returns a stream that never emits and never closes until ctx is
+// cancelled — forcing the gateway's idle/dispatch timeout to fire.
+type hangDriver struct{ queries int }
+
+func (d *hangDriver) Name() string                     { return "fake" }
+func (d *hangDriver) Capabilities() agent.Capabilities { return agent.Capabilities{Resume: true} }
+func (d *hangDriver) Query(ctx context.Context, req agent.Request) (<-chan agent.AgentEvent, error) {
+	d.queries++
+	ch := make(chan agent.AgentEvent)
+	go func() {
+		<-ctx.Done() // unblock on the idle-guard cancel
+		close(ch)
+	}()
+	return ch, nil
+}
+
+// TestDispatchTimeoutTripsBreaker: a dispatch/idle timeout is an upstream stall,
+// so it must count toward opening the breaker (not reset it). With threshold 2,
+// two consecutive timeouts must open the breaker (3rd turn short-circuits without
+// spawning). Regression for the onResult-before-timeout-branch ordering bug.
+func TestDispatchTimeoutTripsBreaker(t *testing.T) {
+	drv := &hangDriver{}
+	sink := newCaptureSink()
+	gw := New(drv, newTestStore(t), router.New(router.Config{MaxPerMinute: 100}), sink).
+		WithCircuitBreaker(2, time.Minute).
+		WithDispatchTimeout(20 * time.Millisecond)
+
+	for i := 0; i < 2; i++ {
+		if _, err := gw.Handle(context.Background(), dmMsg("hi")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	spawns := drv.queries
+	if spawns != 2 {
+		t.Fatalf("first 2 timeout turns must each spawn, got %d", spawns)
+	}
+	// 3rd turn: breaker should be open → short-circuit, no new spawn.
+	if _, err := gw.Handle(context.Background(), dmMsg("hi")); err != nil {
+		t.Fatal(err)
+	}
+	if drv.queries != spawns {
+		t.Fatalf("two timeouts must have opened the breaker (no 3rd spawn), query count %d→%d", spawns, drv.queries)
+	}
+	if sink.replies["u1"] != busyReply {
+		t.Fatalf("open breaker must reply busyReply, got %q", sink.replies["u1"])
+	}
+}

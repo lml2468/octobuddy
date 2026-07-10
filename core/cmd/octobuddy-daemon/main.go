@@ -143,6 +143,9 @@ func runSingleBotMode(flags daemonFlags) {
 	rt := router.New(router.Config{MaxPerMinute: flags.maxPerMin})
 	sinks, srv := singleBotSinks(flags.controlSock)
 	connector := singleBotConnector(flags.octoAPI, flags.octoToken, sec, &sinks)
+	if connector != nil {
+		connector.SetStore(st) // inbound message-id dedup (P1), same as config mode
+	}
 	gw := singleBotGateway(drv, st, rt, sinks, connector)
 
 	if srv != nil {
