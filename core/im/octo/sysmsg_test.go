@@ -159,7 +159,7 @@ func TestMirrorGroupDocWritesAndDeletes(t *testing.T) {
 	c := NewConnector(NewRESTClient(srv.URL, func() string { return "tk" }))
 	c.mirrorGroupDoc(context.Background(), "g1", cwd)
 
-	got, err := safepath.SafeRead(cwd, groupDocFilename, groupDocMaxBytes)
+	got, err := safepath.SafeRead(cwd, groupDocFilename, GroupDocMaxBytes)
 	if err != nil {
 		t.Fatalf("read GROUP.md: %v", err)
 	}

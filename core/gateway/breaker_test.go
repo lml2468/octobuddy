@@ -262,3 +262,81 @@ func TestBreakerRecoversAfterCooldown(t *testing.T) {
 		t.Fatalf("recovered turn must deliver real reply, got %q", sink.replies["u1"])
 	}
 }
+
+// queryErrorDriver returns a top-level error from Query (fork/exec-style
+// failure) — the path that bypasses deliverTurn. Configurable so a probe can be
+// made to fail-to-spawn.
+type queryErrorDriver struct {
+	mu       sync.Mutex
+	failNext bool
+	queries  int
+}
+
+func (d *queryErrorDriver) Name() string { return "fake" }
+func (d *queryErrorDriver) Capabilities() agent.Capabilities {
+	return agent.Capabilities{Resume: true}
+}
+func (d *queryErrorDriver) Query(ctx context.Context, req agent.Request) (<-chan agent.AgentEvent, error) {
+	d.mu.Lock()
+	d.queries++
+	fail := d.failNext
+	d.mu.Unlock()
+	if fail {
+		return nil, context.Canceled // top-level Query error → bypasses deliverTurn
+	}
+	ch := make(chan agent.AgentEvent, 3)
+	go func() {
+		defer close(ch)
+		ch <- agent.AgentEvent{Kind: agent.KindSessionStarted, SessionID: "s"}
+		ch <- agent.AgentEvent{Kind: agent.KindTextDelta, Text: "ok"}
+		ch <- agent.AgentEvent{Kind: agent.KindTurnDone}
+	}()
+	return ch, nil
+}
+
+// TestBreakerHalfOpenProbeQueryErrorDoesNotWedge is the regression for the P5
+// reviewer's Critical finding: a half-open probe whose driver.Query returns a
+// top-level error (never reaching deliverTurn) must still resolve the breaker
+// via executeTurn's error-path onResult — otherwise it wedges in half-open
+// forever. After such a probe the breaker must not be permanently stuck: a
+// following healthy turn must spawn and succeed.
+func TestBreakerHalfOpenProbeQueryErrorDoesNotWedge(t *testing.T) {
+	drv := &queryErrorDriver{}
+	sink := newCaptureSink()
+	gw := New(drv, newTestStore(t), router.New(router.Config{MaxPerMinute: 100}), sink).
+		WithCircuitBreaker(1, time.Minute) // threshold 1 for brevity
+	now := time.Unix(9000, 0)
+	gw.breaker.now = func() time.Time { return now }
+
+	// First turn: healthy spawn (breaker closed) — succeeds.
+	if _, err := gw.Handle(context.Background(), dmMsg("hi")); err != nil {
+		t.Fatal(err)
+	}
+	// Force the breaker OPEN by making a turn fail transiently. Simulate by
+	// directly feeding a transient result (the queryErrorDriver can't emit a
+	// stream transient), which is the documented onResult contract.
+	gw.breaker.onResult(true, false) // 1 transient → open (threshold 1)
+	if gw.breaker.allow() {
+		t.Fatal("breaker should be open")
+	}
+	// Advance past cooldown → next allow() half-opens. Make the probe's Query
+	// fail at the top level (the wedge path).
+	now = now.Add(2 * time.Minute)
+	drv.mu.Lock()
+	drv.failNext = true
+	drv.mu.Unlock()
+	if _, err := gw.Handle(context.Background(), dmMsg("probe")); err != nil {
+		t.Fatal(err)
+	}
+	// The probe failed to spawn; the breaker must NOT be wedged in half-open.
+	// A healthy turn now must be allowed to spawn and succeed.
+	drv.mu.Lock()
+	drv.failNext = false
+	drv.mu.Unlock()
+	if _, err := gw.Handle(context.Background(), dmMsg("recover")); err != nil {
+		t.Fatal(err)
+	}
+	if sink.replies["u1"] != "ok" {
+		t.Fatalf("breaker wedged: recovery turn did not spawn/succeed, reply=%q", sink.replies["u1"])
+	}
+}

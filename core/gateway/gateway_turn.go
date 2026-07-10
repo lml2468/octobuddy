@@ -71,6 +71,12 @@ func (g *Gateway) executeTurn(tc *TurnContext) error {
 		tc.req.SessionID = tc.resume
 		events, err := g.driver.Query(tc.ctx, tc.req)
 		if err != nil {
+			// A top-level Query error (fork/exec failure, etc.) never reaches
+			// deliverTurn, so feed the breaker here or a half-open probe that
+			// fails to even spawn would wedge the breaker in half-open forever.
+			// Treat it as a non-transient failure: it resets/closes rather than
+			// opening (a local spawn fault is not an upstream-capacity signal).
+			g.breaker.onResult(false, false)
 			return g.failTurn(tc.sessionKey, "driver.Query", err)
 		}
 		tc.result = g.consumeAgentAttempt(tc.sessionKey, events, tc.idle, tc.resume != "")

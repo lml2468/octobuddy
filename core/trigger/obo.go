@@ -70,9 +70,13 @@ func personaRelevant(m *MentionPayload, g PolicyGrantor) bool {
 	return false
 }
 
-// isDMKind reports whether an adapter-supplied channel-type code denotes a
-// DM. The octo connector uses kind=1 for DM (octo.ChannelDM == 1). Other
-// adapters that emit OBO signals must use the same convention or remap on
-// translation. Kept as a single dependency-free predicate so trigger never
-// imports an IM package.
-func isDMKind(kind int) bool { return kind == 1 }
+// DMKindWire is the adapter-supplied channel-type code that denotes a DM in an
+// OBO signal. It is the wire convention every IM adapter emitting OBO signals
+// must follow (the octo connector's octo.ChannelDM == 1); trigger stays
+// dependency-free (never imports an IM package), and the daemon asserts
+// DMKindWire == octo.ChannelDM in a cross-package test so the agreement can't
+// silently drift.
+const DMKindWire = 1
+
+// isDMKind reports whether an adapter-supplied channel-type code denotes a DM.
+func isDMKind(kind int) bool { return kind == DMKindWire }
