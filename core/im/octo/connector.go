@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/lml2468/octobuddy/core/gateway"
+	"github.com/lml2468/octobuddy/core/store"
 	"github.com/lml2468/octobuddy/core/trigger"
 )
 
@@ -16,6 +17,10 @@ import (
 type Connector struct {
 	rest    *RESTClient
 	gateway *gateway.Gateway
+
+	// store backs the inbound message-id dedup (P1). Optional: nil (dev/REPL,
+	// tests) means no dedup — every message dispatches. Set via SetStore.
+	store *store.Store
 
 	botUID string
 	// ownerUID is the bot owner's server-authoritative uid, set after each

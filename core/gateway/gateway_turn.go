@@ -50,6 +50,10 @@ func (g *Gateway) runTurn(ctx context.Context, sessionKey string, msg router.Inb
 		return nil
 	}
 
+	if handled := g.handlePoisonedResume(sessionKey, attemptResult, &turnDelivered); handled {
+		return nil
+	}
+
 	if handled := g.handleTerminalAgentError(sessionKey, attemptResult.termErr, attemptResult.termTransient, attemptResult.termHint, &turnDelivered); handled {
 		return nil
 	}
@@ -69,6 +73,7 @@ type agentAttemptResult struct {
 	termErr       string
 	termTransient bool
 	termHint      string
+	termPoisoned  bool
 	resumeBad     bool
 	// steps accumulates this turn's process steps (tool calls / thinking) in
 	// order, mirroring the live session.tool / session.activity stream the
@@ -116,8 +121,13 @@ func (g *Gateway) consumeAgentAttempt(sessionKey string, events <-chan agent.Age
 		// Reset the idle deadline on every event — a steady stream keeps the
 		// turn alive, only true silence kills it.
 		idle.reset()
-		// A stale resume id dooms this attempt. Swallow its events so the failed
-		// run never reaches the sink, then retry fresh in runTurn.
+		// A stale resume id dooms this attempt: swallow its events so the failed
+		// run never reaches the sink, then retry fresh in runTurn. A POISONED
+		// resume (a valid session whose history deterministically re-fails) is
+		// NOT swallowed and NOT retried in-turn — the doomed attempt may already
+		// have run real tools/side effects, so re-running fresh would duplicate
+		// them. Poison flows through the normal terminal-error path and is handled
+		// by handlePoisonedResume (clear resume + one-time hint, next turn fresh).
 		if ev.ResumeInvalid {
 			res.resumeBad = true
 			gatedBuf = nil
@@ -207,6 +217,7 @@ func (g *Gateway) consumeAgentError(ev agent.AgentEvent, res *agentAttemptResult
 	res.termErr = ev.Err
 	res.termTransient = ev.Transient
 	res.termHint = ev.RetryHint
+	res.termPoisoned = ev.Poisoned
 }
 
 func (g *Gateway) prepareAgentRequest(ctx context.Context, sessionKey string, msg router.InboundMessage) (agent.Request, error) {
@@ -257,8 +268,36 @@ func (g *Gateway) prepareAgentRequest(ctx context.Context, sessionKey string, ms
 	// its probed headless-safe default.
 	if tools, ok := g.resolveTools(sessionKey); ok {
 		req.AllowedTools = tools
+		g.warnUnenforcedToolPolicy(sessionKey, tools)
 	}
 	return req, nil
+}
+
+// warnUnenforcedToolPolicy emits an advisory when the operator set a tool policy
+// (ok=true, including an explicit empty muzzle) but the active driver does not
+// enforce tool scoping (Capabilities.ToolScoping==false, e.g. codex exec). The
+// tools are STILL passed to the driver — behavior is unchanged; this only makes
+// the silent no-op observable. Logged once per (sessionKey, driver) so a codex
+// bot with a channel policy doesn't warn every turn.
+func (g *Gateway) warnUnenforcedToolPolicy(sessionKey string, tools []string) {
+	if g.driver.Capabilities().ToolScoping {
+		return
+	}
+	key := sessionKey + "\x00" + g.driver.Name()
+	g.toolPolicyMu.Lock()
+	if g.toolPolicyWarned == nil {
+		g.toolPolicyWarned = map[string]bool{}
+	}
+	warned := g.toolPolicyWarned[key]
+	if !warned {
+		g.toolPolicyWarned[key] = true
+	}
+	g.toolPolicyMu.Unlock()
+	if warned {
+		return
+	}
+	glog().Warn("tool policy requested but not enforced by driver",
+		"driver", g.driver.Name(), "session", sessionKey, "tools", len(tools))
 }
 
 func (g *Gateway) handleDispatchTimeout(ctx context.Context, idle *idleGuard, sessionKey string, delivered *bool) bool {
@@ -268,6 +307,28 @@ func (g *Gateway) handleDispatchTimeout(ctx context.Context, idle *idleGuard, se
 	glog().Warn("dispatch idle timeout", "session", sessionKey, "timeout", g.dispatchTimeout)
 	*delivered = true
 	g.sink.OnReply(sessionKey, timeoutReply)
+	return true
+}
+
+// handlePoisonedResume handles a POISONED terminal error: a valid resume whose
+// conversation history deterministically re-fails (a 400 baked in, an exhausted
+// turn/iteration limit). Unlike a stale resume (ResumeInvalid, retried fresh
+// in-turn), the doomed attempt may already have run real tools/side effects, so
+// we do NOT retry this turn — that would duplicate them. Instead we drop the
+// resume mapping so the NEXT message starts a clean session, and deliver a
+// one-time hint (the doomed attempt already streamed tool-progress for
+// tool-progress bots, so pure silence would be confusing). Marks the turn
+// delivered so the group cursor isn't rewound.
+func (g *Gateway) handlePoisonedResume(sessionKey string, res agentAttemptResult, delivered *bool) bool {
+	if !res.termPoisoned {
+		return false
+	}
+	glog().Warn("poisoned resume; clearing so next turn starts fresh", "session", sessionKey, "err", res.termErr)
+	if err := g.store.ClearResumeForAgent(sessionKey, g.driver.Name()); err != nil {
+		glog().Error("clear poisoned resume", "session", sessionKey, "err", err)
+	}
+	*delivered = true
+	g.sink.OnReply(sessionKey, poisonedReply)
 	return true
 }
 

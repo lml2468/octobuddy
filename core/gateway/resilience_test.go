@@ -44,6 +44,99 @@ func (d *resumeFlakeDriver) Query(ctx context.Context, req agent.Request) (<-cha
 	return ch, nil
 }
 
+// poisonDriver emits, on a resumed turn, some real activity (a tool step + text)
+// followed by a terminal Poisoned error — modeling a valid session whose history
+// deterministically re-fails after doing work. A fresh turn (no resume id)
+// succeeds. Used to assert the divergent poison policy: NO in-turn retry (side
+// effects already ran), resume cleared, a one-time poisonedReply delivered.
+type poisonDriver struct {
+	mu   sync.Mutex
+	seen []string // SessionID per Query call
+}
+
+func (d *poisonDriver) Name() string { return "fake" }
+func (d *poisonDriver) Capabilities() agent.Capabilities {
+	return agent.Capabilities{Resume: true}
+}
+func (d *poisonDriver) Query(ctx context.Context, req agent.Request) (<-chan agent.AgentEvent, error) {
+	d.mu.Lock()
+	d.seen = append(d.seen, req.SessionID)
+	d.mu.Unlock()
+	ch := make(chan agent.AgentEvent, 8)
+	go func() {
+		defer close(ch)
+		if req.SessionID != "" {
+			// Resumed turn: session starts, real work happens, then poison.
+			ch <- agent.AgentEvent{Kind: agent.KindSessionStarted, SessionID: req.SessionID}
+			ch <- agent.AgentEvent{Kind: agent.KindToolUse, ToolName: "Bash", ToolSummary: "Bash(ls)", ToolDetail: "Bash(ls)"}
+			ch <- agent.AgentEvent{Kind: agent.KindError, Err: "invalid_request_error: messages too long", Poisoned: true}
+			return
+		}
+		ch <- agent.AgentEvent{Kind: agent.KindSessionStarted, SessionID: "fresh-id"}
+		ch <- agent.AgentEvent{Kind: agent.KindTextDelta, Text: "recovered"}
+		ch <- agent.AgentEvent{Kind: agent.KindTurnDone}
+	}()
+	return ch, nil
+}
+
+// TestPoisonedResumeDropsAndHintsNoRetry: a resumed turn that poisons must NOT
+// be retried in-turn (the doomed attempt may have run side effects), must clear
+// the resume mapping so the NEXT message starts fresh, and must deliver the
+// one-time poisonedReply hint.
+func TestPoisonedResumeDropsAndHintsNoRetry(t *testing.T) {
+	st := newTestStore(t)
+	if err := st.SaveResume("u1", "fake", "poison-id"); err != nil {
+		t.Fatal(err)
+	}
+	drv := &poisonDriver{}
+	sink := newCaptureSink()
+	gw := New(drv, st, router.New(router.Config{MaxPerMinute: 100}), sink)
+
+	msg := router.InboundMessage{ChannelType: router.ChannelDM, FromUID: "u1", FromName: "alice", Text: "hi"}
+	if _, err := gw.Handle(context.Background(), msg); err != nil {
+		t.Fatalf("handle: %v", err)
+	}
+
+	// Exactly ONE query (no in-turn fresh retry).
+	if len(drv.seen) != 1 || drv.seen[0] != "poison-id" {
+		t.Fatalf("expected a single [poison-id] query (no retry), got %v", drv.seen)
+	}
+	// The one-time hint was delivered.
+	if sink.replies["u1"] != poisonedReply {
+		t.Errorf("reply = %q, want poisonedReply %q", sink.replies["u1"], poisonedReply)
+	}
+	// Resume mapping cleared so the next message starts fresh.
+	if got, _ := st.Resume("u1", "fake"); got != "" {
+		t.Errorf("resume = %q, want cleared", got)
+	}
+}
+
+// TestPoisonedNextTurnStartsFresh: after a poison drop, the following message
+// runs with no resume id and succeeds normally.
+func TestPoisonedNextTurnStartsFresh(t *testing.T) {
+	st := newTestStore(t)
+	if err := st.SaveResume("u1", "fake", "poison-id"); err != nil {
+		t.Fatal(err)
+	}
+	drv := &poisonDriver{}
+	sink := newCaptureSink()
+	gw := New(drv, st, router.New(router.Config{MaxPerMinute: 100}), sink)
+	msg := router.InboundMessage{ChannelType: router.ChannelDM, FromUID: "u1", FromName: "alice", Text: "hi"}
+	if _, err := gw.Handle(context.Background(), msg); err != nil {
+		t.Fatalf("handle turn1: %v", err)
+	}
+	if _, err := gw.Handle(context.Background(), msg); err != nil {
+		t.Fatalf("handle turn2: %v", err)
+	}
+	// turn2 ran fresh (resume was cleared) and produced the real reply.
+	if len(drv.seen) != 2 || drv.seen[1] != "" {
+		t.Fatalf("turn2 must run fresh, got queries %v", drv.seen)
+	}
+	if sink.replies["u1"] != "recovered" {
+		t.Errorf("turn2 reply = %q, want recovered", sink.replies["u1"])
+	}
+}
+
 func TestStaleResumeSelfHeals(t *testing.T) {
 	st := newTestStore(t)
 	if err := st.SaveResume("u1", "fake", "stale-id"); err != nil {
@@ -145,4 +238,49 @@ func TestRunTurnEchoesUserMessage(t *testing.T) {
 	if got.Text != "hello bot" || got.FromUID != "alice" || got.FromName != "Alice" {
 		t.Fatalf("OnUserMessage carried wrong payload: %+v", got)
 	}
+}
+
+// TestFreshTurnPoisonDeliversError is the regression guard for the Verify
+// finding: a terminal error on a FRESH turn (no resume id) must NOT be treated
+// as poison — it has no resumable history to poison. The gateway surfaces
+// errorReply, never an empty reply, and clears no resume.
+func TestFreshTurnPoisonDeliversError(t *testing.T) {
+	st := newTestStore(t)
+	drv := &terminalErrorDriver{}
+	sink := newCaptureSink()
+	gw := New(drv, st, router.New(router.Config{MaxPerMinute: 100}), sink)
+
+	msg := router.InboundMessage{ChannelType: router.ChannelDM, FromUID: "u1", FromName: "alice", Text: "hi"}
+	if _, err := gw.Handle(context.Background(), msg); err != nil {
+		t.Fatalf("handle: %v", err)
+	}
+	if len(drv.seen) != 1 || drv.seen[0] != "" {
+		t.Fatalf("fresh turn must run exactly once with no resume, got %v", drv.seen)
+	}
+	if sink.replies["u1"] != errorReply {
+		t.Errorf("reply = %q, want errorReply %q", sink.replies["u1"], errorReply)
+	}
+}
+
+// terminalErrorDriver always emits a terminal, non-transient error that is NOT
+// tagged Poisoned (a real driver only tags poison when sessionID != "").
+type terminalErrorDriver struct {
+	mu   sync.Mutex
+	seen []string
+}
+
+func (d *terminalErrorDriver) Name() string { return "fake" }
+func (d *terminalErrorDriver) Capabilities() agent.Capabilities {
+	return agent.Capabilities{Resume: true}
+}
+func (d *terminalErrorDriver) Query(ctx context.Context, req agent.Request) (<-chan agent.AgentEvent, error) {
+	d.mu.Lock()
+	d.seen = append(d.seen, req.SessionID)
+	d.mu.Unlock()
+	ch := make(chan agent.AgentEvent, 4)
+	go func() {
+		defer close(ch)
+		ch <- agent.AgentEvent{Kind: agent.KindError, Err: "invalid_request_error: bad", Recoverable: false}
+	}()
+	return ch, nil
 }

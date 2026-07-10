@@ -153,7 +153,12 @@ func (d *ClaudeDriver) ProbeToolNames(ctx context.Context, env []string) ([]stri
 }
 
 func (d *ClaudeDriver) Capabilities() Capabilities {
-	return Capabilities{Streaming: true, Resume: true, ToolEvents: true}
+	return Capabilities{
+		Streaming: true, Resume: true, ToolEvents: true,
+		NativeSystemPrompt: true, // --system-prompt (REPLACE)
+		ToolScoping:        true, // --tools scopes the surface
+		MCP:                true, // --mcp-config
+	}
 }
 
 func (d *ClaudeDriver) buildArgs(req Request) []string {
@@ -506,7 +511,7 @@ func (d *ClaudeDriver) Query(ctx context.Context, req Request) (<-chan AgentEven
 	cmd := d.buildCommand(ctx, req)
 	sessionID := req.SessionID
 	return streamCommand(ctx, cmd, "claude",
-		parseClaudeLine,
+		func(line string) []AgentEvent { return tagPoisonedResume(parseClaudeLine(line), sessionID) },
 		func(line string) AgentEvent { return stderrLineEvent(line, sessionID) },
 	)
 }

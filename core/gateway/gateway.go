@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/lml2468/octobuddy/core/agent"
@@ -124,6 +125,13 @@ type Gateway struct {
 	// sessionTouch fires after every AppendUser / AppendAssistant so the
 	// GUI can broadcast `session.upserted` without polling. nil = no-op.
 	sessionTouch func(sessionKey, channelID string, channelType router.ChannelType)
+
+	// toolPolicyWarned dedupes the "tool policy not enforced by driver"
+	// advisory to once per (sessionKey, driver) so a codex bot with a channel
+	// tool policy logs the unenforced-muzzle warning once, not every turn.
+	// Guarded by toolPolicyMu (concurrent turns share a Gateway across sessions).
+	toolPolicyMu     sync.Mutex
+	toolPolicyWarned map[string]bool
 }
 
 // defaultDispatchTimeout is the idle-deadline default — long enough for
@@ -182,6 +190,12 @@ const (
 	// busyReply distinguishes upstream capacity issues (HTTP 429/503/529)
 	// from generic bugs, so the user knows it's not their fault.
 	busyReply = "⏳ 服务繁忙，请稍后重试。"
+	// poisonedReply is sent when a resumed session's history deterministically
+	// re-fails (a 400 baked in, an exhausted turn limit). The resume mapping is
+	// dropped so the NEXT message starts clean; this turn is not retried (it may
+	// already have run side effects). The hint tells the user the context was
+	// reset rather than leaving them with an unexplained silent drop.
+	poisonedReply = "⚠️ 会话上下文已重置，请重新发送你的消息。"
 )
 
 // Observe caches a non-triggering group message into group context so it

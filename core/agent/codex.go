@@ -57,8 +57,16 @@ func (d *CodexDriver) Name() string { return "codex" }
 func (d *CodexDriver) Capabilities() Capabilities {
 	// Resume via `codex exec resume <thread_id>`; tool events via the
 	// command_execution item stream. Streaming is per-block (no token deltas),
-	// same as claude.
-	return Capabilities{Streaming: true, Resume: true, ToolEvents: true}
+	// same as claude. NativeSystemPrompt/ToolScoping/MCP are false: `codex exec`
+	// has no --system-prompt (System is prepended to stdin) and no --tools
+	// surface flag (AllowedTools cannot be enforced), and MCPConfigFn is unwired
+	// (see init). The gateway surfaces the ToolScoping gap as an advisory.
+	return Capabilities{
+		Streaming: true, Resume: true, ToolEvents: true,
+		NativeSystemPrompt: false,
+		ToolScoping:        false,
+		MCP:                false,
+	}
 }
 
 // ConfigDirName isolates Codex's per-bot config under <botRoot>/.codex, the
@@ -81,7 +89,7 @@ func (d *CodexDriver) Query(ctx context.Context, req Request) (<-chan AgentEvent
 	cmd := newAgentCmd(ctx, d.binPath(), d.buildArgs(req), sysReq, d.queryEnv())
 	sessionID := req.SessionID
 	return streamCommand(ctx, cmd, "codex",
-		parseCodexLine,
+		func(line string) []AgentEvent { return tagPoisonedResume(parseCodexLine(line), sessionID) },
 		func(line string) AgentEvent { return codexStderrEvent(line, sessionID) },
 	)
 }

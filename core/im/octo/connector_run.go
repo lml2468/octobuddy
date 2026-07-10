@@ -152,6 +152,7 @@ func (c *Connector) connectOnce(ctx context.Context, reg RegisterResponse) (stab
 	sock := newSocketConn(reg.WSURL, reg.RobotID, reg.IMToken, c.deviceID, c.onInbound, func(err error) {
 		c.logf("socket: %v", err)
 	})
+	sock.seen = c.markSeen // inbound message-id dedup (P1); no-op when store unset
 	c.mu.Lock()
 	c.sock = sock
 	c.mu.Unlock()

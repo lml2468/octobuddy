@@ -93,6 +93,19 @@ CREATE TABLE IF NOT EXISTS token_usage_daily (
 );
 
 CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages(session_id, id);
+
+-- Inbound message-id dedup (P1). WuKongIM redelivers unacked messages and
+-- redelivers across a crash/restart; recording each processed message id makes
+-- dispatch idempotent so a lost-ack-after-dispatch (or a restart mid-turn) never
+-- double-spawns a turn. Persistent (not in-memory) precisely to survive the
+-- restart window. Reaped past a retention window by ReapSeenMessages; message_id
+-- is the WuKongIM uint64 rendered as TEXT (matches socket_recv's idStr). Pure
+-- additive CREATE — no dedicated migration, same as group_reply_cursors.
+CREATE TABLE IF NOT EXISTS seen_messages (
+  message_id TEXT PRIMARY KEY,
+  seen_at    INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_seen_messages_seen_at ON seen_messages(seen_at);
 `
 
 // migrateAgentSessions rebuilds the agent_sessions table when it carries the

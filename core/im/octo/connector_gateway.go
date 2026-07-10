@@ -5,11 +5,33 @@ import (
 
 	"github.com/lml2468/octobuddy/core/gateway"
 	"github.com/lml2468/octobuddy/core/groupctx"
+	"github.com/lml2468/octobuddy/core/store"
 )
 
 // SetGateway attaches the gateway (done after construction to resolve the
 // Connector-is-Sink-of-Gateway cycle).
 func (c *Connector) SetGateway(g *gateway.Gateway) { c.gateway = g }
+
+// SetStore attaches the per-bot store, enabling inbound message-id dedup (P1).
+// Wired at bot assembly (mirrors SetGateway). Without it, markSeen fails open.
+func (c *Connector) SetStore(s *store.Store) { c.store = s }
+
+// markSeen records messageID as processed and reports whether this is the FIRST
+// sighting (true = dispatch). Backed by store.MarkSeenMessage. Fails OPEN: no
+// store, or a store error, returns true so a DB blip never drops real traffic —
+// one duplicate turn is strictly better than muting the bot. Wired onto the
+// socket's seen hook in connectOnce.
+func (c *Connector) markSeen(messageID string) bool {
+	if c.store == nil {
+		return true
+	}
+	first, err := c.store.MarkSeenMessage(messageID)
+	if err != nil {
+		c.logf("dedup: mark seen %s: %v (failing open)", messageID, err)
+		return true
+	}
+	return first
+}
 
 // MediaAuth returns the gateway hook that host-scopes the bot token on inbound
 // media downloads: the Bearer token is sent only while the current hop is
