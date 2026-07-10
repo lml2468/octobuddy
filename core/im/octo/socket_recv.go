@@ -61,6 +61,9 @@ func (s *socketConn) onRecv(body []byte) {
 	}
 	delete(s.decryptFails, idStr)
 	_ = s.writeRaw(encodeRecvack(messageID, messageSeq))
+	// Inbound dedup lives in the connector (onInbound tier-1 + drainTurns
+	// tier-2), NOT here — the read loop stays pure decrypt→ack→dispatch so a
+	// contended SQLite write can never stall keepalive/DISCONNECT detection.
 	s.dispatchRecvMessage(idStr, messageSeq, fromUID, channelID, channelType, timestamp, payload, setting)
 }
 

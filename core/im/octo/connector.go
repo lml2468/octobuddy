@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/lml2468/octobuddy/core/gateway"
+	"github.com/lml2468/octobuddy/core/store"
 	"github.com/lml2468/octobuddy/core/trigger"
 )
 
@@ -16,6 +17,17 @@ import (
 type Connector struct {
 	rest    *RESTClient
 	gateway *gateway.Gateway
+
+	// store backs the PERSISTENT (tier-2) inbound message-id dedup for the turn
+	// path only (P1). Optional: nil (dev/REPL, tests) means no persistent dedup.
+	// Set via SetStore. Checked on the drainTurns worker goroutine — never on the
+	// socket read loop — so a contended SQLite write can't stall keepalive.
+	store *store.Store
+
+	// seen is the tier-1 in-memory bounded dedup set, checked in onInbound on the
+	// read loop (O(1), no DB I/O). Drops same-process redelivery (lost ack /
+	// reconnect replay) for both the observe and turn paths before it fans out.
+	seen *seenSet
 
 	botUID string
 	// ownerUID is the bot owner's server-authoritative uid, set after each
@@ -214,6 +226,7 @@ func NewConnector(rest *RESTClient) *Connector {
 		progress:      make(map[string]*toolProgressState),
 		typers:        make(map[string]*typingTicker),
 		turnQueues:    make(map[string]*turnQueue),
+		seen:          newSeenSet(maxSeenKeys),
 		reconnectBase: 3 * time.Second,
 		reconnectMax:  60 * time.Second,
 		receiptCh:     make(chan readReceiptReq, 64),

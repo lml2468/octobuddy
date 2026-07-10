@@ -261,3 +261,32 @@ func TestBackfillSkippedWhenWindowNonEmpty(t *testing.T) {
 		t.Fatalf("backfill should be skipped for a warm window: ran=%v called=%v cutoff=%d", ran, called, cutoff)
 	}
 }
+
+// TestPushDedupsBySeq: pushing the same (fromUID, seq) twice — a redelivered
+// inbound — must NOT add a second window entry, so the LLM context doesn't show
+// a duplicated line. A distinct seq from the same user, and seq==0 (synthetic/
+// cron, no real seq) are both still appended.
+func TestPushDedupsBySeq(t *testing.T) {
+	g := New(6000)
+	g.Push("c1", "u1", "alice", "hello", 5)
+	g.Push("c1", "u1", "alice", "hello", 5) // redelivery — same uid+seq
+	text, _ := g.BuildContextSince("c1", 0, 0)
+	if n := strings.Count(text, "hello"); n != 1 {
+		t.Fatalf("redelivered (uid,seq) must appear once, got %d:\n%s", n, text)
+	}
+
+	// A genuinely new message (different seq) is appended.
+	g.Push("c1", "u1", "alice", "world", 6)
+	text, _ = g.BuildContextSince("c1", 0, 0)
+	if !strings.Contains(text, "world") {
+		t.Fatalf("distinct seq must be appended:\n%s", text)
+	}
+
+	// seq==0 (synthetic/cron) is never deduped — two zero-seq pushes both land.
+	g.Push("c2", "u2", "bob", "tick", 0)
+	g.Push("c2", "u2", "bob", "tick", 0)
+	text, _ = g.BuildContextSince("c2", 0, 0)
+	if n := strings.Count(text, "tick"); n != 2 {
+		t.Fatalf("seq==0 must not be deduped, got %d", n)
+	}
+}

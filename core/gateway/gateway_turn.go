@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"runtime/debug"
 	"strings"
 
 	"github.com/lml2468/octobuddy/core/agent"
@@ -10,53 +11,151 @@ import (
 	"github.com/lml2468/octobuddy/core/trigger"
 )
 
-// runTurn executes one accepted turn under the session lock.
-func (g *Gateway) runTurn(ctx context.Context, sessionKey string, msg router.InboundMessage) error {
-	if err := g.startTurn(sessionKey, msg); err != nil {
+// runTurn executes one accepted turn under the session lock, as four fixed
+// phases threaded by a TurnContext: admit (gate + cursor capture) → compose
+// (build the agent request) → execute (drive the driver + consume events) →
+// deliver (timeout / poison / error / success). finishCursor is the deferred
+// rewind-unless-delivered guard.
+//
+// A deferred recoverTurn wraps the whole turn: a panic anywhere in the turn path
+// (driver, event consumption, sink) must not crash the daemon — this handler
+// runs on the connector's per-session drain goroutine (and the cron/Console
+// paths), none of which recover. The recover also resolves the circuit breaker
+// (a panic during a half-open probe would otherwise wedge it) and delivers the
+// error apology. It is registered AFTER finishCursor so it runs BEFORE it (defer
+// LIFO), letting a recovered turn mark itself delivered before the cursor-rewind
+// guard runs.
+func (g *Gateway) runTurn(ctx context.Context, sessionKey string, msg router.InboundMessage) (err error) {
+	tc := &TurnContext{ctx: ctx, sessionKey: sessionKey, msg: msg}
+	// finishCursor registered first → runs LAST; recoverTurn registered after it
+	// → runs BEFORE it, so a panic-recovered turn marks itself delivered before
+	// finishCursor decides whether to rewind (a panicked turn is apologized-for,
+	// so it must NOT also resurface next turn — that would crash-loop on a
+	// panic-triggering message). finishCursor no-ops until admitTurn sets
+	// hasCursor, so registering it above admitTurn is safe (a slash-command
+	// short-circuit never set hasCursor).
+	defer g.finishCursor(tc)()
+	defer g.recoverTurn(tc, &err)
+	if err := g.admitTurn(tc); err != nil {
 		return ignoreConcluded(err)
 	}
+	if err := g.composeTurn(tc); err != nil {
+		return ignoreConcluded(err)
+	}
+	defer tc.idle.stop()
+	if err := g.executeTurn(tc); err != nil {
+		return ignoreConcluded(err)
+	}
+	g.deliverTurn(tc)
+	return nil
+}
 
-	turnDelivered := false
-	defer g.rewindGroupCursorUnlessDelivered(msg, &turnDelivered)()
-	req, err := g.prepareAgentRequest(ctx, sessionKey, msg)
+// recoverTurn is runTurn's deferred panic handler. A panic in the turn path is a
+// bug, but it must not (a) crash the daemon — the handler runs on a bare
+// goroutine — nor (b) leave the circuit breaker wedged in a half-open probe that
+// never reported a result. It logs with a stack, feeds the breaker a
+// non-transient outcome (resets, never opens — a bug is not an upstream-capacity
+// signal), delivers the generic error apology if nothing reached the sink yet,
+// and swallows the panic into a nil error so the caller keeps serving other
+// turns.
+func (g *Gateway) recoverTurn(tc *TurnContext, err *error) {
+	r := recover()
+	if r == nil {
+		return
+	}
+	glog().Error("turn panic recovered", "session", tc.sessionKey, "panic", r, "stack", string(debug.Stack()))
+	g.breaker.onResult(false, false)
+	if !tc.delivered {
+		tc.delivered = true
+		g.sink.OnReply(tc.sessionKey, errorReply)
+	}
+	*err = nil
+}
+
+// admitTurn runs the pre-request gate (startTurn: OnUserMessage, Touch, slash
+// commands) and captures the group cursor for the rewind guard. A slash command
+// short-circuits via errTurnConcluded (propagated to runTurn).
+func (g *Gateway) admitTurn(tc *TurnContext) error {
+	if err := g.startTurn(tc.sessionKey, tc.msg); err != nil {
+		return err
+	}
+	tc.preCursor, tc.hasCursor = g.captureGroupCursor(tc.msg)
+	return nil
+}
+
+// composeTurn builds the agent request (prompt + system + tools + sandbox +
+// resume) and arms the idle guard. The build-delta-before-cache ordering lives
+// inside buildGroupPrompt (called here) and is owned by this phase.
+func (g *Gateway) composeTurn(tc *TurnContext) error {
+	req, err := g.prepareAgentRequest(tc.ctx, tc.sessionKey, tc.msg)
 	if err != nil {
-		return ignoreConcluded(err)
+		return err
 	}
+	tc.req = req
+	tc.ctx, tc.idle = newIdleGuard(tc.ctx, g.dispatchTimeout)
+	return nil
+}
 
-	turnCtx, idle := newIdleGuard(ctx, g.dispatchTimeout)
-	defer idle.stop()
-
-	var attemptResult agentAttemptResult
-	resume := req.SessionID
+// executeTurn drives the driver for the turn, retrying once fresh on a stale
+// resume id. It fills tc.result. When the circuit breaker is open it
+// short-circuits before spawning, synthesizing a transient result so deliverTurn
+// replies busyReply (same UX as a live upstream failure).
+func (g *Gateway) executeTurn(tc *TurnContext) error {
+	if !g.breaker.allow() {
+		glog().Warn("circuit breaker open; short-circuiting turn", "session", tc.sessionKey, "driver", g.driver.Name())
+		tc.result = agentAttemptResult{termErr: breakerOpenErr, termTransient: true, shortCircuited: true}
+		return nil
+	}
+	resume := tc.req.SessionID // "" after a clear-and-retry-fresh below
 	for attempt := 0; ; attempt++ {
-		req.SessionID = resume
-		events, err := g.driver.Query(turnCtx, req)
+		tc.req.SessionID = resume
+		events, err := g.driver.Query(tc.ctx, tc.req)
 		if err != nil {
-			return ignoreConcluded(g.failTurn(sessionKey, "driver.Query", err))
+			// A top-level Query error (fork/exec failure, etc.) never reaches
+			// deliverTurn, so feed the breaker here or a half-open probe that
+			// fails to even spawn would wedge the breaker in half-open forever.
+			// Treat it as a non-transient failure: it resets/closes rather than
+			// opening (a local spawn fault is not an upstream-capacity signal).
+			g.breaker.onResult(false, false)
+			return g.failTurn(tc.sessionKey, "driver.Query", err)
 		}
-
-		attemptResult = g.consumeAgentAttempt(sessionKey, events, idle, resume != "")
-
-		if shouldRetryFreshResume(attemptResult, resume, attempt) {
-			glog().Warn("stale resume id; clearing and retrying fresh", "session", sessionKey)
-			_ = g.store.ClearResumeForAgent(sessionKey, g.driver.Name())
+		tc.result = g.consumeAgentAttempt(tc.sessionKey, events, tc.idle, resume != "")
+		if shouldRetryFreshResume(tc.result, resume, attempt) {
+			glog().Warn("stale resume id; clearing and retrying fresh", "session", tc.sessionKey)
+			_ = g.store.ClearResumeForAgent(tc.sessionKey, g.driver.Name())
 			resume = ""
 			continue
 		}
-		break
-	}
-
-	if g.handleDispatchTimeout(turnCtx, idle, sessionKey, &turnDelivered) {
 		return nil
 	}
+}
 
-	if handled := g.handleTerminalAgentError(sessionKey, attemptResult.termErr, attemptResult.termTransient, attemptResult.termHint, &turnDelivered); handled {
-		return nil
+// deliverTurn picks the terminal branch (idle timeout → poison → terminal error
+// → success), sets tc.delivered so finishCursor keeps the advanced cursor, and
+// feeds the breaker the turn's real outcome.
+func (g *Gateway) deliverTurn(tc *TurnContext) {
+	if g.handleDispatchTimeout(tc.ctx, tc.idle, tc.sessionKey, &tc.delivered) {
+		// A dispatch/idle timeout is an upstream stall (the driver went silent),
+		// not a success — count it toward tripping the breaker like a transient
+		// failure so timeout-shaped overload can open it.
+		g.breaker.onResult(true, false)
+		return
 	}
-
-	g.completeSuccessfulTurn(sessionKey, msg, attemptResult)
-	turnDelivered = true
-	return nil
+	// Feed the real outcome to the breaker: a success (termErr=="") closes it, a
+	// transient terminal failure trips it. Skip the synthetic short-circuit result
+	// (it did not spawn — recording it would keep the breaker open forever;
+	// allow() already left the breaker half-open to admit the next probe).
+	if !tc.result.shortCircuited {
+		g.breaker.onResult(tc.result.termTransient, tc.result.termErr == "")
+	}
+	if g.handlePoisonedResume(tc.sessionKey, tc.result, &tc.delivered) {
+		return
+	}
+	if g.handleTerminalAgentError(tc.sessionKey, tc.result.termErr, tc.result.termTransient, tc.result.termHint, &tc.delivered) {
+		return
+	}
+	g.completeSuccessfulTurn(tc.sessionKey, tc.msg, tc.result)
+	tc.delivered = true
 }
 
 func shouldRetryFreshResume(res agentAttemptResult, resume string, attempt int) bool {
@@ -69,7 +168,14 @@ type agentAttemptResult struct {
 	termErr       string
 	termTransient bool
 	termHint      string
+	termPoisoned  bool
 	resumeBad     bool
+	// shortCircuited marks a result the circuit breaker produced WITHOUT spawning
+	// the driver (breaker open). deliverTurn must not feed it back into the
+	// breaker (that would count the breaker's own short-circuit as a fresh
+	// upstream failure and never let it close). A typed flag rather than a
+	// sentinel termErr string so the two sites can't drift.
+	shortCircuited bool
 	// steps accumulates this turn's process steps (tool calls / thinking) in
 	// order, mirroring the live session.tool / session.activity stream the
 	// desktop renders. Persisted as JSON with the assistant row so a reload
@@ -116,8 +222,13 @@ func (g *Gateway) consumeAgentAttempt(sessionKey string, events <-chan agent.Age
 		// Reset the idle deadline on every event — a steady stream keeps the
 		// turn alive, only true silence kills it.
 		idle.reset()
-		// A stale resume id dooms this attempt. Swallow its events so the failed
-		// run never reaches the sink, then retry fresh in runTurn.
+		// A stale resume id dooms this attempt: swallow its events so the failed
+		// run never reaches the sink, then retry fresh in runTurn. A POISONED
+		// resume (a valid session whose history deterministically re-fails) is
+		// NOT swallowed and NOT retried in-turn — the doomed attempt may already
+		// have run real tools/side effects, so re-running fresh would duplicate
+		// them. Poison flows through the normal terminal-error path and is handled
+		// by handlePoisonedResume (clear resume + one-time hint, next turn fresh).
 		if ev.ResumeInvalid {
 			res.resumeBad = true
 			gatedBuf = nil
@@ -207,6 +318,7 @@ func (g *Gateway) consumeAgentError(ev agent.AgentEvent, res *agentAttemptResult
 	res.termErr = ev.Err
 	res.termTransient = ev.Transient
 	res.termHint = ev.RetryHint
+	res.termPoisoned = ev.Poisoned
 }
 
 func (g *Gateway) prepareAgentRequest(ctx context.Context, sessionKey string, msg router.InboundMessage) (agent.Request, error) {
@@ -257,8 +369,36 @@ func (g *Gateway) prepareAgentRequest(ctx context.Context, sessionKey string, ms
 	// its probed headless-safe default.
 	if tools, ok := g.resolveTools(sessionKey); ok {
 		req.AllowedTools = tools
+		g.warnUnenforcedToolPolicy(sessionKey, tools)
 	}
 	return req, nil
+}
+
+// warnUnenforcedToolPolicy emits an advisory when the operator set a tool policy
+// (ok=true, including an explicit empty muzzle) but the active driver does not
+// enforce tool scoping (Capabilities.ToolScoping==false, e.g. codex exec). The
+// tools are STILL passed to the driver — behavior is unchanged; this only makes
+// the silent no-op observable. Logged once per (sessionKey, driver) so a codex
+// bot with a channel policy doesn't warn every turn.
+func (g *Gateway) warnUnenforcedToolPolicy(sessionKey string, tools []string) {
+	if g.driver.Capabilities().ToolScoping {
+		return
+	}
+	key := sessionKey + "\x00" + g.driver.Name()
+	g.toolPolicyMu.Lock()
+	if g.toolPolicyWarned == nil {
+		g.toolPolicyWarned = map[string]bool{}
+	}
+	warned := g.toolPolicyWarned[key]
+	if !warned {
+		g.toolPolicyWarned[key] = true
+	}
+	g.toolPolicyMu.Unlock()
+	if warned {
+		return
+	}
+	glog().Warn("tool policy requested but not enforced by driver",
+		"driver", g.driver.Name(), "session", sessionKey, "tools", len(tools))
 }
 
 func (g *Gateway) handleDispatchTimeout(ctx context.Context, idle *idleGuard, sessionKey string, delivered *bool) bool {
@@ -268,6 +408,28 @@ func (g *Gateway) handleDispatchTimeout(ctx context.Context, idle *idleGuard, se
 	glog().Warn("dispatch idle timeout", "session", sessionKey, "timeout", g.dispatchTimeout)
 	*delivered = true
 	g.sink.OnReply(sessionKey, timeoutReply)
+	return true
+}
+
+// handlePoisonedResume handles a POISONED terminal error: a valid resume whose
+// conversation history deterministically re-fails (a 400 baked in, an exhausted
+// turn/iteration limit). Unlike a stale resume (ResumeInvalid, retried fresh
+// in-turn), the doomed attempt may already have run real tools/side effects, so
+// we do NOT retry this turn — that would duplicate them. Instead we drop the
+// resume mapping so the NEXT message starts a clean session, and deliver a
+// one-time hint (the doomed attempt already streamed tool-progress for
+// tool-progress bots, so pure silence would be confusing). Marks the turn
+// delivered so the group cursor isn't rewound.
+func (g *Gateway) handlePoisonedResume(sessionKey string, res agentAttemptResult, delivered *bool) bool {
+	if !res.termPoisoned {
+		return false
+	}
+	glog().Warn("poisoned resume; clearing so next turn starts fresh", "session", sessionKey, "err", res.termErr)
+	if err := g.store.ClearResumeForAgent(sessionKey, g.driver.Name()); err != nil {
+		glog().Error("clear poisoned resume", "session", sessionKey, "err", err)
+	}
+	*delivered = true
+	g.sink.OnReply(sessionKey, poisonedReply)
 	return true
 }
 

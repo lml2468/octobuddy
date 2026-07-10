@@ -63,8 +63,11 @@ const (
 	// refresh goroutine indefinitely.
 	sysFetchTimeout = 15 * time.Second
 
-	// groupDocMaxBytes caps the mirrored GROUP.md size written locally.
-	groupDocMaxBytes = 256 * 1024
+	// GroupDocMaxBytes caps the mirrored GROUP.md size written locally. Exported
+	// so the daemon can assert gateway.GroupDocMaxInjectBytes >= this in a
+	// cross-package test (the gateway's SafeRead ERRORS past its cap, so it must
+	// be >= this mirror cap or a large-but-valid GROUP.md silently vanishes).
+	GroupDocMaxBytes = 256 * 1024
 )
 
 // handleSystemMessage is the terminal sink for control-plane payloads. It NEVER
@@ -194,7 +197,13 @@ func (c *Connector) mirrorGroupDoc(ctx context.Context, channelID, cwd string) {
 		c.deleteGroupDoc(cwd)
 		return
 	}
-	c.writeGroupDoc(cwd, groupDocFilename, truncateByBytes(content, groupDocMaxBytes, "\n…（GROUP.md 已截断）"))
+	// Truncate so the WRITTEN file (content head + marker) never exceeds
+	// GroupDocMaxBytes: truncateByBytes returns up to maxBytes+len(marker), and
+	// the gateway's SafeRead ERRORS (not truncates) past its equal inject cap, so
+	// budgeting the marker into the limit keeps a large GROUP.md injectable
+	// instead of silently dropped.
+	const marker = "\n…（GROUP.md 已截断）"
+	c.writeGroupDoc(cwd, groupDocFilename, truncateByBytes(content, GroupDocMaxBytes-len(marker), marker))
 }
 
 // deleteGroupDoc removes the local GROUP.md mirror (best-effort; a missing file

@@ -23,7 +23,7 @@ func (c *Connector) EnqueueCron(sessionKey, channelID string, channelType Channe
 	}
 	tgt := replyTarget{channelID: channelID, channelType: channelType}
 	tgt.onBehalfOf = inbound.Trigger.ReplyRouting.OnBehalfOf
-	c.enqueueTurn(sessionKey, inbound, tgt)
+	c.enqueueTurn(sessionKey, inbound, tgt, "") // cron: synthetic, no messageID → never deduped
 }
 
 // NewCronTrigger delegates to the production classifier with
@@ -42,6 +42,10 @@ func (c *Connector) NewCronTrigger() *trigger.TriggerDecision {
 type queuedTurn struct {
 	inbound router.InboundMessage
 	tgt     replyTarget
+	// messageID is the octo inbound id for tier-2 persistent dedup, checked on
+	// this worker goroutine (off the read loop) before Handle. "" for synthetic
+	// turns (cron) → never deduped.
+	messageID string
 }
 
 type turnQueue struct {
@@ -52,7 +56,7 @@ type turnQueue struct {
 // enqueueTurn appends a turn to the per-session-key serial queue,
 // starting a worker if none is running. Same-key turns run FIFO; the
 // worker exits when its queue drains so idle keys hold no goroutine.
-func (c *Connector) enqueueTurn(key string, inbound router.InboundMessage, tgt replyTarget) {
+func (c *Connector) enqueueTurn(key string, inbound router.InboundMessage, tgt replyTarget, messageID string) {
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
@@ -63,7 +67,7 @@ func (c *Connector) enqueueTurn(key string, inbound router.InboundMessage, tgt r
 		q = &turnQueue{}
 		c.turnQueues[key] = q
 	}
-	q.pending = append(q.pending, queuedTurn{inbound: inbound, tgt: tgt})
+	q.pending = append(q.pending, queuedTurn{inbound: inbound, tgt: tgt, messageID: messageID})
 	start := !q.running
 	q.running = true
 	// turnsWG.Add MUST happen under c.mu so it can't race WaitTurns:
@@ -86,6 +90,16 @@ func (c *Connector) enqueueTurn(key string, inbound router.InboundMessage, tgt r
 // the worker exits, so a burst is handled by a single worker.
 func (c *Connector) drainTurns(key string) {
 	defer c.turnsWG.Done()
+	// Defensive recover at the goroutine boundary: gateway.runTurn recovers
+	// panics in the turn body, but a panic in the routing/locking bookkeeping
+	// around it (gateway.Handle, router.RouteAndHandle) would otherwise escape
+	// this bare goroutine and crash the whole daemon, taking down every session
+	// for the bot. Degrade to a logged dropped turn instead.
+	defer func() {
+		if r := recover(); r != nil {
+			c.logf("drainTurns panic for %s: %v", key, r)
+		}
+	}()
 	for {
 		c.mu.Lock()
 		q := c.turnQueues[key]
@@ -111,6 +125,13 @@ func (c *Connector) drainTurns(key string) {
 
 		// Tests may enqueue without a gateway; let the queue drain.
 		if c.gateway == nil {
+			continue
+		}
+		// Tier-2 persistent dedup (off the read loop): a turn whose messageID a
+		// prior process already ran must not spawn again after a restart. The
+		// message was already ack'd on the read loop, so a duplicate is dropped
+		// here silently. Fails open (turnFirstSeen).
+		if !c.turnFirstSeen(item.messageID) {
 			continue
 		}
 		if _, err := c.gateway.Handle(c.ctx(), item.inbound); err != nil {

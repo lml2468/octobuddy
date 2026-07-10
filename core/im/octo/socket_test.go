@@ -238,3 +238,60 @@ func TestApplyConnackPayloadReason(t *testing.T) {
 		}
 	})
 }
+
+// buildTestRecvBody assembles a RECV body (srvVer 0 layout) that onRecv can
+// decode: setting, msgKey, fromUID, channelID, channelType, clientMsgNo,
+// messageID, messageSeq, timestamp, then the AES-encrypted payload.
+func buildTestRecvBody(t *testing.T, messageID uint64, key, iv []byte) []byte {
+	t.Helper()
+	payload := encryptLikeServer(t, []byte(`{"type":1,"content":"hi"}`), key, iv)
+	var b encoder
+	b.writeByte(0)          // setting (no topic, no stream)
+	b.writeString("mk")     // msgKey (unused)
+	b.writeString("u-peer") // fromUID
+	b.writeString("c1")     // channelID
+	b.writeByte(1)          // channelType (DM)
+	b.writeString("cmn")    // clientMsgNo (unused)
+	b.writeInt64(messageID)
+	b.writeInt32(7) // messageSeq
+	b.writeInt32(0) // timestamp
+	b.writeBytes(payload)
+	return b.buf
+}
+
+// TestOnRecvDecryptsAndDispatches is the regression guard for the read-loop
+// decrypt→ack→dispatch path (dedup now lives in the connector, not here): a
+// valid frame is dispatched to onMessage exactly once and its decrypt-failure
+// counter is cleared. An undecryptable frame is NOT dispatched.
+func TestOnRecvDecryptsAndDispatches(t *testing.T) {
+	key := []byte("0123456789abcdef")
+	iv := []byte("0123456789abcdef")
+	var dispatched int
+	sock := &socketConn{
+		aesKey:       key,
+		aesIV:        iv,
+		decryptFails: map[string]int{},
+		onMessage:    func(BotMessage) { dispatched++ },
+	}
+	// Valid frame → decrypts and dispatches once (writeRaw ack to a nil conn is a
+	// harmless no-op; the dispatch proves the path reached ack+forward).
+	sock.onRecv(buildTestRecvBody(t, 42, key, iv))
+	if dispatched != 1 {
+		t.Fatalf("valid frame must dispatch once, got %d", dispatched)
+	}
+	if _, ok := sock.decryptFails["42"]; ok {
+		t.Fatal("a successful decrypt must leave no decrypt-failure strike")
+	}
+
+	// Undecryptable frame (wrong key) → not dispatched.
+	bad := &socketConn{
+		aesKey:       []byte("ffffffffffffffff"),
+		aesIV:        iv,
+		decryptFails: map[string]int{},
+		onMessage:    func(BotMessage) { dispatched++ },
+	}
+	bad.onRecv(buildTestRecvBody(t, 99, key, iv)) // encrypted with the other key
+	if dispatched != 1 {
+		t.Fatalf("undecryptable frame must not dispatch (count still 1), got %d", dispatched)
+	}
+}

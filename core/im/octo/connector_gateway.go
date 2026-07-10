@@ -5,11 +5,52 @@ import (
 
 	"github.com/lml2468/octobuddy/core/gateway"
 	"github.com/lml2468/octobuddy/core/groupctx"
+	"github.com/lml2468/octobuddy/core/store"
 )
 
 // SetGateway attaches the gateway (done after construction to resolve the
 // Connector-is-Sink-of-Gateway cycle).
 func (c *Connector) SetGateway(g *gateway.Gateway) { c.gateway = g }
+
+// SetStore attaches the per-bot store, enabling the PERSISTENT (tier-2) inbound
+// dedup for the turn path. Wired at bot assembly (mirrors SetGateway). Without
+// it, turnFirstSeen fails open.
+func (c *Connector) SetStore(s *store.Store) { c.store = s }
+
+// maxSeenKeys bounds the in-memory tier-1 dedup ring. Chosen large enough that
+// eviction can't drop an id still within any plausible redelivery window (a lost
+// ack is resent within seconds, not thousands of messages later); the persistent
+// tier-2 store backstops the turn path regardless.
+const maxSeenKeys = 4096
+
+// memFirstSeen is the tier-1 (in-memory) dedup gate, run in onInbound on the
+// socket read loop. Reports whether messageID is the first sighting this process
+// has seen; a duplicate (lost-ack / reconnect replay) returns false and is
+// dropped before it fans out to the observe or turn path. An empty messageID is
+// never a dedup key (synthetic/cron inbound) — always first-seen. O(1), no DB.
+func (c *Connector) memFirstSeen(messageID string) bool {
+	if messageID == "" || c.seen == nil {
+		return true
+	}
+	return c.seen.markSeen(messageID)
+}
+
+// turnFirstSeen is the tier-2 (persistent) dedup gate for the TURN path, run on
+// the drainTurns worker goroutine (never the read loop). It is the authoritative
+// cross-restart guard: a turn whose messageID a prior process already ran must
+// not spawn again. Fails OPEN — no store, empty id, or a store error returns
+// true so a DB blip never mutes the bot; one duplicate turn beats silence.
+func (c *Connector) turnFirstSeen(messageID string) bool {
+	if messageID == "" || c.store == nil {
+		return true
+	}
+	first, err := c.store.MarkSeenMessage(messageID)
+	if err != nil {
+		c.logf("dedup: mark seen %s: %v (failing open)", messageID, err)
+		return true
+	}
+	return first
+}
 
 // MediaAuth returns the gateway hook that host-scopes the bot token on inbound
 // media downloads: the Bearer token is sent only while the current hop is

@@ -16,6 +16,11 @@ import (
 
 const (
 	maxWindowSize = 100
+	// seqDedupScan bounds pushLocked's (fromUID,seq) duplicate scan to the newest
+	// entries. A duplicate push (reconnect replay / backfill-vs-live overlap) is
+	// always recent, so scanning the tail is enough and keeps the check O(1)-ish
+	// under g.mu on the group hot path rather than O(maxWindowSize).
+	seqDedupScan = 16
 	// header "[Recent group messages]\n" + trailer "\n".
 	header  = "[Recent group messages]\n"
 	trailer = "\n"
@@ -142,6 +147,23 @@ func (g *GroupContext) Push(channelID, fromUID, fromName, content string, seq in
 }
 
 func (g *GroupContext) pushLocked(channelID, fromUID, fromName, content string, seq int64) {
+	// Idempotency: a redelivery, or the backfill-vs-live overlap (Backfill seeds
+	// the window from REST while a live Push for the same message arrives), must
+	// not add a second entry for the same (author, IM seq) — the LLM would see a
+	// duplicated line. Only for real seqs (seq>0; seq==0 is synthetic/cron with no
+	// dedup key). Scans only the tail: a duplicate is always recent (a live push
+	// racing backfill, or a reconnect replay), so the newest few entries suffice —
+	// bounding the work under g.mu on the group hot path instead of the whole
+	// window.
+	if seq > 0 {
+		win := g.windows[channelID]
+		for i := len(win) - 1; i >= 0 && i >= len(win)-seqDedupScan; i-- {
+			if win[i].seq == seq && win[i].fromUID == fromUID {
+				return
+			}
+		}
+	}
+
 	safeName := safety.SanitizeDisplayName(fromName, "")
 	if safeName == "" {
 		safeName = safety.SanitizeDisplayName(fromUID, "")

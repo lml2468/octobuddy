@@ -1,0 +1,380 @@
+package gateway
+
+import (
+	"context"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/lml2468/octobuddy/core/agent"
+	"github.com/lml2468/octobuddy/core/groupctx"
+	"github.com/lml2468/octobuddy/core/router"
+)
+
+func newTestBreaker(threshold int, cooldown time.Duration, clk *time.Time) *breaker {
+	return &breaker{
+		now:       func() time.Time { return *clk },
+		threshold: threshold,
+		cooldown:  cooldown,
+	}
+}
+
+// TestBreakerOpensAfterThreshold: N consecutive transient failures open it.
+func TestBreakerOpensAfterThreshold(t *testing.T) {
+	now := time.Unix(1000, 0)
+	b := newTestBreaker(3, time.Minute, &now)
+	for i := 0; i < 3; i++ {
+		if !b.allow() {
+			t.Fatalf("allow must be true before threshold (i=%d)", i)
+		}
+		b.onResult(true, false) // transient failure
+	}
+	if b.allow() {
+		t.Fatal("breaker must be OPEN after 3 transient failures")
+	}
+}
+
+// TestBreakerSuccessResetsCount: a success clears the consecutive count.
+func TestBreakerSuccessResetsCount(t *testing.T) {
+	now := time.Unix(1000, 0)
+	b := newTestBreaker(3, time.Minute, &now)
+	b.onResult(true, false)
+	b.onResult(true, false)
+	b.onResult(false, true) // success
+	b.onResult(true, false) // one more transient
+	if !b.allow() {
+		t.Fatal("breaker must stay closed: success reset the count")
+	}
+}
+
+// TestBreakerNonTransientDoesNotOpen: normal terminal errors never open it.
+func TestBreakerNonTransientDoesNotOpen(t *testing.T) {
+	now := time.Unix(1000, 0)
+	b := newTestBreaker(3, time.Minute, &now)
+	for i := 0; i < 5; i++ {
+		b.onResult(false, false) // non-transient failure
+	}
+	if !b.allow() {
+		t.Fatal("non-transient failures must not open the breaker")
+	}
+}
+
+// TestBreakerHalfOpenProbeAfterCooldown: after cooldown the breaker allows one
+// probe; a second call before a result stays gated.
+func TestBreakerHalfOpenProbeAfterCooldown(t *testing.T) {
+	now := time.Unix(1000, 0)
+	b := newTestBreaker(3, time.Minute, &now)
+	for i := 0; i < 3; i++ {
+		b.onResult(true, false)
+	}
+	if b.allow() {
+		t.Fatal("must be open immediately after tripping")
+	}
+	now = now.Add(2 * time.Minute) // past cooldown
+	if !b.allow() {
+		t.Fatal("must half-open and allow one probe after cooldown")
+	}
+	if b.allow() {
+		t.Fatal("second probe before a result must stay gated (half-open)")
+	}
+}
+
+// TestBreakerHalfOpenSuccessCloses / FailureReopens.
+func TestBreakerHalfOpenTransitions(t *testing.T) {
+	now := time.Unix(1000, 0)
+
+	// Success closes.
+	b := newTestBreaker(3, time.Minute, &now)
+	for i := 0; i < 3; i++ {
+		b.onResult(true, false)
+	}
+	now = now.Add(2 * time.Minute)
+	_ = b.allow() // half-open probe
+	b.onResult(false, true)
+	if !b.allow() {
+		t.Fatal("half-open probe success must close the breaker")
+	}
+
+	// Failure reopens with a fresh cooldown.
+	now = time.Unix(2000, 0)
+	b2 := newTestBreaker(3, time.Minute, &now)
+	for i := 0; i < 3; i++ {
+		b2.onResult(true, false)
+	}
+	now = now.Add(2 * time.Minute)
+	_ = b2.allow() // half-open probe
+	b2.onResult(true, false)
+	if b2.allow() {
+		t.Fatal("half-open probe failure must re-open the breaker")
+	}
+}
+
+// TestBreakerDisabledNil: a nil breaker always allows (opt-in).
+func TestBreakerDisabledNil(t *testing.T) {
+	var b *breaker
+	for i := 0; i < 10; i++ {
+		if !b.allow() {
+			t.Fatal("nil breaker must always allow")
+		}
+		b.onResult(true, false) // must not panic
+	}
+}
+
+func dmMsg(text string) router.InboundMessage {
+	return router.InboundMessage{ChannelType: router.ChannelDM, FromUID: "u1", FromName: "a", Text: text}
+}
+
+// TestBreakerShortCircuitsWithoutSpawn: once tripped, the next turn returns
+// busyReply and does NOT call driver.Query.
+func TestBreakerShortCircuitsWithoutSpawn(t *testing.T) {
+	drv := &scriptedDriver{script: func(agent.Request, int) ([]agent.AgentEvent, error) { return evTransient(), nil }}
+	sink := newCaptureSink()
+	gw := New(drv, newTestStore(t), router.New(router.Config{MaxPerMinute: 100}), sink).
+		WithCircuitBreaker(3, time.Minute)
+
+	// 3 transient failures trip the breaker (each spawns).
+	for i := 0; i < 3; i++ {
+		if _, err := gw.Handle(context.Background(), dmMsg("hi")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tripped := drv.count()
+	if tripped != 3 {
+		t.Fatalf("first 3 turns must each spawn, got %d", tripped)
+	}
+	// 4th turn: breaker open → busyReply, NO new spawn.
+	if _, err := gw.Handle(context.Background(), dmMsg("hi")); err != nil {
+		t.Fatal(err)
+	}
+	if drv.count() != tripped {
+		t.Fatalf("open breaker must not spawn: query count went %d→%d", tripped, drv.count())
+	}
+	if sink.replies["u1"] != busyReply {
+		t.Fatalf("open breaker must reply busyReply, got %q", sink.replies["u1"])
+	}
+}
+
+// TestBreakerDisabledByDefault: without WithCircuitBreaker, every transient
+// failure still spawns (no short-circuit) — opt-in back-compat.
+func TestBreakerDisabledByDefault(t *testing.T) {
+	drv := &scriptedDriver{script: func(agent.Request, int) ([]agent.AgentEvent, error) { return evTransient(), nil }}
+	gw := New(drv, newTestStore(t), router.New(router.Config{MaxPerMinute: 100}), newCaptureSink())
+	for i := 0; i < 5; i++ {
+		if _, err := gw.Handle(context.Background(), dmMsg("hi")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if drv.count() != 5 {
+		t.Fatalf("no breaker: all 5 turns must spawn, got %d", drv.count())
+	}
+}
+
+// TestBreakerRecoversAfterCooldown: after tripping and the cooldown elapsing, a
+// half-open probe against a now-healthy driver spawns again and closes the
+// breaker.
+func TestBreakerRecoversAfterCooldown(t *testing.T) {
+	var mu sync.Mutex
+	healthy := false
+	drv := &scriptedDriver{script: func(_ agent.Request, _ int) ([]agent.AgentEvent, error) {
+		mu.Lock()
+		ok := healthy
+		mu.Unlock()
+		if ok {
+			return evReply("ok"), nil
+		}
+		return evTransient(), nil
+	}}
+	sink := newCaptureSink()
+	gw := New(drv, newTestStore(t), router.New(router.Config{MaxPerMinute: 100}), sink).
+		WithCircuitBreaker(3, time.Minute)
+	// Drive the breaker's clock deterministically.
+	now := time.Unix(5000, 0)
+	gw.breaker.now = func() time.Time { return now }
+
+	for i := 0; i < 3; i++ {
+		if _, err := gw.Handle(context.Background(), dmMsg("hi")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Open now: a turn short-circuits without spawning.
+	spawnsAtTrip := drv.count()
+	if _, err := gw.Handle(context.Background(), dmMsg("hi")); err != nil {
+		t.Fatal(err)
+	}
+	if drv.count() != spawnsAtTrip {
+		t.Fatalf("open breaker must not spawn, went %d→%d", spawnsAtTrip, drv.count())
+	}
+	// Heal + advance past cooldown → half-open probe spawns and succeeds.
+	mu.Lock()
+	healthy = true
+	mu.Unlock()
+	now = now.Add(2 * time.Minute)
+	if _, err := gw.Handle(context.Background(), dmMsg("hi")); err != nil {
+		t.Fatal(err)
+	}
+	if drv.count() != spawnsAtTrip+1 {
+		t.Fatalf("half-open probe must spawn once, went %d→%d", spawnsAtTrip, drv.count())
+	}
+	if sink.replies["u1"] != "ok" {
+		t.Fatalf("recovered turn must deliver real reply, got %q", sink.replies["u1"])
+	}
+}
+
+// TestBreakerHalfOpenProbeQueryErrorDoesNotWedge is the regression for the P5
+// reviewer's Critical finding: a half-open probe whose driver.Query returns a
+// top-level error (never reaching deliverTurn) must still resolve the breaker
+// via executeTurn's error-path onResult — otherwise it wedges in half-open
+// forever. After such a probe the breaker must not be permanently stuck: a
+// following healthy turn must spawn and succeed.
+func TestBreakerHalfOpenProbeQueryErrorDoesNotWedge(t *testing.T) {
+	var mu sync.Mutex
+	failNext := false
+	drv := &scriptedDriver{script: func(_ agent.Request, _ int) ([]agent.AgentEvent, error) {
+		mu.Lock()
+		fail := failNext
+		mu.Unlock()
+		if fail {
+			return nil, context.Canceled // top-level Query error → bypasses deliverTurn
+		}
+		return evReply("ok"), nil
+	}}
+	sink := newCaptureSink()
+	gw := New(drv, newTestStore(t), router.New(router.Config{MaxPerMinute: 100}), sink).
+		WithCircuitBreaker(1, time.Minute) // threshold 1 for brevity
+	now := time.Unix(9000, 0)
+	gw.breaker.now = func() time.Time { return now }
+
+	// First turn: healthy spawn (breaker closed) — succeeds.
+	if _, err := gw.Handle(context.Background(), dmMsg("hi")); err != nil {
+		t.Fatal(err)
+	}
+	// Force the breaker OPEN by feeding a transient result directly (the scripted
+	// driver's error path is a top-level Query error, not a stream transient).
+	gw.breaker.onResult(true, false) // 1 transient → open (threshold 1)
+	if gw.breaker.allow() {
+		t.Fatal("breaker should be open")
+	}
+	// Advance past cooldown → next allow() half-opens. Make the probe's Query
+	// fail at the top level (the wedge path).
+	now = now.Add(2 * time.Minute)
+	mu.Lock()
+	failNext = true
+	mu.Unlock()
+	if _, err := gw.Handle(context.Background(), dmMsg("probe")); err != nil {
+		t.Fatal(err)
+	}
+	// The probe failed to spawn; the breaker must NOT be wedged in half-open.
+	// A healthy turn now must be allowed to spawn and succeed.
+	mu.Lock()
+	failNext = false
+	mu.Unlock()
+	if _, err := gw.Handle(context.Background(), dmMsg("recover")); err != nil {
+		t.Fatal(err)
+	}
+	if sink.replies["u1"] != "ok" {
+		t.Fatalf("breaker wedged: recovery turn did not spawn/succeed, reply=%q", sink.replies["u1"])
+	}
+}
+
+// panicDriver panics from Query — the worst-case turn-path fault.
+type panicDriver struct{ queries int }
+
+func (d *panicDriver) Name() string                     { return "fake" }
+func (d *panicDriver) Capabilities() agent.Capabilities { return agent.Capabilities{Resume: true} }
+func (d *panicDriver) Query(ctx context.Context, req agent.Request) (<-chan agent.AgentEvent, error) {
+	d.queries++
+	panic("boom in driver.Query")
+}
+
+// TestTurnPanicRecovers: a panic in the turn path must NOT crash (no re-panic),
+// must deliver errorReply, and must not wedge the breaker (a following healthy
+// turn still runs).
+func TestTurnPanicRecovers(t *testing.T) {
+	drv := &panicDriver{}
+	sink := newCaptureSink()
+	gw := New(drv, newTestStore(t), router.New(router.Config{MaxPerMinute: 100}), sink).
+		WithCircuitBreaker(3, time.Minute)
+
+	// Must not panic out of Handle.
+	if _, err := gw.Handle(context.Background(), dmMsg("hi")); err != nil {
+		t.Fatalf("Handle must swallow the panic into nil err, got %v", err)
+	}
+	if sink.replies["u1"] != errorReply {
+		t.Fatalf("panicked turn must deliver errorReply, got %q", sink.replies["u1"])
+	}
+	// Breaker must not be wedged: allow() still true (panic reset it, didn't open).
+	if !gw.breaker.allow() {
+		t.Fatal("panic must not open/wedge the breaker (non-transient reset)")
+	}
+}
+
+// TestGroupTurnPanicDoesNotResurface: a panicked GROUP turn is apologized-for
+// (errorReply) and must NOT rewind the cursor to resurface the message next turn
+// — otherwise a panic-triggering message crash-loops. recoverTurn sets delivered
+// before finishCursor runs (defer LIFO ordering).
+func TestGroupTurnPanicDoesNotResurface(t *testing.T) {
+	gc := groupctx.New(6000)
+	drv := &panicDriver{}
+	sink := newCaptureSink()
+	gw := New(drv, newTestStore(t), router.New(router.Config{MaxPerMinute: 100}), sink).WithGroupContext(gc)
+
+	if _, err := gw.Handle(context.Background(), groupMsg("boom", 10)); err != nil {
+		t.Fatalf("group panic must be swallowed, got %v", err)
+	}
+	if sink.replies["c1"] != errorReply {
+		t.Fatalf("panicked group turn must deliver errorReply, got %q", sink.replies["c1"])
+	}
+	// delivered=true → cursor held (not rewound to 0), so the message doesn't
+	// resurface and crash-loop.
+	if gc.Cursor("c1") == 0 {
+		t.Fatal("panicked-but-apologized turn must hold the cursor (no resurface)")
+	}
+}
+
+// hangDriver returns a stream that never emits and never closes until ctx is
+// cancelled — forcing the gateway's idle/dispatch timeout to fire.
+type hangDriver struct{ queries int }
+
+func (d *hangDriver) Name() string                     { return "fake" }
+func (d *hangDriver) Capabilities() agent.Capabilities { return agent.Capabilities{Resume: true} }
+func (d *hangDriver) Query(ctx context.Context, req agent.Request) (<-chan agent.AgentEvent, error) {
+	d.queries++
+	ch := make(chan agent.AgentEvent)
+	go func() {
+		<-ctx.Done() // unblock on the idle-guard cancel
+		close(ch)
+	}()
+	return ch, nil
+}
+
+// TestDispatchTimeoutTripsBreaker: a dispatch/idle timeout is an upstream stall,
+// so it must count toward opening the breaker (not reset it). With threshold 2,
+// two consecutive timeouts must open the breaker (3rd turn short-circuits without
+// spawning). Regression for the onResult-before-timeout-branch ordering bug.
+func TestDispatchTimeoutTripsBreaker(t *testing.T) {
+	drv := &hangDriver{}
+	sink := newCaptureSink()
+	gw := New(drv, newTestStore(t), router.New(router.Config{MaxPerMinute: 100}), sink).
+		WithCircuitBreaker(2, time.Minute).
+		WithDispatchTimeout(20 * time.Millisecond)
+
+	for i := 0; i < 2; i++ {
+		if _, err := gw.Handle(context.Background(), dmMsg("hi")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	spawns := drv.queries
+	if spawns != 2 {
+		t.Fatalf("first 2 timeout turns must each spawn, got %d", spawns)
+	}
+	// 3rd turn: breaker should be open → short-circuit, no new spawn.
+	if _, err := gw.Handle(context.Background(), dmMsg("hi")); err != nil {
+		t.Fatal(err)
+	}
+	if drv.queries != spawns {
+		t.Fatalf("two timeouts must have opened the breaker (no 3rd spawn), query count %d→%d", spawns, drv.queries)
+	}
+	if sink.replies["u1"] != busyReply {
+		t.Fatalf("open breaker must reply busyReply, got %q", sink.replies["u1"])
+	}
+}

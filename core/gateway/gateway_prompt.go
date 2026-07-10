@@ -23,11 +23,13 @@ const bootstrapPromptHeader = prompt.BootstrapHeader
 // not import the octo connector.
 const groupDocFilename = "GROUP.md"
 
-// groupDocMaxInjectBytes caps how much of GROUP.md is injected into the prompt.
-// Must be >= the octo connector's mirror cap (octo.groupDocMaxBytes, 256 KiB):
+// GroupDocMaxInjectBytes caps how much of GROUP.md is injected into the prompt.
+// Must be >= the octo connector's mirror cap (octo.GroupDocMaxBytes, 256 KiB):
 // SafeRead ERRORS (not truncates) past the cap, so a smaller value here would
 // silently drop a large-but-valid mirrored GROUP.md from the prompt entirely.
-const groupDocMaxInjectBytes = 256 * 1024
+// Exported so the daemon (which imports both packages) can assert the
+// >= invariant in a cross-package test rather than leaving it comment-only.
+const GroupDocMaxInjectBytes = 256 * 1024
 
 // buildGroupPrompt assembles the prompt for a turn. For a DM (or when group
 // context is disabled) it returns the raw message text. For a group message it
@@ -115,7 +117,7 @@ func (g *Gateway) groupHandbookBody(msg router.InboundMessage, cwd string) strin
 	if cwd == "" || msg.ChannelType != router.ChannelGroup {
 		return ""
 	}
-	raw, err := safepath.SafeRead(cwd, groupDocFilename, groupDocMaxInjectBytes)
+	raw, err := safepath.SafeRead(cwd, groupDocFilename, GroupDocMaxInjectBytes)
 	if err != nil || len(raw) == 0 {
 		return ""
 	}

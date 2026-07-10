@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/lml2468/octobuddy/core/agent"
@@ -124,6 +125,19 @@ type Gateway struct {
 	// sessionTouch fires after every AppendUser / AppendAssistant so the
 	// GUI can broadcast `session.upserted` without polling. nil = no-op.
 	sessionTouch func(sessionKey, channelID string, channelType router.ChannelType)
+
+	// toolPolicyWarned dedupes the "tool policy not enforced by driver"
+	// advisory to once per (sessionKey, driver) so a codex bot with a channel
+	// tool policy logs the unenforced-muzzle warning once, not every turn.
+	// Guarded by toolPolicyMu (concurrent turns share a Gateway across sessions).
+	toolPolicyMu     sync.Mutex
+	toolPolicyWarned map[string]bool
+
+	// breaker is the optional per-driver circuit breaker on the upstream path.
+	// nil (the default) disables it — turns always spawn. Set via
+	// WithCircuitBreaker. One Gateway wires exactly one driver, so a single
+	// breaker instance is per-driver.
+	breaker *breaker
 }
 
 // defaultDispatchTimeout is the idle-deadline default — long enough for
@@ -182,6 +196,12 @@ const (
 	// busyReply distinguishes upstream capacity issues (HTTP 429/503/529)
 	// from generic bugs, so the user knows it's not their fault.
 	busyReply = "⏳ 服务繁忙，请稍后重试。"
+	// poisonedReply is sent when a resumed session's history deterministically
+	// re-fails (a 400 baked in, an exhausted turn limit). The resume mapping is
+	// dropped so the NEXT message starts clean; this turn is not retried (it may
+	// already have run side effects). The hint tells the user the context was
+	// reset rather than leaving them with an unexplained silent drop.
+	poisonedReply = "⚠️ 会话上下文已重置，请重新发送你的消息。"
 )
 
 // Observe caches a non-triggering group message into group context so it
@@ -268,14 +288,24 @@ func (g *Gateway) startTurn(sessionKey string, msg router.InboundMessage) error 
 	return errTurnConcluded
 }
 
-func (g *Gateway) rewindGroupCursorUnlessDelivered(msg router.InboundMessage, delivered *bool) func() {
+// captureGroupCursor snapshots the group cursor at turn admission so a turn that
+// fails before delivering can roll it back (the message resurfaces in the next
+// [Recent group messages] delta). Returns hasCursor=false for DMs / disabled
+// group-context, where there is nothing to rewind.
+func (g *Gateway) captureGroupCursor(msg router.InboundMessage) (preCursor int64, hasCursor bool) {
 	if g.groups == nil || msg.ChannelType != router.ChannelGroup || msg.ChannelID == "" {
-		return func() {}
+		return 0, false
 	}
-	preCursor := g.groups.Cursor(msg.ChannelID)
+	return g.groups.Cursor(msg.ChannelID), true
+}
+
+// finishCursor returns the deferred closure that rewinds the group cursor unless
+// the turn delivered a reply. Reads exactly one field, tc.delivered — the whole
+// point of threading delivery through TurnContext.
+func (g *Gateway) finishCursor(tc *TurnContext) func() {
 	return func() {
-		if !*delivered {
-			g.groups.RewindCursor(msg.ChannelID, preCursor)
+		if tc.hasCursor && !tc.delivered {
+			g.groups.RewindCursor(tc.msg.ChannelID, tc.preCursor)
 		}
 	}
 }

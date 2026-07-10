@@ -32,6 +32,10 @@ import (
 const (
 	reapInterval   = time.Hour
 	routerReapIdle = time.Hour
+	// seenMessageRetention bounds the inbound-dedup table (P1): far past any
+	// plausible WuKongIM redelivery/restart window, so a reaped row can never
+	// be a message still eligible for redelivery.
+	seenMessageRetention = 24 * time.Hour
 )
 
 // runBot assembles and runs one bot's complete, isolated stack. When srv is set,
@@ -98,7 +102,7 @@ func runBot(ctx context.Context, configPath string, cfg config.Resolved, reg *bo
 	// Reaper sweeps router lock/rate-limit maps + group-context channel
 	// windows so the in-memory state stays bounded over the daemon's
 	// lifetime.
-	startRouterReaper(ctx, rt, rtBot.gateway)
+	startRouterReaper(ctx, rt, rtBot.gateway, st)
 
 	fmt.Printf("[%s] started — driver=%s api=%s data=%s\n",
 		cfg.BotID, drv.Name(), cfg.APIURL, cfg.DataDir)
@@ -121,6 +125,7 @@ func assembleBotRuntime(
 		return nil, nil, nil, fmt.Errorf("bot %s: config mode requires apiUrl", cfg.BotID)
 	}
 	connector, grantor := newBotConnector(cfg, sec)
+	connector.SetStore(st) // enable inbound message-id dedup (P1)
 	gw := newBotGateway(configPath, cfg, srv, st, rt, drv, connector, grantor)
 	connector.SetGateway(gw)
 
@@ -494,15 +499,21 @@ func prepareBotDirs(cfg config.Resolved) error {
 	return nil
 }
 
-func startRouterReaper(ctx context.Context, rt *router.Router, gw *gateway.Gateway) {
+func startRouterReaper(ctx context.Context, rt *router.Router, gw *gateway.Gateway, st *store.Store) {
 	// Periodic reaper: bound the router's per-session lock / rate-limit
 	// maps AND the gateway's group-context channel windows over the
 	// daemon's lifetime. Sessions/messages/sandboxes themselves are not
-	// expired (persistent — only in-memory tracking maps).
+	// expired (persistent — only in-memory tracking maps). Also reaps the
+	// persistent inbound-dedup table (P1) past its retention window.
 	reap := func() {
 		rt.Reap(routerReapIdle)
 		if gw != nil {
 			gw.ReapGroupContext(routerReapIdle)
+		}
+		if st != nil {
+			if _, err := st.ReapSeenMessages(seenMessageRetention); err != nil {
+				clog.For("store").Error("reap seen messages", "err", err)
+			}
 		}
 	}
 	reap()

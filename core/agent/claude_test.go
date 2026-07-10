@@ -183,6 +183,23 @@ func TestParseResultErrorYieldsErrorThenDone(t *testing.T) {
 	}
 }
 
+// TestMaxTurnsResultTaggedPoisonedOnResume runs Claude's REAL error_max_turns
+// result fixture through the same pipeline the driver uses (parse → tag). This
+// is the headline poison case: an exhausted-turns failure on a resumed turn must
+// be tagged Poisoned so the gateway drops the resume id — regression for the
+// reviewer's Critical #1 (the regex previously missed the "error_max_turns"
+// subtype shape). On a fresh turn the same fixture must NOT be tagged.
+func TestMaxTurnsResultTaggedPoisonedOnResume(t *testing.T) {
+	resumed := tagPoisonedResume(parseClaudeLine(lineErrRes), "resume-id")
+	if !resumed[0].Poisoned {
+		t.Fatalf("error_max_turns on a resumed turn must be Poisoned, got %+v", resumed[0])
+	}
+	fresh := tagPoisonedResume(parseClaudeLine(lineErrRes), "")
+	if fresh[0].Poisoned {
+		t.Fatalf("error_max_turns on a fresh turn must NOT be Poisoned, got %+v", fresh[0])
+	}
+}
+
 func TestParseGarbageDegradesToSystem(t *testing.T) {
 	evs := parseClaudeLine(lineGarbage)
 	if len(evs) != 1 || evs[0].Kind != KindSystem {

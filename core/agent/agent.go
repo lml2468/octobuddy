@@ -145,6 +145,24 @@ type AgentEvent struct {
 	Transient bool
 	RetryHint string
 
+	// ErrClass is a driver-native structured error class for a terminal KindError,
+	// when the driver's protocol carries one (claude's result `subtype`, e.g.
+	// "error_max_turns"). Empty when the driver only reports a free-text message.
+	// tagPoisonedResume keys the structurally-known poison classes off this rather
+	// than regex-matching them back out of a formatted error string.
+	ErrClass string
+
+	// Poisoned marks a terminal KindError on a RESUMED turn whose cause is baked
+	// into the resumable conversation history and will re-fail identically on
+	// resume (a 400 invalid_request, an iteration / "gave up" limit) — the resume
+	// id is valid but the conversation state is unusable. Set ONLY when a resume
+	// id was in play (sessionID != ""), mirroring ResumeInvalid: a fresh turn has
+	// no poisonable history, so a 400 there is a normal terminal error, not
+	// poison. The gateway drops the resume mapping and retries fresh — same silent
+	// recovery as ResumeInvalid, no user-visible message. Applied by the driver's
+	// Query via tagPoisonedResume, not by the parsers.
+	Poisoned bool
+
 	// Raw holds the original line for debugging / forward-compat.
 	Raw string
 }
@@ -268,6 +286,19 @@ type Capabilities struct {
 	Streaming  bool
 	Resume     bool
 	ToolEvents bool
+	// NativeSystemPrompt reports the driver honors Request.System via a real
+	// system-prompt channel (claude: --system-prompt). False means the driver
+	// folds System into the stdin prompt (codex: codexStdin prepend) —
+	// functionally present but not a driver-enforced non-overridable role.
+	NativeSystemPrompt bool
+	// ToolScoping reports the driver ENFORCES Request.AllowedTools on the model's
+	// tool surface (claude: --tools). False means AllowedTools is silently dropped
+	// (codex: no --tools flag) — an operator's per-channel tool policy has no
+	// effect, which the gateway surfaces as an advisory rather than failing.
+	ToolScoping bool
+	// MCP reports the driver can load a per-bot MCP config. Mirrors the
+	// MCPProber capability interface as a cheap boolean for negotiation/logging.
+	MCP bool
 }
 
 // Driver is the contract every agent adapter implements. Query spawns the

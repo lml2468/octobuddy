@@ -159,7 +159,7 @@ func TestMirrorGroupDocWritesAndDeletes(t *testing.T) {
 	c := NewConnector(NewRESTClient(srv.URL, func() string { return "tk" }))
 	c.mirrorGroupDoc(context.Background(), "g1", cwd)
 
-	got, err := safepath.SafeRead(cwd, groupDocFilename, groupDocMaxBytes)
+	got, err := safepath.SafeRead(cwd, groupDocFilename, GroupDocMaxBytes)
 	if err != nil {
 		t.Fatalf("read GROUP.md: %v", err)
 	}
@@ -176,6 +176,33 @@ func TestMirrorGroupDocWritesAndDeletes(t *testing.T) {
 	c2.mirrorGroupDoc(context.Background(), "g1", cwd)
 	if _, err := os.Stat(filepath.Join(cwd, groupDocFilename)); !os.IsNotExist(err) {
 		t.Errorf("empty server md should remove local GROUP.md, stat err=%v", err)
+	}
+}
+
+// TestMirrorGroupDocOverCapStaysReadable is the regression for the truncation
+// off-by-marker: a server GROUP.md larger than the cap must, after mirroring,
+// produce a LOCAL file whose size is <= GroupDocMaxBytes — so the gateway's
+// SafeRead (which ERRORS past its equal inject cap) can still read it instead of
+// silently dropping the whole handbook. Before the fix, truncateByBytes appended
+// the marker AFTER cutting to the cap, pushing the file over by ~len(marker).
+func TestMirrorGroupDocOverCapStaysReadable(t *testing.T) {
+	big := strings.Repeat("群", GroupDocMaxBytes) // way over the byte cap
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(GroupMd{Content: big, Version: 1})
+	}))
+	defer srv.Close()
+
+	cwd := t.TempDir()
+	c := NewConnector(NewRESTClient(srv.URL, func() string { return "tk" }))
+	c.mirrorGroupDoc(context.Background(), "g1", cwd)
+
+	// The written file must fit within the cap the gateway reads with.
+	got, err := safepath.SafeRead(cwd, groupDocFilename, GroupDocMaxBytes)
+	if err != nil {
+		t.Fatalf("over-cap mirror must be readable within GroupDocMaxBytes, got: %v", err)
+	}
+	if len(got) > GroupDocMaxBytes {
+		t.Fatalf("mirrored file %d bytes exceeds cap %d", len(got), GroupDocMaxBytes)
 	}
 }
 

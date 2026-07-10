@@ -43,6 +43,16 @@ func (c *Connector) onInbound(m BotMessage) {
 		return
 	}
 
+	// Tier-1 inbound dedup (in-memory, O(1), no DB): drop a same-process
+	// redelivery (lost ack / reconnect replay) before it fans out to the observe
+	// or turn path. The authoritative cross-restart dedup for the turn path is
+	// tier-2 (store-backed) on the drainTurns worker. Placed AFTER the
+	// own/empty/stream/system drops so those cheap filters run first and a
+	// control frame never consumes a dedup slot.
+	if !c.memFirstSeen(m.MessageID) {
+		return
+	}
+
 	inbound, key, tgt, ok := c.prepareInboundTurn(m, uid)
 	if !ok {
 		return
@@ -53,7 +63,7 @@ func (c *Connector) onInbound(m BotMessage) {
 	tgt = c.rerouteInboundReplyTarget(key, tgt)
 
 	c.sendReadReceipt(m)
-	c.dispatchInbound(key, inbound, tgt, m.ChannelID, m.Payload.Reply)
+	c.dispatchInbound(key, inbound, tgt, m.ChannelID, m.Payload.Reply, m.MessageID)
 }
 
 // prepareInboundTurn classifies the inbound and returns the
@@ -176,7 +186,7 @@ func (c *Connector) rerouteInboundReplyTarget(key string, tgt replyTarget) reply
 // dispatchInbound routes the classified inbound: observations skip the
 // session lock and write straight to groupctx; reply-warranting decisions
 // enqueue for the per-session worker.
-func (c *Connector) dispatchInbound(key string, inbound router.InboundMessage, tgt replyTarget, channelID string, reply *ReplyPayload) {
+func (c *Connector) dispatchInbound(key string, inbound router.InboundMessage, tgt replyTarget, channelID string, reply *ReplyPayload, messageID string) {
 	if inbound.ShouldObserve() {
 		// Group-context background; stored history carries the plain
 		// resolved text WITHOUT the quoted-reply prefix.
@@ -188,7 +198,7 @@ func (c *Connector) dispatchInbound(key string, inbound router.InboundMessage, t
 	// Quoted-reply context fences ahead of the real request for THIS turn
 	// only; never persisted in history.
 	c.applyQuotePrefix(&inbound, reply)
-	c.enqueueTurn(key, inbound, tgt)
+	c.enqueueTurn(key, inbound, tgt, messageID)
 }
 
 // hydrateInboundNames resolves uid → display name via the cache without

@@ -69,7 +69,7 @@ func exerciseBotAssemblyHelpers(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	rt := router.New(router.Config{})
-	startRouterReaper(ctx, rt, nil)
+	startRouterReaper(ctx, rt, nil, nil)
 	cancel()
 
 	connector := octo.NewConnector(octo.NewRESTClient("http://unused", func() string { return "" }))
