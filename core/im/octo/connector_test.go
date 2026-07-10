@@ -178,8 +178,8 @@ func TestQueuedTurnsCarryOwnTarget(t *testing.T) {
 	tgtA := replyTarget{channelID: "chanA", channelType: ChannelDM}
 	tgtB := replyTarget{channelID: "chanB", channelType: ChannelDM, onBehalfOf: "u_grantor"}
 	// Two queued items for the same key — order: A then B.
-	c.enqueueTurn(key, router.InboundMessage{ChannelID: "chanA", ChannelType: router.ChannelDM, Text: "A"}, tgtA)
-	c.enqueueTurn(key, router.InboundMessage{ChannelID: "chanB", ChannelType: router.ChannelDM, Text: "B"}, tgtB)
+	c.enqueueTurn(key, router.InboundMessage{ChannelID: "chanA", ChannelType: router.ChannelDM, Text: "A"}, tgtA, "")
+	c.enqueueTurn(key, router.InboundMessage{ChannelID: "chanB", ChannelType: router.ChannelDM, Text: "B"}, tgtB, "")
 
 	// Peek at the queue under lock — both items must carry distinct targets.
 	c.mu.Lock()
@@ -274,7 +274,7 @@ func TestNoTargetMapStompUnderConcurrentEnqueue(t *testing.T) {
 	c.mu.Unlock()
 
 	tgtA := replyTarget{channelID: "chanA", channelType: ChannelDM}
-	c.enqueueTurn(key, router.InboundMessage{ChannelID: "chanA", ChannelType: router.ChannelDM, Text: "A"}, tgtA)
+	c.enqueueTurn(key, router.InboundMessage{ChannelID: "chanA", ChannelType: router.ChannelDM, Text: "A"}, tgtA, "")
 	c.EnqueueCron(key, "chanB", ChannelDM, router.InboundMessage{ChannelID: "chanB", ChannelType: router.ChannelDM, Text: "B"})
 
 	// c.targets MUST be empty: no writer besides drainTurns (which we

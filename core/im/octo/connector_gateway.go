@@ -12,17 +12,35 @@ import (
 // Connector-is-Sink-of-Gateway cycle).
 func (c *Connector) SetGateway(g *gateway.Gateway) { c.gateway = g }
 
-// SetStore attaches the per-bot store, enabling inbound message-id dedup (P1).
-// Wired at bot assembly (mirrors SetGateway). Without it, markSeen fails open.
+// SetStore attaches the per-bot store, enabling the PERSISTENT (tier-2) inbound
+// dedup for the turn path. Wired at bot assembly (mirrors SetGateway). Without
+// it, turnFirstSeen fails open.
 func (c *Connector) SetStore(s *store.Store) { c.store = s }
 
-// markSeen records messageID as processed and reports whether this is the FIRST
-// sighting (true = dispatch). Backed by store.MarkSeenMessage. Fails OPEN: no
-// store, or a store error, returns true so a DB blip never drops real traffic —
-// one duplicate turn is strictly better than muting the bot. Wired onto the
-// socket's seen hook in connectOnce.
-func (c *Connector) markSeen(messageID string) bool {
-	if c.store == nil {
+// maxSeenKeys bounds the in-memory tier-1 dedup set, mirroring the socket's
+// decryptFails cap. Far past any redelivery window, so eviction can't drop an id
+// still eligible for redelivery.
+const maxSeenKeys = 4096
+
+// memFirstSeen is the tier-1 (in-memory) dedup gate, run in onInbound on the
+// socket read loop. Reports whether messageID is the first sighting this process
+// has seen; a duplicate (lost-ack / reconnect replay) returns false and is
+// dropped before it fans out to the observe or turn path. An empty messageID is
+// never a dedup key (synthetic/cron inbound) — always first-seen. O(1), no DB.
+func (c *Connector) memFirstSeen(messageID string) bool {
+	if messageID == "" || c.seen == nil {
+		return true
+	}
+	return c.seen.markSeen(messageID)
+}
+
+// turnFirstSeen is the tier-2 (persistent) dedup gate for the TURN path, run on
+// the drainTurns worker goroutine (never the read loop). It is the authoritative
+// cross-restart guard: a turn whose messageID a prior process already ran must
+// not spawn again. Fails OPEN — no store, empty id, or a store error returns
+// true so a DB blip never mutes the bot; one duplicate turn beats silence.
+func (c *Connector) turnFirstSeen(messageID string) bool {
+	if messageID == "" || c.store == nil {
 		return true
 	}
 	first, err := c.store.MarkSeenMessage(messageID)

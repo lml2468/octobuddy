@@ -60,18 +60,6 @@ type socketConn struct {
 	readTimeout time.Duration
 
 	decryptFails map[string]int
-
-	// seen gates inbound dispatch for idempotency (P1): given a messageID it
-	// reports whether this is the first sighting (true = dispatch, false =
-	// duplicate redelivery → ack but drop). nil (the dev/REPL and test default)
-	// means always dispatch, preserving pre-P1 behavior. Set by the connector
-	// from its store-backed markSeen.
-	seen func(messageID string) bool
-
-	// ackHook, when set, fires with the messageID immediately after a RECVACK is
-	// written. Test-only observation seam (nil in production) so a test can assert
-	// the "ack always, even on a deduped duplicate" invariant without a live WS.
-	ackHook func(messageID uint64)
 }
 
 const (

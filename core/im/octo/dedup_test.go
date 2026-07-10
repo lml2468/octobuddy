@@ -5,97 +5,136 @@ import (
 	"testing"
 
 	"github.com/lml2468/octobuddy/core/store"
+	"github.com/lml2468/octobuddy/core/trigger"
 )
 
-// buildRecvBody assembles a RECV body (srvVer 0 layout) onRecv can decode:
-// setting, msgKey, fromUID, channelID, channelType, clientMsgNo, messageID,
-// messageSeq, timestamp, then the encrypted payload as the remainder.
-func buildRecvBody(t *testing.T, messageID uint64, key, iv []byte) []byte {
-	t.Helper()
-	payload := encryptLikeServer(t, []byte(`{"type":1,"content":"hi"}`), key, iv)
-	var b encoder
-	b.writeByte(0)          // setting (no topic, no stream)
-	b.writeString("mk")     // msgKey (unused)
-	b.writeString("u-peer") // fromUID
-	b.writeString("c1")     // channelID
-	b.writeByte(1)          // channelType (DM)
-	b.writeString("cmn")    // clientMsgNo (unused)
-	b.writeInt64(messageID)
-	b.writeInt32(7) // messageSeq
-	b.writeInt32(0) // timestamp
-	b.writeBytes(payload)
-	return b.buf
+// --- tier 1: in-memory bounded seenSet ---
+
+func TestSeenSetFirstThenDuplicate(t *testing.T) {
+	s := newSeenSet(8)
+	if !s.markSeen("m1") {
+		t.Fatal("first sighting must be firstSeen")
+	}
+	if s.markSeen("m1") {
+		t.Fatal("duplicate must not be firstSeen")
+	}
 }
 
-// TestOnRecvDedupDropsRedelivery: feeding the same RECV frame twice must
-// dispatch onMessage exactly once (the seen-set gate), while the frame is still
-// ACKED both times (so the server stops redelivering).
-func TestOnRecvDedupDropsRedelivery(t *testing.T) {
-	key := []byte("0123456789abcdef")
-	iv := []byte("0123456789abcdef")
-	var dispatched, acks int
-	sock := &socketConn{
-		aesKey:       key,
-		aesIV:        iv,
-		decryptFails: map[string]int{},
-		onMessage:    func(BotMessage) { dispatched++ },
-		ackHook:      func(uint64) { acks++ },
-	}
-	seenIDs := map[string]bool{}
-	sock.seen = func(id string) bool {
-		if seenIDs[id] {
-			return false
+func TestSeenSetDistinctIDs(t *testing.T) {
+	s := newSeenSet(8)
+	for _, id := range []string{"a", "b", "c"} {
+		if !s.markSeen(id) {
+			t.Fatalf("id %q must be firstSeen", id)
 		}
-		seenIDs[id] = true
-		return true
-	}
-
-	body := buildRecvBody(t, 42, key, iv)
-	sock.onRecv(body)
-	sock.onRecv(body)
-
-	if dispatched != 1 {
-		t.Fatalf("onMessage dispatched %d times, want 1 (duplicate must be dropped)", dispatched)
-	}
-	if acks != 2 {
-		t.Fatalf("both deliveries must be acked, got %d acks (want 2)", acks)
 	}
 }
 
-// TestOnRecvNilSeenAlwaysDispatches: a socketConn without a seen hook (the
-// pre-P1 default) dispatches every frame — proves the gate is opt-in and old
-// behavior is preserved when unwired.
-func TestOnRecvNilSeenAlwaysDispatches(t *testing.T) {
-	key := []byte("0123456789abcdef")
-	iv := []byte("0123456789abcdef")
-	var dispatched int
-	sock := &socketConn{
-		aesKey:       key,
-		aesIV:        iv,
-		decryptFails: map[string]int{},
-		onMessage:    func(BotMessage) { dispatched++ },
-		// seen is nil
+// TestSeenSetEvictsOldest: past capacity the oldest id is evicted (so it would
+// be firstSeen again), while recent ids stay deduped.
+func TestSeenSetEvictsOldest(t *testing.T) {
+	s := newSeenSet(2)
+	s.markSeen("a")
+	s.markSeen("b")
+	s.markSeen("c") // evicts "a"
+	if s.markSeen("c") {
+		t.Fatal("c is recent — must still be deduped")
 	}
-	body := buildRecvBody(t, 99, key, iv)
-	sock.onRecv(body)
-	sock.onRecv(body)
-	if dispatched != 2 {
-		t.Fatalf("nil seen hook must dispatch every frame; got %d, want 2", dispatched)
+	if s.markSeen("b") {
+		t.Fatal("b is within cap — must still be deduped")
+	}
+	if !s.markSeen("a") {
+		t.Fatal("a was evicted — firstSeen again is acceptable")
 	}
 }
 
-// TestMarkSeenFailOpenNilStore: a connector with no store dispatches every
-// message (fail open) — the dev/REPL default.
-func TestMarkSeenFailOpenNilStore(t *testing.T) {
-	c := &Connector{} // store nil
-	if !c.markSeen("m1") {
-		t.Fatal("nil store must fail open (return true = dispatch)")
+// --- tier 1 integration: onInbound records the id in the memory set ---
+
+// TestOnInboundMarksSeen: a delivered addressed message records its id in the
+// tier-1 set, so a redelivery is recognized as a duplicate. Asserted via the
+// set's own state (deterministic, no dependence on the async worker).
+func TestOnInboundMarksSeen(t *testing.T) {
+	c := NewConnector(NewRESTClient("http://x", func() string { return "tk" }))
+	c.setUID("bot1")
+
+	m := BotMessage{
+		MessageID: "42", FromUID: "u_alice", ChannelID: "g1", ChannelType: ChannelGroup,
+		Payload: MessagePayload{Type: MsgText, Content: "hi bot", Mention: &Mention{UIDs: []string{"bot1"}}},
+	}
+	c.onInbound(m)
+	// After processing, the id is recorded → a fresh markSeen reports duplicate.
+	if c.memFirstSeen("42") {
+		t.Fatal("onInbound must record the messageID in the tier-1 set")
 	}
 }
 
-// TestMarkSeenFailOpenOnStoreError: a store error path returns true (dispatch)
-// rather than dropping. Simulated by a closed store, whose Exec errors.
-func TestMarkSeenFailOpenOnStoreError(t *testing.T) {
+// TestOnInboundDropsRedeliveryBeforeDispatch: a redelivered message id already
+// in the tier-1 set is dropped by onInbound before reaching prepareInboundTurn.
+// Verified by pre-seeding the set and asserting no reply target is registered.
+func TestOnInboundDropsRedeliveryBeforeDispatch(t *testing.T) {
+	c := NewConnector(NewRESTClient("http://x", func() string { return "tk" }))
+	c.setUID("bot1")
+	c.SetPolicy(trigger.Policy{BotUID: "bot1", AIBroadcast: trigger.AIBroadcastDeny})
+	c.memFirstSeen("42") // pre-seed: pretend we already saw it
+
+	m := BotMessage{
+		MessageID: "42", FromUID: "u_alice", ChannelID: "g1", ChannelType: ChannelGroup,
+		Payload: MessagePayload{Type: MsgText, Content: "hi bot", Mention: &Mention{UIDs: []string{"bot1"}}},
+	}
+	c.onInbound(m)
+	if _, ok := c.peekQueuedTarget("g1"); ok {
+		t.Fatal("a duplicate messageID must be dropped before enqueue")
+	}
+}
+
+// TestOnInboundDistinctIDEnqueues: a fresh (unseen) addressed message enqueues.
+func TestOnInboundDistinctIDEnqueues(t *testing.T) {
+	c := NewConnector(NewRESTClient("http://x", func() string { return "tk" }))
+	c.setUID("bot1")
+	c.SetPolicy(trigger.Policy{BotUID: "bot1", AIBroadcast: trigger.AIBroadcastDeny})
+	m := BotMessage{
+		MessageID: "1", FromUID: "u_alice", ChannelID: "g1", ChannelType: ChannelGroup,
+		Payload: MessagePayload{Type: MsgText, Content: "hi bot", Mention: &Mention{UIDs: []string{"bot1"}}},
+	}
+	c.onInbound(m)
+	if _, ok := c.peekQueuedTarget("g1"); !ok {
+		t.Fatal("a fresh addressed message must enqueue a turn")
+	}
+}
+
+// --- tier 2: persistent dedup on the turn worker ---
+
+// TestPersistentDedupSkipsAcrossRestart: a messageID already recorded in the
+// store (a prior process saw it) must not run a turn after restart.
+func TestPersistentDedupSkipsAcrossRestart(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "d.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if first, _ := st.MarkSeenMessage("9"); !first {
+		t.Fatal("precondition: first mark should be firstSeen")
+	}
+
+	c := &Connector{}
+	c.SetStore(st)
+	if c.turnFirstSeen("9") {
+		t.Fatal("a messageID already in the store must NOT be firstSeen for the turn path")
+	}
+	if !c.turnFirstSeen("10") {
+		t.Fatal("a fresh messageID must be firstSeen")
+	}
+}
+
+// TestTurnFirstSeenFailOpenNilStore: no store → always process (dev/REPL).
+func TestTurnFirstSeenFailOpenNilStore(t *testing.T) {
+	c := &Connector{}
+	if !c.turnFirstSeen("m1") {
+		t.Fatal("nil store must fail open (process)")
+	}
+}
+
+// TestTurnFirstSeenFailOpenOnStoreError: store error → process rather than drop.
+func TestTurnFirstSeenFailOpenOnStoreError(t *testing.T) {
 	st, err := store.Open(filepath.Join(t.TempDir(), "x.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -103,7 +142,27 @@ func TestMarkSeenFailOpenOnStoreError(t *testing.T) {
 	_ = st.Close() // subsequent Exec errors
 	c := &Connector{}
 	c.SetStore(st)
-	if !c.markSeen("m1") {
-		t.Fatal("store error must fail open (return true = dispatch)")
+	if !c.turnFirstSeen("m1") {
+		t.Fatal("store error must fail open (process)")
 	}
 }
+
+// TestEmptyMessageIDNotDeduped: a synthetic/cron inbound with no messageID must
+// never be dropped by either tier (empty id is not a real dedup key).
+func TestEmptyMessageIDNotDeduped(t *testing.T) {
+	s := newSeenSet(8)
+	if !s.markSeen("") || s.markSeen("") {
+		// empty id would collide; the connector must skip dedup for it, asserted
+		// via the connector gate below.
+	}
+	c := &Connector{}
+	if !c.turnFirstSeen("") {
+		t.Fatal("empty messageID must always be processed (no dedup key)")
+	}
+	c2 := NewConnector(NewRESTClient("http://x", func() string { return "tk" }))
+	if !c2.memFirstSeen("") || !c2.memFirstSeen("") {
+		t.Fatal("empty messageID must always be first-seen in the memory tier")
+	}
+}
+
+var _ = trigger.Policy{}

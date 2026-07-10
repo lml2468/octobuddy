@@ -142,6 +142,18 @@ func (g *GroupContext) Push(channelID, fromUID, fromName, content string, seq in
 }
 
 func (g *GroupContext) pushLocked(channelID, fromUID, fromName, content string, seq int64) {
+	// Idempotency: a redelivered inbound (same author + IM seq) must not add a
+	// second window entry, or the LLM sees a duplicated line. Only for real seqs
+	// (seq>0); seq==0 is synthetic/cron with no dedup key. Scans the current
+	// window — bounded by maxWindowSize, and a redelivery is almost always recent.
+	if seq > 0 {
+		for _, m := range g.windows[channelID] {
+			if m.seq == seq && m.fromUID == fromUID {
+				return
+			}
+		}
+	}
+
 	safeName := safety.SanitizeDisplayName(fromName, "")
 	if safeName == "" {
 		safeName = safety.SanitizeDisplayName(fromUID, "")
