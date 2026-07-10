@@ -10,57 +10,87 @@ import (
 	"github.com/lml2468/octobuddy/core/trigger"
 )
 
-// runTurn executes one accepted turn under the session lock.
+// runTurn executes one accepted turn under the session lock, as four fixed
+// phases threaded by a TurnContext: admit (gate + cursor capture) → compose
+// (build the agent request) → execute (drive the driver + consume events) →
+// deliver (timeout / poison / error / success). finishCursor is the deferred
+// rewind-unless-delivered guard.
 func (g *Gateway) runTurn(ctx context.Context, sessionKey string, msg router.InboundMessage) error {
-	if err := g.startTurn(sessionKey, msg); err != nil {
+	tc := &TurnContext{ctx: ctx, sessionKey: sessionKey, msg: msg}
+	if err := g.admitTurn(tc); err != nil {
 		return ignoreConcluded(err)
 	}
+	defer g.finishCursor(tc)()
+	if err := g.composeTurn(tc); err != nil {
+		return ignoreConcluded(err)
+	}
+	defer tc.idle.stop()
+	if err := g.executeTurn(tc); err != nil {
+		return ignoreConcluded(err)
+	}
+	g.deliverTurn(tc)
+	return nil
+}
 
-	turnDelivered := false
-	defer g.rewindGroupCursorUnlessDelivered(msg, &turnDelivered)()
-	req, err := g.prepareAgentRequest(ctx, sessionKey, msg)
+// admitTurn runs the pre-request gate (startTurn: OnUserMessage, Touch, slash
+// commands) and captures the group cursor for the rewind guard. A slash command
+// short-circuits via errTurnConcluded (propagated to runTurn).
+func (g *Gateway) admitTurn(tc *TurnContext) error {
+	if err := g.startTurn(tc.sessionKey, tc.msg); err != nil {
+		return err
+	}
+	tc.preCursor, tc.hasCursor = g.captureGroupCursor(tc.msg)
+	return nil
+}
+
+// composeTurn builds the agent request (prompt + system + tools + sandbox +
+// resume) and arms the idle guard. The build-delta-before-cache ordering lives
+// inside buildGroupPrompt (called here) and is owned by this phase.
+func (g *Gateway) composeTurn(tc *TurnContext) error {
+	req, err := g.prepareAgentRequest(tc.ctx, tc.sessionKey, tc.msg)
 	if err != nil {
-		return ignoreConcluded(err)
+		return err
 	}
+	tc.req = req
+	tc.resume = req.SessionID
+	tc.ctx, tc.idle = newIdleGuard(tc.ctx, g.dispatchTimeout)
+	return nil
+}
 
-	turnCtx, idle := newIdleGuard(ctx, g.dispatchTimeout)
-	defer idle.stop()
-
-	var attemptResult agentAttemptResult
-	resume := req.SessionID
+// executeTurn drives the driver for the turn, retrying once fresh on a stale
+// resume id. It fills tc.result.
+func (g *Gateway) executeTurn(tc *TurnContext) error {
 	for attempt := 0; ; attempt++ {
-		req.SessionID = resume
-		events, err := g.driver.Query(turnCtx, req)
+		tc.req.SessionID = tc.resume
+		events, err := g.driver.Query(tc.ctx, tc.req)
 		if err != nil {
-			return ignoreConcluded(g.failTurn(sessionKey, "driver.Query", err))
+			return g.failTurn(tc.sessionKey, "driver.Query", err)
 		}
-
-		attemptResult = g.consumeAgentAttempt(sessionKey, events, idle, resume != "")
-
-		if shouldRetryFreshResume(attemptResult, resume, attempt) {
-			glog().Warn("stale resume id; clearing and retrying fresh", "session", sessionKey)
-			_ = g.store.ClearResumeForAgent(sessionKey, g.driver.Name())
-			resume = ""
+		tc.result = g.consumeAgentAttempt(tc.sessionKey, events, tc.idle, tc.resume != "")
+		if shouldRetryFreshResume(tc.result, tc.resume, attempt) {
+			glog().Warn("stale resume id; clearing and retrying fresh", "session", tc.sessionKey)
+			_ = g.store.ClearResumeForAgent(tc.sessionKey, g.driver.Name())
+			tc.resume = ""
 			continue
 		}
-		break
-	}
-
-	if g.handleDispatchTimeout(turnCtx, idle, sessionKey, &turnDelivered) {
 		return nil
 	}
+}
 
-	if handled := g.handlePoisonedResume(sessionKey, attemptResult, &turnDelivered); handled {
-		return nil
+// deliverTurn picks the terminal branch (idle timeout → poison → terminal error
+// → success) and sets tc.delivered so finishCursor keeps the advanced cursor.
+func (g *Gateway) deliverTurn(tc *TurnContext) {
+	if g.handleDispatchTimeout(tc.ctx, tc.idle, tc.sessionKey, &tc.delivered) {
+		return
 	}
-
-	if handled := g.handleTerminalAgentError(sessionKey, attemptResult.termErr, attemptResult.termTransient, attemptResult.termHint, &turnDelivered); handled {
-		return nil
+	if g.handlePoisonedResume(tc.sessionKey, tc.result, &tc.delivered) {
+		return
 	}
-
-	g.completeSuccessfulTurn(sessionKey, msg, attemptResult)
-	turnDelivered = true
-	return nil
+	if g.handleTerminalAgentError(tc.sessionKey, tc.result.termErr, tc.result.termTransient, tc.result.termHint, &tc.delivered) {
+		return
+	}
+	g.completeSuccessfulTurn(tc.sessionKey, tc.msg, tc.result)
+	tc.delivered = true
 }
 
 func shouldRetryFreshResume(res agentAttemptResult, resume string, attempt int) bool {

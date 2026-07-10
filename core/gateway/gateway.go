@@ -282,14 +282,24 @@ func (g *Gateway) startTurn(sessionKey string, msg router.InboundMessage) error 
 	return errTurnConcluded
 }
 
-func (g *Gateway) rewindGroupCursorUnlessDelivered(msg router.InboundMessage, delivered *bool) func() {
+// captureGroupCursor snapshots the group cursor at turn admission so a turn that
+// fails before delivering can roll it back (the message resurfaces in the next
+// [Recent group messages] delta). Returns hasCursor=false for DMs / disabled
+// group-context, where there is nothing to rewind.
+func (g *Gateway) captureGroupCursor(msg router.InboundMessage) (preCursor int64, hasCursor bool) {
 	if g.groups == nil || msg.ChannelType != router.ChannelGroup || msg.ChannelID == "" {
-		return func() {}
+		return 0, false
 	}
-	preCursor := g.groups.Cursor(msg.ChannelID)
+	return g.groups.Cursor(msg.ChannelID), true
+}
+
+// finishCursor returns the deferred closure that rewinds the group cursor unless
+// the turn delivered a reply. Reads exactly one field, tc.delivered — the whole
+// point of threading delivery through TurnContext.
+func (g *Gateway) finishCursor(tc *TurnContext) func() {
 	return func() {
-		if !*delivered {
-			g.groups.RewindCursor(msg.ChannelID, preCursor)
+		if tc.hasCursor && !tc.delivered {
+			g.groups.RewindCursor(tc.msg.ChannelID, tc.preCursor)
 		}
 	}
 }
