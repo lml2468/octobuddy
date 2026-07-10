@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"runtime/debug"
 	"strings"
 
 	"github.com/lml2468/octobuddy/core/agent"
@@ -15,12 +16,27 @@ import (
 // (build the agent request) → execute (drive the driver + consume events) →
 // deliver (timeout / poison / error / success). finishCursor is the deferred
 // rewind-unless-delivered guard.
-func (g *Gateway) runTurn(ctx context.Context, sessionKey string, msg router.InboundMessage) error {
+//
+// A deferred recoverTurn wraps the whole turn: a panic anywhere in the turn path
+// (driver, event consumption, sink) must not crash the daemon — this handler
+// runs on the connector's per-session drain goroutine (and the cron/Console
+// paths), none of which recover. The recover also resolves the circuit breaker
+// (a panic during a half-open probe would otherwise wedge it) and delivers the
+// error apology. Registered first so it runs LAST, after finishCursor/idle.stop.
+func (g *Gateway) runTurn(ctx context.Context, sessionKey string, msg router.InboundMessage) (err error) {
 	tc := &TurnContext{ctx: ctx, sessionKey: sessionKey, msg: msg}
+	// finishCursor registered first → runs LAST; recoverTurn registered after it
+	// → runs BEFORE it, so a panic-recovered turn marks itself delivered before
+	// finishCursor decides whether to rewind (a panicked turn is apologized-for,
+	// so it must NOT also resurface next turn — that would crash-loop on a
+	// panic-triggering message). finishCursor no-ops until admitTurn sets
+	// hasCursor, so registering it above admitTurn is safe (a slash-command
+	// short-circuit never set hasCursor).
+	defer g.finishCursor(tc)()
+	defer g.recoverTurn(tc, &err)
 	if err := g.admitTurn(tc); err != nil {
 		return ignoreConcluded(err)
 	}
-	defer g.finishCursor(tc)()
 	if err := g.composeTurn(tc); err != nil {
 		return ignoreConcluded(err)
 	}
@@ -30,6 +46,28 @@ func (g *Gateway) runTurn(ctx context.Context, sessionKey string, msg router.Inb
 	}
 	g.deliverTurn(tc)
 	return nil
+}
+
+// recoverTurn is runTurn's deferred panic handler. A panic in the turn path is a
+// bug, but it must not (a) crash the daemon — the handler runs on a bare
+// goroutine — nor (b) leave the circuit breaker wedged in a half-open probe that
+// never reported a result. It logs with a stack, feeds the breaker a
+// non-transient outcome (resets, never opens — a bug is not an upstream-capacity
+// signal), delivers the generic error apology if nothing reached the sink yet,
+// and swallows the panic into a nil error so the caller keeps serving other
+// turns.
+func (g *Gateway) recoverTurn(tc *TurnContext, err *error) {
+	r := recover()
+	if r == nil {
+		return
+	}
+	glog().Error("turn panic recovered", "session", tc.sessionKey, "panic", r, "stack", string(debug.Stack()))
+	g.breaker.onResult(false, false)
+	if !tc.delivered {
+		tc.delivered = true
+		g.sink.OnReply(tc.sessionKey, errorReply)
+	}
+	*err = nil
 }
 
 // admitTurn runs the pre-request gate (startTurn: OnUserMessage, Touch, slash

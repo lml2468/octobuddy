@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/lml2468/octobuddy/core/agent"
+	"github.com/lml2468/octobuddy/core/groupctx"
 	"github.com/lml2468/octobuddy/core/router"
 )
 
@@ -338,5 +339,60 @@ func TestBreakerHalfOpenProbeQueryErrorDoesNotWedge(t *testing.T) {
 	}
 	if sink.replies["u1"] != "ok" {
 		t.Fatalf("breaker wedged: recovery turn did not spawn/succeed, reply=%q", sink.replies["u1"])
+	}
+}
+
+// panicDriver panics from Query — the worst-case turn-path fault.
+type panicDriver struct{ queries int }
+
+func (d *panicDriver) Name() string                     { return "fake" }
+func (d *panicDriver) Capabilities() agent.Capabilities { return agent.Capabilities{Resume: true} }
+func (d *panicDriver) Query(ctx context.Context, req agent.Request) (<-chan agent.AgentEvent, error) {
+	d.queries++
+	panic("boom in driver.Query")
+}
+
+// TestTurnPanicRecovers: a panic in the turn path must NOT crash (no re-panic),
+// must deliver errorReply, and must not wedge the breaker (a following healthy
+// turn still runs).
+func TestTurnPanicRecovers(t *testing.T) {
+	drv := &panicDriver{}
+	sink := newCaptureSink()
+	gw := New(drv, newTestStore(t), router.New(router.Config{MaxPerMinute: 100}), sink).
+		WithCircuitBreaker(3, time.Minute)
+
+	// Must not panic out of Handle.
+	if _, err := gw.Handle(context.Background(), dmMsg("hi")); err != nil {
+		t.Fatalf("Handle must swallow the panic into nil err, got %v", err)
+	}
+	if sink.replies["u1"] != errorReply {
+		t.Fatalf("panicked turn must deliver errorReply, got %q", sink.replies["u1"])
+	}
+	// Breaker must not be wedged: allow() still true (panic reset it, didn't open).
+	if !gw.breaker.allow() {
+		t.Fatal("panic must not open/wedge the breaker (non-transient reset)")
+	}
+}
+
+// TestGroupTurnPanicDoesNotResurface: a panicked GROUP turn is apologized-for
+// (errorReply) and must NOT rewind the cursor to resurface the message next turn
+// — otherwise a panic-triggering message crash-loops. recoverTurn sets delivered
+// before finishCursor runs (defer LIFO ordering).
+func TestGroupTurnPanicDoesNotResurface(t *testing.T) {
+	gc := groupctx.New(6000)
+	drv := &panicDriver{}
+	sink := newCaptureSink()
+	gw := New(drv, newTestStore(t), router.New(router.Config{MaxPerMinute: 100}), sink).WithGroupContext(gc)
+
+	if _, err := gw.Handle(context.Background(), groupMsg("boom", 10)); err != nil {
+		t.Fatalf("group panic must be swallowed, got %v", err)
+	}
+	if sink.replies["c1"] != errorReply {
+		t.Fatalf("panicked group turn must deliver errorReply, got %q", sink.replies["c1"])
+	}
+	// delivered=true → cursor held (not rewound to 0), so the message doesn't
+	// resurface and crash-loop.
+	if gc.Cursor("c1") == 0 {
+		t.Fatal("panicked-but-apologized turn must hold the cursor (no resurface)")
 	}
 }
