@@ -132,6 +132,12 @@ type Gateway struct {
 	// Guarded by toolPolicyMu (concurrent turns share a Gateway across sessions).
 	toolPolicyMu     sync.Mutex
 	toolPolicyWarned map[string]bool
+
+	// breaker is the optional per-driver circuit breaker on the upstream path.
+	// nil (the default) disables it — turns always spawn. Set via
+	// WithCircuitBreaker. One Gateway wires exactly one driver, so a single
+	// breaker instance is per-driver.
+	breaker *breaker
 }
 
 // defaultDispatchTimeout is the idle-deadline default — long enough for

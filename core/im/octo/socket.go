@@ -67,6 +67,11 @@ type socketConn struct {
 	// means always dispatch, preserving pre-P1 behavior. Set by the connector
 	// from its store-backed markSeen.
 	seen func(messageID string) bool
+
+	// ackHook, when set, fires with the messageID immediately after a RECVACK is
+	// written. Test-only observation seam (nil in production) so a test can assert
+	// the "ack always, even on a deduped duplicate" invariant without a live WS.
+	ackHook func(messageID uint64)
 }
 
 const (

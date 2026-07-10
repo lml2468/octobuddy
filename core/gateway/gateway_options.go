@@ -28,6 +28,18 @@ func (g *Gateway) WithGroupContext(gc *groupctx.GroupContext) *Gateway {
 	return g
 }
 
+// WithCircuitBreaker enables the per-driver upstream circuit breaker: after
+// `threshold` consecutive transient terminal errors the gateway short-circuits
+// turns to busyReply for `cooldown` (without spawning the driver), then half-opens
+// to probe recovery. threshold<=0 or cooldown<=0 disables it (the default).
+func (g *Gateway) WithCircuitBreaker(threshold int, cooldown time.Duration) *Gateway {
+	if threshold <= 0 || cooldown <= 0 {
+		return g
+	}
+	g.breaker = &breaker{now: time.Now, threshold: threshold, cooldown: cooldown}
+	return g
+}
+
 // MemberMap exposes the channel's displayName→uid roster snapshot (or nil) for
 // outbound @name mention resolution. Nil-safe: returns nil when no group context
 // is attached (e.g. DM-only deployments). Keeps the connector pointing at the

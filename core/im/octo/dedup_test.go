@@ -4,7 +4,10 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"encoding/base64"
+	"path/filepath"
 	"testing"
+
+	"github.com/lml2468/octobuddy/core/store"
 )
 
 // aesEncryptForTest mirrors aesDecryptPayload's inverse: PKCS7-pad, AES-128-CBC
@@ -47,16 +50,17 @@ func buildRecvBody(t *testing.T, messageID uint64, key, iv []byte) []byte {
 
 // TestOnRecvDedupDropsRedelivery: feeding the same RECV frame twice must
 // dispatch onMessage exactly once (the seen-set gate), while the frame is still
-// processed (decrypt succeeds) both times.
+// ACKED both times (so the server stops redelivering).
 func TestOnRecvDedupDropsRedelivery(t *testing.T) {
 	key := []byte("0123456789abcdef")
 	iv := []byte("0123456789abcdef")
-	var dispatched int
+	var dispatched, acks int
 	sock := &socketConn{
 		aesKey:       key,
 		aesIV:        iv,
 		decryptFails: map[string]int{},
 		onMessage:    func(BotMessage) { dispatched++ },
+		ackHook:      func(uint64) { acks++ },
 	}
 	seenIDs := map[string]bool{}
 	sock.seen = func(id string) bool {
@@ -73,6 +77,9 @@ func TestOnRecvDedupDropsRedelivery(t *testing.T) {
 
 	if dispatched != 1 {
 		t.Fatalf("onMessage dispatched %d times, want 1 (duplicate must be dropped)", dispatched)
+	}
+	if acks != 2 {
+		t.Fatalf("both deliveries must be acked, got %d acks (want 2)", acks)
 	}
 }
 
@@ -95,5 +102,29 @@ func TestOnRecvNilSeenAlwaysDispatches(t *testing.T) {
 	sock.onRecv(body)
 	if dispatched != 2 {
 		t.Fatalf("nil seen hook must dispatch every frame; got %d, want 2", dispatched)
+	}
+}
+
+// TestMarkSeenFailOpenNilStore: a connector with no store dispatches every
+// message (fail open) — the dev/REPL default.
+func TestMarkSeenFailOpenNilStore(t *testing.T) {
+	c := &Connector{} // store nil
+	if !c.markSeen("m1") {
+		t.Fatal("nil store must fail open (return true = dispatch)")
+	}
+}
+
+// TestMarkSeenFailOpenOnStoreError: a store error path returns true (dispatch)
+// rather than dropping. Simulated by a closed store, whose Exec errors.
+func TestMarkSeenFailOpenOnStoreError(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "x.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = st.Close() // subsequent Exec errors
+	c := &Connector{}
+	c.SetStore(st)
+	if !c.markSeen("m1") {
+		t.Fatal("store error must fail open (return true = dispatch)")
 	}
 }

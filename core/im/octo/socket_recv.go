@@ -61,6 +61,9 @@ func (s *socketConn) onRecv(body []byte) {
 	}
 	delete(s.decryptFails, idStr)
 	_ = s.writeRaw(encodeRecvack(messageID, messageSeq))
+	if s.ackHook != nil {
+		s.ackHook(messageID)
+	}
 	// Idempotency gate (P1): a redelivered message is still ack'd above (so the
 	// server stops resending) but NOT re-dispatched. nil seen = always dispatch.
 	if s.seen != nil && !s.seen(idStr) {

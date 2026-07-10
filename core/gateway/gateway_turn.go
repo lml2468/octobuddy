@@ -58,8 +58,15 @@ func (g *Gateway) composeTurn(tc *TurnContext) error {
 }
 
 // executeTurn drives the driver for the turn, retrying once fresh on a stale
-// resume id. It fills tc.result.
+// resume id. It fills tc.result. When the circuit breaker is open it
+// short-circuits before spawning, synthesizing a transient result so deliverTurn
+// replies busyReply (same UX as a live upstream failure).
 func (g *Gateway) executeTurn(tc *TurnContext) error {
+	if !g.breaker.allow() {
+		glog().Warn("circuit breaker open; short-circuiting turn", "session", tc.sessionKey, "driver", g.driver.Name())
+		tc.result = agentAttemptResult{termErr: "circuit breaker open", termTransient: true}
+		return nil
+	}
 	for attempt := 0; ; attempt++ {
 		tc.req.SessionID = tc.resume
 		events, err := g.driver.Query(tc.ctx, tc.req)
@@ -80,6 +87,14 @@ func (g *Gateway) executeTurn(tc *TurnContext) error {
 // deliverTurn picks the terminal branch (idle timeout → poison → terminal error
 // → success) and sets tc.delivered so finishCursor keeps the advanced cursor.
 func (g *Gateway) deliverTurn(tc *TurnContext) {
+	// Feed the real outcome to the breaker so a success closes it and a transient
+	// terminal failure trips it. Skip the synthetic short-circuit result (it did
+	// not spawn — recording it would keep the breaker open forever); allow()
+	// already left the breaker half-open to admit the next probe.
+	if tc.result.termErr != "circuit breaker open" {
+		g.breaker.onResult(tc.result.termTransient, tc.result.termErr == "")
+	}
+
 	if g.handleDispatchTimeout(tc.ctx, tc.idle, tc.sessionKey, &tc.delivered) {
 		return
 	}
