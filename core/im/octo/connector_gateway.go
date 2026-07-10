@@ -17,9 +17,10 @@ func (c *Connector) SetGateway(g *gateway.Gateway) { c.gateway = g }
 // it, turnFirstSeen fails open.
 func (c *Connector) SetStore(s *store.Store) { c.store = s }
 
-// maxSeenKeys bounds the in-memory tier-1 dedup set, mirroring the socket's
-// decryptFails cap. Far past any redelivery window, so eviction can't drop an id
-// still eligible for redelivery.
+// maxSeenKeys bounds the in-memory tier-1 dedup ring. Chosen large enough that
+// eviction can't drop an id still within any plausible redelivery window (a lost
+// ack is resent within seconds, not thousands of messages later); the persistent
+// tier-2 store backstops the turn path regardless.
 const maxSeenKeys = 4096
 
 // memFirstSeen is the tier-1 (in-memory) dedup gate, run in onInbound on the

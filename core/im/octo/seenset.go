@@ -10,20 +10,26 @@ import "sync"
 // the SQLite write path. The authoritative cross-restart dedup is the second
 // tier (store-backed, on the turn worker goroutine).
 //
-// Bounded like the socket's decryptFails map: past maxSeenKeys the oldest
-// insertion is evicted. Eviction can only lose dedup for an id not seen within
-// the last maxSeenKeys messages — far past any redelivery window — so a redroped
-// id at worst causes one duplicate, which the persistent second tier still
+// Backed by a fixed ring buffer of ids plus a membership map: one allocation for
+// the buffer's lifetime, O(1) insert, and an evicted id's string is overwritten
+// (not left pinned in a growing backing array). Eviction is insertion-FIFO —
+// past cap the oldest id is overwritten, which can only lose dedup for an id not
+// seen within the last cap messages, far past any redelivery window; a rare
+// re-dropped id costs one duplicate, which the persistent second tier still
 // catches for the turn path.
 type seenSet struct {
-	mu    sync.Mutex
-	set   map[string]struct{}
-	order []string // insertion order for FIFO eviction
-	cap   int
+	mu   sync.Mutex
+	set  map[string]struct{}
+	ring []string // fixed-size (cap) ring of ids in insertion order
+	next int      // write index; wraps at len(ring)
+	size int      // live entries (<= cap), so a not-yet-full ring evicts nothing
 }
 
 func newSeenSet(capacity int) *seenSet {
-	return &seenSet{set: make(map[string]struct{}, capacity), cap: capacity}
+	if capacity < 1 {
+		capacity = 1
+	}
+	return &seenSet{set: make(map[string]struct{}, capacity), ring: make([]string, capacity)}
 }
 
 // markSeen records id and reports whether this is the FIRST sighting (true =
@@ -34,12 +40,14 @@ func (s *seenSet) markSeen(id string) (firstSeen bool) {
 	if _, ok := s.set[id]; ok {
 		return false
 	}
-	s.set[id] = struct{}{}
-	s.order = append(s.order, id)
-	for len(s.order) > s.cap {
-		oldest := s.order[0]
-		s.order = s.order[1:]
-		delete(s.set, oldest)
+	if s.size == len(s.ring) {
+		// Full: overwrite (and forget) the oldest id at the write cursor.
+		delete(s.set, s.ring[s.next])
+	} else {
+		s.size++
 	}
+	s.ring[s.next] = id
+	s.next = (s.next + 1) % len(s.ring)
+	s.set[id] = struct{}{}
 	return true
 }

@@ -150,11 +150,6 @@ func TestTurnFirstSeenFailOpenOnStoreError(t *testing.T) {
 // TestEmptyMessageIDNotDeduped: a synthetic/cron inbound with no messageID must
 // never be dropped by either tier (empty id is not a real dedup key).
 func TestEmptyMessageIDNotDeduped(t *testing.T) {
-	s := newSeenSet(8)
-	if !s.markSeen("") || s.markSeen("") {
-		// empty id would collide; the connector must skip dedup for it, asserted
-		// via the connector gate below.
-	}
 	c := &Connector{}
 	if !c.turnFirstSeen("") {
 		t.Fatal("empty messageID must always be processed (no dedup key)")
@@ -164,5 +159,3 @@ func TestEmptyMessageIDNotDeduped(t *testing.T) {
 		t.Fatal("empty messageID must always be first-seen in the memory tier")
 	}
 }
-
-var _ = trigger.Policy{}
