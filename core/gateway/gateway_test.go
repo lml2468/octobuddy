@@ -40,6 +40,59 @@ func (f *fakeDriver) Query(ctx context.Context, req agent.Request) (<-chan agent
 	return ch, nil
 }
 
+// scriptedDriver is the shared configurable fake for resilience/breaker tests:
+// it records each request, counts Query calls, and streams whatever the script
+// returns for that call. A script returning a non-nil error makes Query itself
+// fail (a top-level fork/exec-style error). This collapses the many one-off
+// driver structs that differed only in their event script. The genuinely
+// distinct control-flow fakes (panic in Query, block-on-ctx) stay separate.
+type scriptedDriver struct {
+	mu       sync.Mutex
+	scoping  bool // Capabilities.ToolScoping
+	queries  int
+	requests []agent.Request
+	// script yields the events to stream for the (1-based) call given the request;
+	// a non-nil error is returned from Query directly (no stream).
+	script func(req agent.Request, call int) ([]agent.AgentEvent, error)
+}
+
+func (d *scriptedDriver) Name() string { return "fake" }
+func (d *scriptedDriver) Capabilities() agent.Capabilities {
+	return agent.Capabilities{Resume: true, ToolScoping: d.scoping}
+}
+func (d *scriptedDriver) count() int { d.mu.Lock(); defer d.mu.Unlock(); return d.queries }
+func (d *scriptedDriver) Query(ctx context.Context, req agent.Request) (<-chan agent.AgentEvent, error) {
+	d.mu.Lock()
+	d.queries++
+	d.requests = append(d.requests, req)
+	call := d.queries
+	d.mu.Unlock()
+	evs, err := d.script(req, call)
+	if err != nil {
+		return nil, err
+	}
+	ch := make(chan agent.AgentEvent, len(evs)+1)
+	go func() {
+		defer close(ch)
+		for _, ev := range evs {
+			ch <- ev
+		}
+	}()
+	return ch, nil
+}
+
+// Scripted event helpers shared by the resilience/breaker tests.
+func evTransient() []agent.AgentEvent {
+	return []agent.AgentEvent{{Kind: agent.KindError, Err: "429 rate limit", Transient: true}}
+}
+func evReply(text string) []agent.AgentEvent {
+	return []agent.AgentEvent{
+		{Kind: agent.KindSessionStarted, SessionID: "s"},
+		{Kind: agent.KindTextDelta, Text: text},
+		{Kind: agent.KindTurnDone},
+	}
+}
+
 type captureSink struct {
 	mu       sync.Mutex
 	events   []agent.AgentEvent

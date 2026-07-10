@@ -40,32 +40,35 @@ func TestTagPoisonedResume(t *testing.T) {
 // history) from a transient upstream blip. Transient always wins.
 func TestIsPoisonedResume(t *testing.T) {
 	cases := []struct {
-		name string
-		in   string
-		want bool
+		name     string
+		errClass string
+		in       string
+		want     bool
 	}{
-		{"invalid_request_error", `{"type":"error","error":{"type":"invalid_request_error","message":"bad"}}`, true},
-		{"plain invalid request", "API Error: invalid request: messages too long", true},
-		{"maximum turns reached", "Agent stopped: maximum turns reached", true},
-		// Claude's real structured result shape uses an underscore subtype with no
-		// trailing "reached" — the regression the reviewer caught.
-		{"error_max_turns subtype", "result error (subtype=error_max_turns): hit max turns", true},
-		{"hit max turns prose", "hit max turns", true},
-		{"iteration limit", "iteration limit exceeded", true},
-		{"gave up", "the model gave up after repeated failures", true},
-		{"reached maximum number", "reached the maximum number of tokens", true},
-		// Transient wins: a 429/503 is retryable, never poison.
-		{"rate limit 429 not poison", "HTTP 429 rate limit reached, resets at 3pm", false},
-		{"503 not poison", "503 service unavailable", false},
-		{"overloaded not poison", "overloaded_error: server overloaded", false},
+		{"invalid_request_error", "", `{"type":"error","error":{"type":"invalid_request_error","message":"bad"}}`, true},
+		{"plain invalid request", "", "API Error: invalid request: messages too long", true},
+		{"maximum turns reached", "", "Agent stopped: maximum turns reached", true},
+		// Claude's structured subtype is matched via errClass, not the message string.
+		{"error_max_turns subtype", "error_max_turns", "result error (subtype=error_max_turns): hit max turns", true},
+		// A structured poison class wins even if the message alone wouldn't match.
+		{"error_max_turns class, terse msg", "error_max_turns", "done", true},
+		{"hit max turns prose", "", "hit max turns", true},
+		{"iteration limit", "", "iteration limit exceeded", true},
+		{"gave up", "", "the model gave up after repeated failures", true},
+		{"reached maximum number", "", "reached the maximum number of tokens", true},
+		// Transient wins: a 429/503 is retryable, never poison — even with a class.
+		{"rate limit 429 not poison", "", "HTTP 429 rate limit reached, resets at 3pm", false},
+		{"503 not poison", "", "503 service unavailable", false},
+		{"overloaded not poison", "", "overloaded_error: server overloaded", false},
 		// Ordinary content is not poison.
-		{"benign", "hello world, here is your summary", false},
-		{"empty", "", false},
+		{"benign", "", "hello world, here is your summary", false},
+		{"benign class", "success", "here is your summary", false},
+		{"empty", "", "", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := isPoisonedResume(tc.in); got != tc.want {
-				t.Errorf("isPoisonedResume(%q) = %v, want %v", tc.in, got, tc.want)
+			if got := isPoisonedResume(tc.errClass, tc.in); got != tc.want {
+				t.Errorf("isPoisonedResume(%q, %q) = %v, want %v", tc.errClass, tc.in, got, tc.want)
 			}
 		})
 	}

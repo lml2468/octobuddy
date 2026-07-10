@@ -1,39 +1,18 @@
 package octo
 
 import (
-	"crypto/aes"
-	"crypto/cipher"
-	"encoding/base64"
 	"path/filepath"
 	"testing"
 
 	"github.com/lml2468/octobuddy/core/store"
 )
 
-// aesEncryptForTest mirrors aesDecryptPayload's inverse: PKCS7-pad, AES-128-CBC
-// encrypt, base64 — so a test can synthesize a RECV payload the real onRecv path
-// will decrypt.
-func aesEncryptForTest(t *testing.T, plain, key, iv []byte) []byte {
-	t.Helper()
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pad := aes.BlockSize - len(plain)%aes.BlockSize
-	for i := 0; i < pad; i++ {
-		plain = append(plain, byte(pad))
-	}
-	out := make([]byte, len(plain))
-	cipher.NewCBCEncrypter(block, iv).CryptBlocks(out, plain)
-	return []byte(base64.StdEncoding.EncodeToString(out))
-}
-
 // buildRecvBody assembles a RECV body (srvVer 0 layout) onRecv can decode:
 // setting, msgKey, fromUID, channelID, channelType, clientMsgNo, messageID,
 // messageSeq, timestamp, then the encrypted payload as the remainder.
 func buildRecvBody(t *testing.T, messageID uint64, key, iv []byte) []byte {
 	t.Helper()
-	payload := aesEncryptForTest(t, []byte(`{"type":1,"content":"hi"}`), key, iv)
+	payload := encryptLikeServer(t, []byte(`{"type":1,"content":"hi"}`), key, iv)
 	var b encoder
 	b.writeByte(0)          // setting (no topic, no stream)
 	b.writeString("mk")     // msgKey (unused)

@@ -92,7 +92,6 @@ func (g *Gateway) composeTurn(tc *TurnContext) error {
 		return err
 	}
 	tc.req = req
-	tc.resume = req.SessionID
 	tc.ctx, tc.idle = newIdleGuard(tc.ctx, g.dispatchTimeout)
 	return nil
 }
@@ -107,8 +106,9 @@ func (g *Gateway) executeTurn(tc *TurnContext) error {
 		tc.result = agentAttemptResult{termErr: breakerOpenErr, termTransient: true, shortCircuited: true}
 		return nil
 	}
+	resume := tc.req.SessionID // "" after a clear-and-retry-fresh below
 	for attempt := 0; ; attempt++ {
-		tc.req.SessionID = tc.resume
+		tc.req.SessionID = resume
 		events, err := g.driver.Query(tc.ctx, tc.req)
 		if err != nil {
 			// A top-level Query error (fork/exec failure, etc.) never reaches
@@ -119,11 +119,11 @@ func (g *Gateway) executeTurn(tc *TurnContext) error {
 			g.breaker.onResult(false, false)
 			return g.failTurn(tc.sessionKey, "driver.Query", err)
 		}
-		tc.result = g.consumeAgentAttempt(tc.sessionKey, events, tc.idle, tc.resume != "")
-		if shouldRetryFreshResume(tc.result, tc.resume, attempt) {
+		tc.result = g.consumeAgentAttempt(tc.sessionKey, events, tc.idle, resume != "")
+		if shouldRetryFreshResume(tc.result, resume, attempt) {
 			glog().Warn("stale resume id; clearing and retrying fresh", "session", tc.sessionKey)
 			_ = g.store.ClearResumeForAgent(tc.sessionKey, g.driver.Name())
-			tc.resume = ""
+			resume = ""
 			continue
 		}
 		return nil

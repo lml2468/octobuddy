@@ -24,10 +24,9 @@ type TurnContext struct {
 	msg        router.InboundMessage
 
 	// req is the composed agent request (owned by composeTurn, read by execute).
+	// executeTurn mutates req.SessionID across the stale-resume retry; the resume
+	// id in flight is a local there, not a TurnContext field.
 	req agent.Request
-	// resume is the resume id in flight; "" after a clear-and-retry-fresh
-	// (owned by executeTurn).
-	resume string
 	// idle guards the driver stream (owned by executeTurn, read by deliverTurn).
 	idle *idleGuard
 

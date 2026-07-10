@@ -52,20 +52,32 @@ func retryHint(s string) string {
 // 400s, iteration/turn-limit exhaustion, explicit give-up markers. Kept narrow
 // (unlike transientUpstreamRE) — a false positive here silently discards a
 // session's resume continuity, so it must only match unambiguous dead-end
-// signatures. The turn/iteration alternative allows a "_" or " " separator so it
-// matches BOTH Claude's structured subtype ("error_max_turns" → surfaced as
-// "…subtype=error_max_turns…") and its prose ("hit max turns"); the trailing
-// "reached/exceeded" is optional for the same reason.
-var poisonedResumeRE = regexp.MustCompile(`(?i)(invalid_request_error|\binvalid request\b|\berror_max_turns\b|max(imum)?[\s_]+(turns|iterations)|iteration limit|reached the maximum number of|gave up|giving up)`)
+// signatures. This covers the signatures that exist ONLY as free text; a
+// driver's structured error class (claude's subtype) is matched separately by
+// poisonedErrClasses so we don't round-trip a structured field through a
+// formatted string and regex it back out.
+var poisonedResumeRE = regexp.MustCompile(`(?i)(invalid_request_error|\binvalid request\b|max(imum)?[\s_]+(turns|iterations)|iteration limit|reached the maximum number of|gave up|giving up)`)
 
-// isPoisonedResume reports whether s describes a deterministically-reproducing
-// resume failure (baked into history), as opposed to a transient upstream blip.
-// Transient always wins: a 429/503/overload is retryable, never poison.
-func isPoisonedResume(s string) bool {
-	if isTransientUpstream(s) {
+// poisonedErrClasses are driver-native structured error classes (AgentEvent.
+// ErrClass, from claude's result `subtype`) that denote a deterministically-
+// reproducing resume failure. Keyed structurally so a change to the error
+// string's wording can't silently break detection.
+var poisonedErrClasses = map[string]bool{
+	"error_max_turns": true,
+}
+
+// isPoisonedResume reports whether a terminal error (its structured class and/or
+// its message string) describes a deterministically-reproducing resume failure
+// (baked into history), as opposed to a transient upstream blip. Transient always
+// wins: a 429/503/overload is retryable, never poison.
+func isPoisonedResume(errClass, msg string) bool {
+	if isTransientUpstream(msg) {
 		return false
 	}
-	return poisonedResumeRE.MatchString(s)
+	if poisonedErrClasses[errClass] {
+		return true
+	}
+	return poisonedResumeRE.MatchString(msg)
 }
 
 // tagPoisonedResume marks the terminal, non-transient, poison-shaped errors in a
@@ -84,7 +96,7 @@ func tagPoisonedResume(evs []AgentEvent, sessionID string) []AgentEvent {
 		if ev.Kind != KindError || ev.Recoverable || ev.Transient || ev.ResumeInvalid {
 			continue
 		}
-		if isPoisonedResume(ev.Err) {
+		if isPoisonedResume(ev.ErrClass, ev.Err) {
 			ev.Poisoned = true
 		}
 	}

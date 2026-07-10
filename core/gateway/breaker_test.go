@@ -120,30 +120,6 @@ func TestBreakerDisabledNil(t *testing.T) {
 	}
 }
 
-// countingTransientDriver counts Query calls and always emits a transient
-// terminal error — to prove the breaker short-circuits WITHOUT spawning.
-type countingTransientDriver struct {
-	mu      sync.Mutex
-	queries int
-}
-
-func (d *countingTransientDriver) Name() string { return "fake" }
-func (d *countingTransientDriver) Capabilities() agent.Capabilities {
-	return agent.Capabilities{Resume: true}
-}
-func (d *countingTransientDriver) count() int { d.mu.Lock(); defer d.mu.Unlock(); return d.queries }
-func (d *countingTransientDriver) Query(ctx context.Context, req agent.Request) (<-chan agent.AgentEvent, error) {
-	d.mu.Lock()
-	d.queries++
-	d.mu.Unlock()
-	ch := make(chan agent.AgentEvent, 2)
-	go func() {
-		defer close(ch)
-		ch <- agent.AgentEvent{Kind: agent.KindError, Err: "429 rate limit", Transient: true}
-	}()
-	return ch, nil
-}
-
 func dmMsg(text string) router.InboundMessage {
 	return router.InboundMessage{ChannelType: router.ChannelDM, FromUID: "u1", FromName: "a", Text: text}
 }
@@ -151,7 +127,7 @@ func dmMsg(text string) router.InboundMessage {
 // TestBreakerShortCircuitsWithoutSpawn: once tripped, the next turn returns
 // busyReply and does NOT call driver.Query.
 func TestBreakerShortCircuitsWithoutSpawn(t *testing.T) {
-	drv := &countingTransientDriver{}
+	drv := &scriptedDriver{script: func(agent.Request, int) ([]agent.AgentEvent, error) { return evTransient(), nil }}
 	sink := newCaptureSink()
 	gw := New(drv, newTestStore(t), router.New(router.Config{MaxPerMinute: 100}), sink).
 		WithCircuitBreaker(3, time.Minute)
@@ -181,7 +157,7 @@ func TestBreakerShortCircuitsWithoutSpawn(t *testing.T) {
 // TestBreakerDisabledByDefault: without WithCircuitBreaker, every transient
 // failure still spawns (no short-circuit) — opt-in back-compat.
 func TestBreakerDisabledByDefault(t *testing.T) {
-	drv := &countingTransientDriver{}
+	drv := &scriptedDriver{script: func(agent.Request, int) ([]agent.AgentEvent, error) { return evTransient(), nil }}
 	gw := New(drv, newTestStore(t), router.New(router.Config{MaxPerMinute: 100}), newCaptureSink())
 	for i := 0; i < 5; i++ {
 		if _, err := gw.Handle(context.Background(), dmMsg("hi")); err != nil {
@@ -193,41 +169,21 @@ func TestBreakerDisabledByDefault(t *testing.T) {
 	}
 }
 
-// recoverableDriver fails transiently until flipped healthy, then succeeds.
-type recoverableDriver struct {
-	mu      sync.Mutex
-	healthy bool
-	queries int
-}
-
-func (d *recoverableDriver) Name() string { return "fake" }
-func (d *recoverableDriver) Capabilities() agent.Capabilities {
-	return agent.Capabilities{Resume: true}
-}
-func (d *recoverableDriver) Query(ctx context.Context, req agent.Request) (<-chan agent.AgentEvent, error) {
-	d.mu.Lock()
-	d.queries++
-	healthy := d.healthy
-	d.mu.Unlock()
-	ch := make(chan agent.AgentEvent, 3)
-	go func() {
-		defer close(ch)
-		if healthy {
-			ch <- agent.AgentEvent{Kind: agent.KindSessionStarted, SessionID: "s"}
-			ch <- agent.AgentEvent{Kind: agent.KindTextDelta, Text: "ok"}
-			ch <- agent.AgentEvent{Kind: agent.KindTurnDone}
-			return
-		}
-		ch <- agent.AgentEvent{Kind: agent.KindError, Err: "429 rate limit", Transient: true}
-	}()
-	return ch, nil
-}
-
 // TestBreakerRecoversAfterCooldown: after tripping and the cooldown elapsing, a
 // half-open probe against a now-healthy driver spawns again and closes the
 // breaker.
 func TestBreakerRecoversAfterCooldown(t *testing.T) {
-	drv := &recoverableDriver{}
+	var mu sync.Mutex
+	healthy := false
+	drv := &scriptedDriver{script: func(_ agent.Request, _ int) ([]agent.AgentEvent, error) {
+		mu.Lock()
+		ok := healthy
+		mu.Unlock()
+		if ok {
+			return evReply("ok"), nil
+		}
+		return evTransient(), nil
+	}}
 	sink := newCaptureSink()
 	gw := New(drv, newTestStore(t), router.New(router.Config{MaxPerMinute: 100}), sink).
 		WithCircuitBreaker(3, time.Minute)
@@ -241,58 +197,27 @@ func TestBreakerRecoversAfterCooldown(t *testing.T) {
 		}
 	}
 	// Open now: a turn short-circuits without spawning.
-	spawnsAtTrip := drv.queries
+	spawnsAtTrip := drv.count()
 	if _, err := gw.Handle(context.Background(), dmMsg("hi")); err != nil {
 		t.Fatal(err)
 	}
-	if drv.queries != spawnsAtTrip {
-		t.Fatalf("open breaker must not spawn, went %d→%d", spawnsAtTrip, drv.queries)
+	if drv.count() != spawnsAtTrip {
+		t.Fatalf("open breaker must not spawn, went %d→%d", spawnsAtTrip, drv.count())
 	}
 	// Heal + advance past cooldown → half-open probe spawns and succeeds.
-	drv.mu.Lock()
-	drv.healthy = true
-	drv.mu.Unlock()
+	mu.Lock()
+	healthy = true
+	mu.Unlock()
 	now = now.Add(2 * time.Minute)
 	if _, err := gw.Handle(context.Background(), dmMsg("hi")); err != nil {
 		t.Fatal(err)
 	}
-	if drv.queries != spawnsAtTrip+1 {
-		t.Fatalf("half-open probe must spawn once, went %d→%d", spawnsAtTrip, drv.queries)
+	if drv.count() != spawnsAtTrip+1 {
+		t.Fatalf("half-open probe must spawn once, went %d→%d", spawnsAtTrip, drv.count())
 	}
 	if sink.replies["u1"] != "ok" {
 		t.Fatalf("recovered turn must deliver real reply, got %q", sink.replies["u1"])
 	}
-}
-
-// queryErrorDriver returns a top-level error from Query (fork/exec-style
-// failure) — the path that bypasses deliverTurn. Configurable so a probe can be
-// made to fail-to-spawn.
-type queryErrorDriver struct {
-	mu       sync.Mutex
-	failNext bool
-	queries  int
-}
-
-func (d *queryErrorDriver) Name() string { return "fake" }
-func (d *queryErrorDriver) Capabilities() agent.Capabilities {
-	return agent.Capabilities{Resume: true}
-}
-func (d *queryErrorDriver) Query(ctx context.Context, req agent.Request) (<-chan agent.AgentEvent, error) {
-	d.mu.Lock()
-	d.queries++
-	fail := d.failNext
-	d.mu.Unlock()
-	if fail {
-		return nil, context.Canceled // top-level Query error → bypasses deliverTurn
-	}
-	ch := make(chan agent.AgentEvent, 3)
-	go func() {
-		defer close(ch)
-		ch <- agent.AgentEvent{Kind: agent.KindSessionStarted, SessionID: "s"}
-		ch <- agent.AgentEvent{Kind: agent.KindTextDelta, Text: "ok"}
-		ch <- agent.AgentEvent{Kind: agent.KindTurnDone}
-	}()
-	return ch, nil
 }
 
 // TestBreakerHalfOpenProbeQueryErrorDoesNotWedge is the regression for the P5
@@ -302,7 +227,17 @@ func (d *queryErrorDriver) Query(ctx context.Context, req agent.Request) (<-chan
 // forever. After such a probe the breaker must not be permanently stuck: a
 // following healthy turn must spawn and succeed.
 func TestBreakerHalfOpenProbeQueryErrorDoesNotWedge(t *testing.T) {
-	drv := &queryErrorDriver{}
+	var mu sync.Mutex
+	failNext := false
+	drv := &scriptedDriver{script: func(_ agent.Request, _ int) ([]agent.AgentEvent, error) {
+		mu.Lock()
+		fail := failNext
+		mu.Unlock()
+		if fail {
+			return nil, context.Canceled // top-level Query error → bypasses deliverTurn
+		}
+		return evReply("ok"), nil
+	}}
 	sink := newCaptureSink()
 	gw := New(drv, newTestStore(t), router.New(router.Config{MaxPerMinute: 100}), sink).
 		WithCircuitBreaker(1, time.Minute) // threshold 1 for brevity
@@ -313,9 +248,8 @@ func TestBreakerHalfOpenProbeQueryErrorDoesNotWedge(t *testing.T) {
 	if _, err := gw.Handle(context.Background(), dmMsg("hi")); err != nil {
 		t.Fatal(err)
 	}
-	// Force the breaker OPEN by making a turn fail transiently. Simulate by
-	// directly feeding a transient result (the queryErrorDriver can't emit a
-	// stream transient), which is the documented onResult contract.
+	// Force the breaker OPEN by feeding a transient result directly (the scripted
+	// driver's error path is a top-level Query error, not a stream transient).
 	gw.breaker.onResult(true, false) // 1 transient → open (threshold 1)
 	if gw.breaker.allow() {
 		t.Fatal("breaker should be open")
@@ -323,17 +257,17 @@ func TestBreakerHalfOpenProbeQueryErrorDoesNotWedge(t *testing.T) {
 	// Advance past cooldown → next allow() half-opens. Make the probe's Query
 	// fail at the top level (the wedge path).
 	now = now.Add(2 * time.Minute)
-	drv.mu.Lock()
-	drv.failNext = true
-	drv.mu.Unlock()
+	mu.Lock()
+	failNext = true
+	mu.Unlock()
 	if _, err := gw.Handle(context.Background(), dmMsg("probe")); err != nil {
 		t.Fatal(err)
 	}
 	// The probe failed to spawn; the breaker must NOT be wedged in half-open.
 	// A healthy turn now must be allowed to spawn and succeed.
-	drv.mu.Lock()
-	drv.failNext = false
-	drv.mu.Unlock()
+	mu.Lock()
+	failNext = false
+	mu.Unlock()
 	if _, err := gw.Handle(context.Background(), dmMsg("recover")); err != nil {
 		t.Fatal(err)
 	}

@@ -145,6 +145,13 @@ type AgentEvent struct {
 	Transient bool
 	RetryHint string
 
+	// ErrClass is a driver-native structured error class for a terminal KindError,
+	// when the driver's protocol carries one (claude's result `subtype`, e.g.
+	// "error_max_turns"). Empty when the driver only reports a free-text message.
+	// tagPoisonedResume keys the structurally-known poison classes off this rather
+	// than regex-matching them back out of a formatted error string.
+	ErrClass string
+
 	// Poisoned marks a terminal KindError on a RESUMED turn whose cause is baked
 	// into the resumable conversation history and will re-fail identically on
 	// resume (a 400 invalid_request, an iteration / "gave up" limit) — the resume

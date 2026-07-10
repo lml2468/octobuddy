@@ -77,7 +77,9 @@ func TestDeliveredReplyPerBranch(t *testing.T) {
 		reply string
 	}{
 		{"success", &fakeDriver{threadID: "t", reply: "hi"}, "hi"},
-		{"transient", &transientTerminalDriver{}, busyReply},
+		{"transient", &scriptedDriver{script: func(agent.Request, int) ([]agent.AgentEvent, error) {
+			return evTransient(), nil
+		}}, busyReply},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -93,20 +95,4 @@ func TestDeliveredReplyPerBranch(t *testing.T) {
 			}
 		})
 	}
-}
-
-// transientTerminalDriver emits a transient terminal error (→ busyReply).
-type transientTerminalDriver struct{}
-
-func (d *transientTerminalDriver) Name() string { return "fake" }
-func (d *transientTerminalDriver) Capabilities() agent.Capabilities {
-	return agent.Capabilities{Resume: true}
-}
-func (d *transientTerminalDriver) Query(ctx context.Context, req agent.Request) (<-chan agent.AgentEvent, error) {
-	ch := make(chan agent.AgentEvent, 2)
-	go func() {
-		defer close(ch)
-		ch <- agent.AgentEvent{Kind: agent.KindError, Err: "429 rate limit", Transient: true}
-	}()
-	return ch, nil
 }

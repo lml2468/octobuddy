@@ -153,6 +153,7 @@ func parseClaudeResultLine(cl claudeLine, line string) []AgentEvent {
 	errEv := AgentEvent{
 		Kind:        KindError,
 		Err:         fmt.Sprintf("result error (subtype=%s): %s", cl.Subtype, cl.Result),
+		ErrClass:    cl.Subtype,
 		Recoverable: false,
 		Raw:         line,
 	}

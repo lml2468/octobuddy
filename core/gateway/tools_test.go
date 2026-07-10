@@ -46,34 +46,15 @@ func TestResolveTools(t *testing.T) {
 
 // capDriver is a minimal driver whose ToolScoping capability is configurable,
 // for the P3 negotiation tests. It scripts a trivial successful turn.
-type capDriver struct {
-	scoping bool
-	queries int
-}
-
-func (d *capDriver) Name() string { return "capfake" }
-func (d *capDriver) Capabilities() agent.Capabilities {
-	return agent.Capabilities{Resume: true, ToolScoping: d.scoping}
-}
-func (d *capDriver) Query(ctx context.Context, req agent.Request) (<-chan agent.AgentEvent, error) {
-	d.queries++
-	ch := make(chan agent.AgentEvent, 4)
-	go func() {
-		defer close(ch)
-		ch <- agent.AgentEvent{Kind: agent.KindSessionStarted, SessionID: "s"}
-		ch <- agent.AgentEvent{Kind: agent.KindTextDelta, Text: "ok"}
-		ch <- agent.AgentEvent{Kind: agent.KindTurnDone}
-	}()
-	return ch, nil
-}
-
 func runToolPolicyTurn(t *testing.T, scoping bool, resolver func(string) ([]string, bool)) *bytes.Buffer {
 	t.Helper()
 	var b bytes.Buffer
 	clog.Setup(false, false, &b)
 	t.Cleanup(func() { clog.Setup(false, false, nil) })
 
-	drv := &capDriver{scoping: scoping}
+	drv := &scriptedDriver{scoping: scoping, script: func(agent.Request, int) ([]agent.AgentEvent, error) {
+		return evReply("ok"), nil
+	}}
 	g := New(drv, newTestStore(t), router.New(router.Config{MaxPerMinute: 100}), newCaptureSink())
 	if resolver != nil {
 		g = g.WithToolResolver(resolver)
@@ -123,7 +104,9 @@ func TestToolPolicyWarnOncePerSessionDriver(t *testing.T) {
 	clog.Setup(false, false, &b)
 	t.Cleanup(func() { clog.Setup(false, false, nil) })
 
-	drv := &capDriver{scoping: false}
+	drv := &scriptedDriver{scoping: false, script: func(agent.Request, int) ([]agent.AgentEvent, error) {
+		return evReply("ok"), nil
+	}}
 	g := New(drv, newTestStore(t), router.New(router.Config{MaxPerMinute: 100}), newCaptureSink()).
 		WithToolResolver(func(string) ([]string, bool) { return []string{"Read"}, true })
 	msg := router.InboundMessage{ChannelType: router.ChannelDM, FromUID: "u1", FromName: "a", Text: "hi"}
